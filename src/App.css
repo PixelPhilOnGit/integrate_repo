@@ -1,0 +1,120 @@
+:root {
+    font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    color: #0f0f0f;
+    background-color: #f6f6f6;
+  }
+
+  .container {
+    max-width: 500px;
+    margin: 0 auto;
+    padding: 2rem;
+    text-align: center;
+  }
+
+  h1 {
+    margin-bottom: 1.5rem;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 1.5rem;
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .tab {
+    flex: 1;
+    padding: 0.6em 0;
+    border: none;
+    background: #e0e0e0;
+    cursor: pointer;
+    font-size: 0.95em;
+    transition: background 0.2s;
+  }
+
+  .tab.active {
+    background: #396cd8;
+    color: white;
+  }
+
+  .card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 1.5rem;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .card label {
+    text-align: left;
+    font-weight: 500;
+    font-size: 0.9em;
+    color: #666;
+  }
+
+  input {
+    padding: 0.6em 0.8em;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 1em;
+    outline: none;
+  }
+
+  input:focus {
+    border-color: #396cd8;
+  }
+
+  button {
+    padding: 0.6em 1.2em;
+    border: none;
+    border-radius: 6px;
+    background: #396cd8;
+    color: white;
+    cursor: pointer;
+    font-size: 1em;
+    font-weight: 500;
+  }
+
+  button:hover {
+    opacity: 0.9;
+  }
+
+  .result {
+    padding: 0.8em;
+    background: #f0f4ff;
+    border-radius: 6px;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #396cd8;
+    word-break: break-all;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color: #f6f6f6;
+      background-color: #2f2f2f;
+    }
+    .card {
+      background: #3a3a3a;
+    }
+    .card label {
+      color: #aaa;
+    }
+    input {
+      background: #2a2a2a;
+      color: #fff;
+      border-color: #555;
+    }
+    .tab {
+      background: #4a4a4a;
+      color: #ccc;
+    }
+    .result {
+      background: #2a3550;
+      color: #8ab4f8;
+    }
+  }
