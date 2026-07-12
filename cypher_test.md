@@ -140,4 +140,8 @@ RETURN path
 # 所有任务以及关系
 MATCH (p:Person)-[r]-(m:Person)
 RETURN p,r,m
+
+# 删除关系
+MATCH (a:Person {name:'刘备'})-[r:RIVAL_OF]->(b:Person {name:'曹操'})
+DELETE r
 ```
