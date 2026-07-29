@@ -6,7 +6,7 @@ import {
   updateContribution,
 } from "./api";
 
-const EMPTY_FORM = { name: "", relation: "", firecracker_amount: "", balloon_amount: "" };
+const EMPTY_FORM = { name: "", firecracker_amount: "", balloon_amount: "" };
 
 function money(v) {
   return `¥${Number(v || 0).toFixed(2)}`;
@@ -57,7 +57,6 @@ export default function ContributionSection({ isAdmin, adminPassword, onChanged 
     setEditingId(item.id);
     setEditDraft({
       name: item.name,
-      relation: item.relation || "",
       firecracker_amount: String(item.firecracker_amount || ""),
       balloon_amount: String(item.balloon_amount || ""),
     });
@@ -103,27 +102,14 @@ export default function ContributionSection({ isAdmin, adminPassword, onChanged 
       <h2>出资登记</h2>
       {error && <div className="error-text">{error}</div>}
       <form onSubmit={handleSubmit}>
-        <div className="row2">
-          <div>
-            <label>人员</label>
-            <input
-              type="text"
-              required
-              placeholder="姓名"
-              value={form.name}
-              onChange={(e) => updateField("name", e.target.value)}
-            />
-          </div>
-          <div>
-            <label>与堂哥关系</label>
-            <input
-              type="text"
-              placeholder="如：同学 / 同事 / 亲戚"
-              value={form.relation}
-              onChange={(e) => updateField("relation", e.target.value)}
-            />
-          </div>
-        </div>
+        <label>人员</label>
+        <input
+          type="text"
+          required
+          placeholder="姓名"
+          value={form.name}
+          onChange={(e) => updateField("name", e.target.value)}
+        />
         <div className="row2">
           <div>
             <label>鞭子（元）</label>
@@ -161,7 +147,6 @@ export default function ContributionSection({ isAdmin, adminPassword, onChanged 
             <thead>
               <tr>
                 <th>人员</th>
-                <th>关系</th>
                 <th>鞭子</th>
                 <th>气球</th>
                 <th>总计</th>
@@ -178,15 +163,6 @@ export default function ContributionSection({ isAdmin, adminPassword, onChanged 
                         value={editDraft.name}
                         onChange={(e) =>
                           setEditDraft((d) => ({ ...d, name: e.target.value }))
-                        }
-                      />
-                    </td>
-                    <td>
-                      <input
-                        type="text"
-                        value={editDraft.relation}
-                        onChange={(e) =>
-                          setEditDraft((d) => ({ ...d, relation: e.target.value }))
                         }
                       />
                     </td>
@@ -224,7 +200,6 @@ export default function ContributionSection({ isAdmin, adminPassword, onChanged 
                 ) : (
                   <tr key={r.id}>
                     <td>{r.name}</td>
-                    <td>{r.relation && <span className="tag">{r.relation}</span>}</td>
                     <td>{r.firecracker_amount ? money(r.firecracker_amount) : "-"}</td>
                     <td>{r.balloon_amount ? money(r.balloon_amount) : "-"}</td>
                     <td>{money(r.firecracker_amount + r.balloon_amount)}</td>

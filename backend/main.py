@@ -57,7 +57,6 @@ def init_db():
             CREATE TABLE IF NOT EXISTS contributions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                relation TEXT,
                 firecracker_amount REAL NOT NULL DEFAULT 0,
                 balloon_amount REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
@@ -91,7 +90,6 @@ def clamp_amount(v: float) -> float:
 
 class ContributionIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
-    relation: Optional[str] = ""
     firecracker_amount: float = 0
     balloon_amount: float = 0
 
@@ -99,7 +97,6 @@ class ContributionIn(BaseModel):
 class ContributionOut(BaseModel):
     id: int
     name: str
-    relation: Optional[str] = ""
     firecracker_amount: float
     balloon_amount: float
     created_at: str
@@ -125,12 +122,11 @@ def create_contribution(item: ContributionIn):
         cur = conn.execute(
             """
             INSERT INTO contributions
-                (name, relation, firecracker_amount, balloon_amount, created_at)
-            VALUES (?, ?, ?, ?, ?)
+                (name, firecracker_amount, balloon_amount, created_at)
+            VALUES (?, ?, ?, ?)
             """,
             (
                 name,
-                (item.relation or "").strip(),
                 clamp_amount(item.firecracker_amount),
                 clamp_amount(item.balloon_amount),
                 created_at,
@@ -162,12 +158,11 @@ def update_contribution(
         conn.execute(
             """
             UPDATE contributions
-            SET name = ?, relation = ?, firecracker_amount = ?, balloon_amount = ?
+            SET name = ?, firecracker_amount = ?, balloon_amount = ?
             WHERE id = ?
             """,
             (
                 name,
-                (item.relation or "").strip(),
                 clamp_amount(item.firecracker_amount),
                 clamp_amount(item.balloon_amount),
                 item_id,
@@ -349,7 +344,7 @@ def export_excel():
     wb = openpyxl.Workbook()
     ws1 = wb.active
     ws1.title = "出资记录"
-    ws1.append(["人员", "关系", "鞭子", "气球", "总计", "登记时间"])
+    ws1.append(["人员", "鞭子", "气球", "总计", "登记时间"])
     total_fc = total_bl = 0.0
     for r in contributions:
         total = r["firecracker_amount"] + r["balloon_amount"]
@@ -358,14 +353,13 @@ def export_excel():
         ws1.append(
             [
                 r["name"],
-                r["relation"] or "",
                 r["firecracker_amount"],
                 r["balloon_amount"],
                 total,
                 r["created_at"],
             ]
         )
-    ws1.append(["合计", "", total_fc, total_bl, total_fc + total_bl, ""])
+    ws1.append(["合计", total_fc, total_bl, total_fc + total_bl, ""])
 
     ws2 = wb.create_sheet("气球署名")
     ws2.append(["序号", "姓名1", "姓名2", "登记时间"])
@@ -419,7 +413,7 @@ def export_pdf():
 
     elements.append(Paragraph("出资记录", style_n))
     elements.append(Spacer(1, 4))
-    data1 = [["人员", "关系", "鞭子", "气球", "总计"]]
+    data1 = [["人员", "鞭子", "气球", "总计"]]
     total_fc = total_bl = 0.0
     for r in contributions:
         total = r["firecracker_amount"] + r["balloon_amount"]
@@ -428,13 +422,12 @@ def export_pdf():
         data1.append(
             [
                 r["name"],
-                r["relation"] or "",
                 f"{r['firecracker_amount']:.0f}",
                 f"{r['balloon_amount']:.0f}",
                 f"{total:.0f}",
             ]
         )
-    data1.append(["合计", "", f"{total_fc:.0f}", f"{total_bl:.0f}", f"{total_fc + total_bl:.0f}"])
+    data1.append(["合计", f"{total_fc:.0f}", f"{total_bl:.0f}", f"{total_fc + total_bl:.0f}"])
     t1 = Table(data1, hAlign="LEFT")
     t1.setStyle(cell_style)
     elements += [t1, Spacer(1, 18)]
