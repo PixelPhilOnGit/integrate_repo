@@ -39,14 +39,14 @@ uv run --no-config uvicorn main:app --reload --port 8000
 
 API 文档：http://localhost:8000/docs
 
-**前端**（默认监听 5173，被占用会自动换端口，终端里会提示实际端口）：
+**前端**（固定监听 5173，且监听 `0.0.0.0`，同一局域网/公网可以直接用机器 IP 访问，方便以后部署到服务器）：
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-打开终端提示的地址（一般是 http://localhost:5173）即可使用。开发模式下前端会把 `/api/*` 请求代理到后端 8000 端口（见 `frontend/vite.config.js`），不需要额外配置。
+打开终端提示的地址（`http://localhost:5173`，或终端打印出的 `Network` 地址）即可使用。开发模式下前端会把 `/api/*` 请求代理到后端 8000 端口（见 `frontend/vite.config.js`），不需要额外配置。
 
 ## 管理密码
 
