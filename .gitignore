@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# App data (contains real names/amounts, don't commit)
+backend/data.db
+
+# Node (frontend/.gitignore already covers frontend/, this is a safety net)
+node_modules/
+dist/
+
+# IDE
+.idea/
+.DS_Store
