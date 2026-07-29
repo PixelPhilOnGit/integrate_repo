@@ -1,0 +1,25 @@
+:root {
+  --red: #c0392b;
+  --gold: #d4a017;
+  --bg: #fdf6ec;
+  --card: #ffffff;
+  --text: #333;
+  --muted: #888;
+  --border: #eee0c8;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#root {
+  min-height: 100vh;
+}

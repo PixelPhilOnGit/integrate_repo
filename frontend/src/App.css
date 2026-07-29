@@ -1,0 +1,233 @@
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+h1 {
+  text-align: center;
+  color: var(--red);
+  font-size: 22px;
+  margin: 8px 0 4px;
+}
+
+.subtitle {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 20px;
+}
+
+.card {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  border: 1px solid var(--border);
+}
+
+.card h2 {
+  font-size: 15px;
+  color: var(--red);
+  margin: 0 0 12px;
+  border-left: 4px solid var(--gold);
+  padding-left: 8px;
+  font-weight: 600;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 10px 0 4px;
+  text-align: left;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="password"] {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+  background: #fffdf9;
+  color: var(--text);
+}
+
+.row2 {
+  display: flex;
+  gap: 10px;
+}
+
+.row2 > div {
+  flex: 1;
+}
+
+form > button[type="submit"] {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+form > button[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+form > button[type="submit"]:active {
+  opacity: 0.85;
+}
+
+.stats {
+  display: flex;
+  justify-content: space-between;
+  text-align: center;
+  gap: 8px;
+}
+
+.stats div {
+  flex: 1;
+}
+
+.stats .num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--red);
+}
+
+.stats .label {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  padding: 8px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 20px 0;
+  font-size: 13px;
+}
+
+.btn-small {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #999;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-block;
+  text-decoration: none;
+  text-align: center;
+}
+
+.del-btn {
+  background: #b0413e;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+td input[type="text"],
+td input[type="number"] {
+  width: 90px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+  margin: -4px 0 8px;
+}
+
+.reconcile {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 8px;
+}
+
+.mismatch {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.export-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.admin-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.inline-form {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.inline-form input {
+  width: 100px;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.tag {
+  display: inline-block;
+  background: #fbeee0;
+  color: var(--gold);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.error-text {
+  color: var(--red);
+  font-size: 12px;
+}
