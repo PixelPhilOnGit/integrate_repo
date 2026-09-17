@@ -28,6 +28,13 @@ export interface ConnectionRowProps {
    */
   expanded?: boolean;
   onToggleExpand?: () => void;
+  /**
+   * 在行上点右键。传了就触发（坐标是屏幕坐标，直接喂给 `ContextMenu`）。
+   *
+   * 删除、重命名这类「低频但必须有」的操作走右键 —— 常驻按钮会把行挤得很挤，
+   * 而这个仓里文件树已经是这个习惯了，保持一致。
+   */
+  onContextMenu?: (x: number, y: number) => void;
 }
 
 export function ConnectionRow({
@@ -40,6 +47,7 @@ export function ConnectionRow({
   onToggle,
   expanded,
   onToggleExpand,
+  onContextMenu,
 }: ConnectionRowProps): ReactNode {
   const connected = status === 'connected';
   const busy = status === 'connecting';
@@ -51,6 +59,14 @@ export function ConnectionRow({
       data-conn-name={name}
       data-status={status}
       onClick={onSelect}
+      onContextMenu={
+        onContextMenu === undefined
+          ? undefined
+          : (e) => {
+              e.preventDefault();
+              onContextMenu(e.clientX, e.clientY);
+            }
+      }
     >
       {expanded !== undefined && (
         <button

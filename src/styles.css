@@ -954,8 +954,13 @@ textarea:focus {
 .rd-db-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  /*
+   * 靠左排，**不要用 space-between**。
+   * 用 space-between 的话，子元素是 [折叠箭头, 名字, key 数] 时名字会被挤到右边 ——
+   * 之前只有 [名字, key 数] 两个所以看起来是对的，加了箭头才露出来。
+   */
+  justify-content: flex-start;
+  gap: 6px;
   width: 100%;
   padding: 3px 10px 3px 32px;
   border: none;
@@ -983,6 +988,8 @@ textarea:focus {
 }
 
 .rd-db-count {
+  /* 计数顶到最右边，名字保持靠左 */
+  margin-left: auto;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -1332,4 +1339,34 @@ textarea:focus {
   line-height: 1.7;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/**
+ * 树里的子级行（表缩进在它所属的库底下）。
+ *
+ * 缩进比库多一层，配合库行那个会旋转的折叠箭头，包含关系一眼可见 ——
+ * 之前库和表是并排的两个列表，用户看不出「这些表是这个库的」。
+ */
+.rd-db-row.is-child {
+  /*
+   * 70 而不是 54：库行自己的 padding 是 32，再加上折叠箭头的约 20px，
+   * 库**名字**落在 52 左右的位置。子行如果也只缩进 54，名字会正好和库名字
+   * 对齐 —— 看上去就成了并列的兄弟节点（实测两边都在 x=100）。
+   * 必须超过父级名字的位置，缩进才读得出来。
+   */
+  padding-left: 70px;
+  color: var(--muted);
+}
+
+.rd-db-row.is-child:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.rd-db-hint.is-child {
+  padding-left: 70px;
+}
+
+/* 库行上的折叠箭头：复用文件树那个会旋转的 V 形 */
+.rd-db-row .rd-tree-caret {
+  margin-right: 2px;
 }

@@ -6,8 +6,9 @@
  * 这也是主流客户端的做法。
  */
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
+import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import type { ConnectionProfile, DbInfo } from '../core/types';
 import type { RedisState, RedisStore } from '../state/store';
 
@@ -16,7 +17,16 @@ interface Props {
   store: RedisStore;
 }
 
+/** 一个正在显示的菜单：位置 + 内容 */
+interface OpenMenu {
+  x: number;
+  y: number;
+  items: MenuItem[];
+}
+
 export function ConnectionTree({ state, store }: Props): ReactNode {
+  const [menu, setMenu] = useState<OpenMenu | null>(null);
+
   return (
     <div className="rd-panel rd-conn-list" data-testid="conn-list">
       <div className="rd-panel-head">
@@ -35,9 +45,19 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
       ) : (
         <div className="rd-panel-body">
           {state.profiles.map((profile) => (
-            <ConnectionBranch key={profile.id} profile={profile} state={state} store={store} />
+            <ConnectionBranch
+              key={profile.id}
+              profile={profile}
+              state={state}
+              store={store}
+              onMenu={setMenu}
+            />
           ))}
         </div>
+      )}
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
       )}
     </div>
   );
@@ -47,16 +67,39 @@ function ConnectionBranch({
   profile,
   state,
   store,
+  onMenu,
 }: {
   profile: ConnectionProfile;
   state: RedisState;
   store: RedisStore;
+  onMenu: (menu: OpenMenu) => void;
 }): ReactNode {
   const status = state.runtime[profile.id]?.status ?? 'idle';
   const connected = status === 'connected';
   const expanded = state.expanded[profile.id] === true;
   const loading = state.keyspaceLoading[profile.id] === true;
   const dbs = state.keyspace[profile.id];
+
+  /** 右键菜单：连接/断开 + 删除。删除是低频但必须有的操作，放这儿最合适 */
+  const openMenu = (x: number, y: number): void => {
+    onMenu({
+      x,
+      y,
+      items: [
+        {
+          label: connected ? '断开' : '连接',
+          disabled: status === 'connecting',
+          onSelect: () => void (connected ? store.disconnect(profile.id) : store.connect(profile.id)),
+        },
+        {
+          label: '删除',
+          danger: true,
+          separatorBefore: true,
+          onSelect: () => void store.deleteProfile(profile.id),
+        },
+      ],
+    });
+  };
 
   return (
     <>
@@ -70,6 +113,7 @@ function ConnectionBranch({
         onToggleExpand={() => void store.toggleExpanded(profile.id)}
         onSelect={() => store.select(profile.id)}
         onToggle={() => void (connected ? store.disconnect(profile.id) : store.connect(profile.id))}
+        onContextMenu={openMenu}
       />
 
       {expanded && (

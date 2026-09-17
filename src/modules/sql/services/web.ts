@@ -49,7 +49,8 @@ export function createWebSqlClient(): SqlClient {
         kind: params.kind,
         // 版本号编得像一点，界面上要显示
         version: params.kind === 'mysql' ? '8.0.46' : '16.4',
-        database: params.database === '' ? (DEMO_DATABASES[0] ?? 'demo') : params.database,
+        // 没指定库就落到演示库上（真 MySQL 允许不选库，但那样什么都看不出来）
+        database: params.database === '' ? (DEMO_DATABASES[0] ?? 'postgres') : params.database,
       };
 
       sessions.set(params.id, session);
@@ -74,21 +75,17 @@ export function createWebSqlClient(): SqlClient {
     },
 
     async databases(id: string): Promise<string[]> {
-      sessionOf(id);
-      return [...DEMO_DATABASES];
+      const session = sessionOf(id);
+      // 用户指定的库也算存在 —— 换成真服务器上「你连的那个库当然在」
+      return [...new Set([session.database, ...DEMO_DATABASES])];
     },
 
     async tables(id: string): Promise<TableInfo[]> {
-      sessionOf(id);
-      return demoTables();
+      return demoTables(sessionOf(id).database);
     },
 
     async useDatabase(id: string, database: string): Promise<ServerInfo> {
       const session = sessionOf(id);
-      if (!DEMO_DATABASES.includes(database)) {
-        throw new Error(`服务器拒绝了这次操作：Unknown database '${database}'`);
-      }
-
       session.database = database;
       return {
         address: session.address,

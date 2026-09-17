@@ -18,9 +18,16 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('sql-main')).toBeVisible();
 });
 
-async function connectNew(page: Page): Promise<void> {
+/** 新建一个连接（不连）。点「新建」会先弹引擎选择，选完才建 */
+async function newConnection(page: Page, engine: 'PostgreSQL' | 'MySQL' = 'PostgreSQL'): Promise<void> {
   await page.getByTestId('btn-new-sql-connection').click();
-  await expect(page.getByTestId('sql-name')).toHaveValue('新建 PostgreSQL 连接');
+  await page.getByTestId(`menu-${engine}`).click();
+  await expect(page.getByTestId('sql-name')).toHaveValue(`新建 ${engine} 连接`);
+}
+
+/** 新建并连上 */
+async function connectNew(page: Page, engine: 'PostgreSQL' | 'MySQL' = 'PostgreSQL'): Promise<void> {
+  await newConnection(page, engine);
   await page.getByTestId('btn-sql-conn-toggle').click();
   await expect(page.getByTestId('sql-status')).toContainText('已连接');
 }
@@ -35,19 +42,90 @@ async function run(page: Page, sql: string): Promise<void> {
 
 // ------------------------------------------------------------------ 连接
 
+test('新建时可以选引擎', async ({ page }) => {
+  await page.getByTestId('btn-new-sql-connection').click();
+
+  // 两种引擎都得能选，而不是建完再去属性面板里改
+  await expect(page.getByTestId('menu-PostgreSQL')).toBeVisible();
+  await expect(page.getByTestId('menu-MySQL')).toBeVisible();
+
+  await page.getByTestId('menu-MySQL').click();
+  await expect(page.getByTestId('sql-kind')).toHaveValue('mysql');
+  await expect(page.getByTestId('sql-port')).toHaveValue('3306');
+});
+
 test('新建连接、连上、侧栏列出库和表', async ({ page }) => {
   await expect(page.getByTestId('sql-conn-list')).toContainText('还没有连接');
 
   await connectNew(page);
 
   // 连上就该看到东西 —— 不用再点任何按钮
-  await expect(page.getByTestId('sql-db-demo')).toBeVisible();
+  await expect(page.getByTestId('sql-db-postgres')).toBeVisible();
   await expect(page.getByTestId('sql-table-用户')).toBeVisible();
   await expect(page.getByTestId('sql-table-订单')).toBeVisible();
 });
 
+/**
+ * 表属于库 —— 界面上必须看得出这层包含关系。
+ *
+ * 之前写成了「库」和「表」两个并排的小节标题，看起来像两个并列的列表，
+ * 用户根本看不出这些表是哪个库的。
+ */
+test('表缩进在它所属的库底下，而且只有当前库展开', async ({ page }) => {
+  await connectNew(page);
+
+  const activeDb = page.getByTestId('sql-db-postgres');
+  const table = page.getByTestId('sql-table-用户');
+
+  await expect(activeDb).toHaveAttribute('data-active', 'true');
+  await expect(table).toBeVisible();
+
+  // 表的文字必须在库的文字右边（缩进了一级）。
+  // 注意要量**里面那个 span**，不能量按钮本身 —— 缩进是按钮内部的 padding，
+  // 两个按钮的盒子左边界是一样的，量盒子会得出「没有缩进」的错误结论。
+  const dbText = await activeDb.locator('.rd-db-name').boundingBox();
+  const tableText = await table.locator('.rd-db-name').boundingBox();
+  expect(tableText?.x ?? 0).toBeGreaterThan(dbText?.x ?? 0);
+
+  // 没在看的库不该展开它的表
+  await expect(page.getByTestId('sql-db-information_schema')).toHaveAttribute(
+    'data-active',
+    'false',
+  );
+});
+
+test('切库之后表列表跟着换', async ({ page }) => {
+  await connectNew(page);
+  await expect(page.getByTestId('sql-table-用户')).toBeVisible();
+
+  await page.getByTestId('sql-db-information_schema').click();
+
+  // 那个库是空的 —— 表没了，而且明确说了为什么
+  await expect(page.getByTestId('sql-table-用户')).toHaveCount(0);
+  await expect(page.getByTestId('sql-db-information_schema')).toHaveAttribute('data-active', 'true');
+  await expect(page.getByTestId('sql-dbs-' + (await activeConnId(page)))).toContainText(
+    '这个库里没有表',
+  );
+});
+
+/** 侧栏里那一行的连接 id（testid 里带着它，但它是随机生成的，只能查出来） */
+async function activeConnId(page: Page): Promise<string> {
+  const testid = await page.locator('[data-testid^="sql-dbs-"]').first().getAttribute('data-testid');
+  return (testid ?? '').replace('sql-dbs-', '');
+}
+
+test('右键连接能删除（删除不该只藏在属性面板最底下）', async ({ page }) => {
+  await connectNew(page);
+
+  await page.locator('[data-conn-name]').first().click({ button: 'right' });
+  await expect(page.getByTestId('context-menu')).toBeVisible();
+  await page.getByTestId('menu-删除').click();
+
+  await expect(page.getByTestId('sql-conn-list')).toContainText('还没有连接');
+});
+
 test('连不上时给出提示', async ({ page }) => {
-  await page.getByTestId('btn-new-sql-connection').click();
+  await newConnection(page);
   await page.getByTestId('sql-host').fill('unreachable.invalid');
   await page.getByTestId('btn-sql-conn-toggle').click();
 
@@ -56,7 +134,7 @@ test('连不上时给出提示', async ({ page }) => {
 });
 
 test('PostgreSQL 不填库名时不让连', async ({ page }) => {
-  await page.getByTestId('btn-new-sql-connection').click();
+  await newConnection(page);
   await page.getByTestId('sql-database').fill('');
 
   await expect(page.getByTestId('sql-inspector')).toContainText('必须指定库名');
@@ -64,8 +142,8 @@ test('PostgreSQL 不填库名时不让连', async ({ page }) => {
   await expect(page.getByTestId('btn-sql-conn-toggle')).toBeDisabled();
 });
 
-test('切引擎会把端口和用户名跟着换', async ({ page }) => {
-  await page.getByTestId('btn-new-sql-connection').click();
+test('建完之后在属性面板里切引擎，默认值也跟着换', async ({ page }) => {
+  await newConnection(page);
   await expect(page.getByTestId('sql-port')).toHaveValue('5432');
   await expect(page.getByTestId('sql-username')).toHaveValue('postgres');
 
@@ -77,7 +155,7 @@ test('切引擎会把端口和用户名跟着换', async ({ page }) => {
   await expect(page.getByTestId('sql-inspector')).not.toContainText('必须指定库名');
 });
 
-test('删除连接会从列表里消失', async ({ page }) => {
+test('属性面板里的删除按钮同样有效', async ({ page }) => {
   await connectNew(page);
   await page.getByTestId('btn-sql-conn-delete').click();
 

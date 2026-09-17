@@ -47,11 +47,28 @@ const TABLES: Record<string, { columns: ColumnInfo[]; rows: (string | null)[][] 
   },
 };
 
-/** 演示用的库列表 */
-export const DEMO_DATABASES = ['demo', 'information_schema'];
+/**
+ * 演示用的库列表。
+ *
+ * **必须包含 `postgres`** —— 那是连接档案里 PostgreSQL 的默认库名。
+ * 少了它就会出现「连上之后没有任何库是当前库」的怪状态，表一条都显示不出来。
+ */
+export const DEMO_DATABASES = ['postgres', 'demo', 'information_schema'];
 
-export function demoTables(): TableInfo[] {
-  return Object.keys(TABLES).map((name) => ({ name, kind: 'table' }));
+/**
+ * 每个库里有哪些表。
+ *
+ * 做成按库区分而不是「哪个库都回一样的东西」：不然「换库」在界面上看不出效果，
+ * 而换库恰恰是这个模块里最需要被验证的交互之一。
+ */
+const TABLES_BY_DB: Record<string, string[]> = {
+  postgres: ['用户', '订单'],
+  demo: ['用户', '订单'],
+  information_schema: [],
+};
+
+export function demoTables(database: string): TableInfo[] {
+  return (TABLES_BY_DB[database] ?? []).map((name) => ({ name, kind: 'table' }));
 }
 
 /**

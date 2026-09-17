@@ -94,6 +94,16 @@ test('改了连接参数会提示要重连', async ({ page }) => {
   await expect(page.getByTestId('conn-stale')).toContainText('重新连接才生效');
 });
 
+test('右键连接也能删除', async ({ page }) => {
+  await connectNew(page);
+
+  await page.locator('[data-conn-name]').first().click({ button: 'right' });
+  await expect(page.getByTestId('context-menu')).toBeVisible();
+  await page.getByTestId('menu-删除').click();
+
+  await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
+});
+
 test('删除连接会从列表里消失', async ({ page }) => {
   await connectNew(page);
   await page.getByTestId('btn-conn-delete').click();

@@ -66,9 +66,19 @@ describe('假 SQL 引擎', () => {
     expect(runFakeQuery('   ').error).toContain('empty');
   });
 
+  it('库列表包含 PostgreSQL 的默认库名', () => {
+    // 少了 postgres 会出现「连上之后没有任何库是当前库」，表一条都显示不出来
+    expect(DEMO_DATABASES).toContain('postgres');
+  });
+
+  it('表是按库区分的', () => {
+    expect(demoTables('postgres').map((t) => t.name).sort()).toEqual(['用户', '订单'].sort());
+    expect(demoTables('information_schema')).toEqual([]);
+  });
+
   it('库和表列表是稳定的', () => {
     expect(DEMO_DATABASES).toContain('demo');
-    const tables = demoTables();
+    const tables = demoTables('demo');
     // 别对中文的排序顺序做断言：JS 的 sort 按码点比（用 U+7528 < 订 U+8BA2），
     // 和「拼音顺序」不是一回事，写死了只会让测试变脆
     expect(new Set(tables.map((t) => t.name))).toEqual(new Set(['用户', '订单']));
