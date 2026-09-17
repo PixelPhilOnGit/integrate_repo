@@ -1,0 +1,9 @@
+# 编译产物。workspace 成员的 target 也走这里，所以不加前导斜杠。
+target/
+
+# tauri-build 生成的 ACL / capability schema，每次构建都会重新生成
+/gen/schemas/
+
+# 注意：Cargo.lock 要提交！
+# 这是应用程序而不是库，锁文件是构建可复现性的一部分，
+# 而且 CI 里的 `cargo test --locked` 依赖它存在。

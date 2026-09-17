@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  rustDraw 的占位 logo：顺序图的意象 —— 三条竖向生命线 + 横向消息箭头。
+  改完这个文件后重新生成整套图标：
+
+      npx @tauri-apps/cli icon src-tauri/icons/logo.svg
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22A06B"/>
+      <stop offset="1" stop-color="#0B6B45"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角底板 -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bg)"/>
+
+  <!-- 三个参与者（顶部方框） -->
+  <g fill="#ECFDF5">
+    <rect x="176" y="184" width="160" height="92" rx="26" ry="26"/>
+    <rect x="432" y="184" width="160" height="92" rx="26" ry="26"/>
+    <rect x="688" y="184" width="160" height="92" rx="26" ry="26"/>
+  </g>
+
+  <!-- 三条生命线 -->
+  <g stroke="#6EE7B7" stroke-width="16" stroke-linecap="round">
+    <line x1="256" y1="300" x2="256" y2="812"/>
+    <line x1="512" y1="300" x2="512" y2="812"/>
+    <line x1="768" y1="300" x2="768" y2="812"/>
+  </g>
+
+  <!-- 两条消息（横向实心箭头） -->
+  <g fill="#FFFFFF" stroke="#FFFFFF" stroke-width="20" stroke-linecap="round">
+    <line x1="256" y1="452" x2="470" y2="452"/>
+    <polygon points="516,452 452,414 452,490" stroke-width="0"/>
+
+    <line x1="512" y1="636" x2="726" y2="636"/>
+    <polygon points="772,636 708,598 708,674" stroke-width="0"/>
+  </g>
+</svg>

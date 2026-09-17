@@ -1,0 +1,44 @@
+[package]
+name = "rustdraw"
+version = "0.1.0"
+description = "rustDraw —— 顺序图桌面编辑器"
+authors = ["rustDraw"]
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+# 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
+exclude = ["core/**", "target/**"]
+
+[lib]
+# Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
+name = "rustdraw_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.7.3"
+tauri-plugin-store = "2.4.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 纯逻辑内核（路径安全校验 + 文件操作）。不依赖 tauri，
+# 所以 `cargo test -p rustdraw-core` 可以在没有 WebKit/GTK 的机器上单独跑。
+rustdraw-core = { path = "core" }
+
+# workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
+[workspace]
+members = ["core"]
+# 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
+# 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
+default-members = [".", "core"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
