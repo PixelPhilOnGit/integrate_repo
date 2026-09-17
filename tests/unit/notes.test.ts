@@ -11,12 +11,12 @@ import {
   addNote,
   removeNote,
   updateNote,
-} from '../../src/core/commands';
-import { computeLayout, hitTest, L } from '../../src/core/layout';
-import { createApproxMeasurer, estimateTextWidth } from '../../src/core/text';
-import { createNewDoc } from '../../src/core/samples';
-import { __resetIdsForTest } from '../../src/core/ids';
-import type { Doc, Note } from '../../src/core/model';
+} from '../../src/modules/diagram/core/commands';
+import { computeLayout, hitTest, L } from '../../src/modules/diagram/core/layout';
+import { createApproxMeasurer, estimateTextWidth } from '../../src/shared/text';
+import { createNewDoc } from '../../src/modules/diagram/core/samples';
+import { __resetIdsForTest } from '../../src/shared/ids';
+import type { Doc, Note } from '../../src/modules/diagram/core/model';
 
 beforeEach(() => __resetIdsForTest());
 

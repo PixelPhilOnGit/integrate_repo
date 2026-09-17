@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "rustDraw",
-  "version": "0.1.0",
-  "identifier": "com.rustdraw.desktop",
+  "productName": "Devtoolkit",
+  "version": "0.2.0",
+  "identifier": "com.devtoolkit.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "rustDraw",
+        "title": "Devtoolkit",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -31,11 +31,17 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage", "msi", "nsis", "dmg"],
+    "targets": [
+      "deb",
+      "appimage",
+      "msi",
+      "nsis",
+      "dmg"
+    ],
     "category": "DeveloperTool",
-    "shortDescription": "顺序图桌面编辑器",
-    "longDescription": "rustDraw 是一个以本地文件夹为工作区的 UML 顺序图编辑器，图以 .seq.json 文件保存在工作区里。",
-    "copyright": "© rustDraw contributors",
+    "shortDescription": "开发者工作台：顺序图 / 数据库 / SSH",
+    "longDescription": "Devtoolkit 把平时要开好几个软件才干完的事收进一个桌面应用。模块化架构，每个模块自包含：顺序图（以本地文件夹为工作区，图存成 .seq.json）、数据库连接、SSH 终端。",
+    "copyright": "© Devtoolkit contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 
 use common::{expect_err, Sandbox};
-use rustdraw_core::{CoreError, FileNode};
+use devtoolkit_core::{CoreError, FileNode};
 
 fn names(nodes: &[FileNode]) -> Vec<String> {
     nodes.iter().map(|n| n.name.clone()).collect()
@@ -459,12 +459,12 @@ fn read_text_file_errors_are_friendly() {
 fn open_rejects_invalid_roots() {
     let sb = Sandbox::new("bad-root");
 
-    expect_err(rustdraw_core::Workspace::open(""));
-    expect_err(rustdraw_core::Workspace::open(
+    expect_err(devtoolkit_core::Workspace::open(""));
+    expect_err(devtoolkit_core::Workspace::open(
         sb.base.path().join("根本不存在"),
     ));
     // 是文件不是目录。
-    expect_err(rustdraw_core::Workspace::open(
+    expect_err(devtoolkit_core::Workspace::open(
         sb.outside.join("secret.txt"),
     ));
 }
@@ -478,7 +478,7 @@ fn open_canonicalizes_symlinked_root() {
     let link = sb.base.path().join("ws-link");
     std::os::unix::fs::symlink(&sb.ws_root, &link).unwrap();
 
-    let ws = rustdraw_core::Workspace::open(&link).unwrap();
+    let ws = devtoolkit_core::Workspace::open(&link).unwrap();
     assert_eq!(ws.root(), sb.ws_root.canonicalize().unwrap());
 
     ws.write_text_file("a.seq.json", "{}").unwrap();

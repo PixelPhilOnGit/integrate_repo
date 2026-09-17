@@ -150,10 +150,113 @@ textarea:focus {
   flex: none;
 }
 
+/**
+ * 横向容器：图标栏 + 模块内容。
+ * .rd-app 是纵向 flex，所以图标栏必须先包进这一层横向容器，
+ * 否则它会被当成"顶部的一行"。
+ */
+.rd-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/**
+ * 模块内容区：外壳和模块之间的那一层。
+ * 必须做成"布局透明"（flex:1 + 纵向 flex + min-height:0），
+ * 否则会改变工具栏和主区域的尺寸 —— 那属于无意的视觉改动。
+ */
+.rd-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
 .rd-main {
   display: flex;
   flex: 1;
   min-height: 0;
+}
+
+/* ---------------------------------------------------------- 模块图标栏 */
+
+.rd-module-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 46px;
+  flex: none;
+  padding: 6px 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.rd-module-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  position: relative;
+}
+
+.rd-module-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: none;
+}
+
+.rd-module-btn.is-active {
+  color: var(--accent);
+}
+
+/* 当前模块用左侧一条竖杠标出来，和 VS Code 一致 */
+.rd-module-btn.is-active::before {
+  content: '';
+  position: absolute;
+  left: -5px;
+  top: 6px;
+  bottom: 6px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------------- 占位模块 */
+
+.rd-placeholder-side {
+  width: 240px;
+  border-right: 1px solid var(--border);
+}
+
+.rd-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 40px;
+  text-align: center;
+  color: var(--text);
+}
+
+.rd-placeholder h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.rd-placeholder p {
+  margin: 0;
+  max-width: 460px;
+  line-height: 1.8;
 }
 
 .rd-panel {

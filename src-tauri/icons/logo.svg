@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  rustDraw 的占位 logo：顺序图的意象 —— 三条竖向生命线 + 横向消息箭头。
+  Devtoolkit 的占位 logo：顺序图的意象 —— 三条竖向生命线 + 横向消息箭头。
   改完这个文件后重新生成整套图标：
 
       npx @tauri-apps/cli icon src-tauri/icons/logo.svg

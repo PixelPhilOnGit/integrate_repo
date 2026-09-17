@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { toMermaid } from '../../src/core/mermaid';
-import { addMessage, createDoc } from '../../src/core/commands';
-import { __resetIdsForTest } from '../../src/core/ids';
-import { createDemoDoc } from '../../src/core/samples';
-import { defaultTheme } from '../../src/core/theme';
-import type { Doc } from '../../src/core/model';
+import { toMermaid } from '../../src/modules/diagram/core/mermaid';
+import { addMessage, createDoc } from '../../src/modules/diagram/core/commands';
+import { __resetIdsForTest } from '../../src/shared/ids';
+import { createDemoDoc } from '../../src/modules/diagram/core/samples';
+import { defaultTheme } from '../../src/modules/diagram/core/theme';
+import type { Doc } from '../../src/modules/diagram/core/model';
 
 beforeEach(() => __resetIdsForTest());
 

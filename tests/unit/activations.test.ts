@@ -16,12 +16,12 @@ import {
   setActivationEnd,
   toggleActivation,
   updateMessage,
-} from '../../src/core/commands';
-import { computeLayout, L } from '../../src/core/layout';
-import { createApproxMeasurer } from '../../src/core/text';
-import { __resetIdsForTest } from '../../src/core/ids';
-import { defaultTheme } from '../../src/core/theme';
-import type { Doc } from '../../src/core/model';
+} from '../../src/modules/diagram/core/commands';
+import { computeLayout, L } from '../../src/modules/diagram/core/layout';
+import { createApproxMeasurer } from '../../src/shared/text';
+import { __resetIdsForTest } from '../../src/shared/ids';
+import { defaultTheme } from '../../src/modules/diagram/core/theme';
+import type { Doc } from '../../src/modules/diagram/core/model';
 
 beforeEach(() => __resetIdsForTest());
 

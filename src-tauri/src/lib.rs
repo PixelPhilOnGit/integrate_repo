@@ -1,9 +1,9 @@
-//! rustDraw 的 Tauri 后端。
+//! Devtoolkit 的 Tauri 后端。
 //!
 //! 分层：
 //!
-//! * [`rustdraw_core`] —— 纯逻辑：工作区路径安全边界、目录树、文件读写。
-//!   不依赖 tauri，可以单独 `cargo test -p rustdraw-core`。
+//! * [`devtoolkit_core`] —— 纯逻辑：工作区路径安全边界、目录树、文件读写。
+//!   不依赖 tauri，可以单独 `cargo test -p devtoolkit-core`。
 //! * `commands` —— 薄薄一层 `#[tauri::command]` 包装。
 //! * 本模块 —— 组装 Tauri 应用：注册插件、挂载 command。
 //!
@@ -33,7 +33,7 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
-            eprintln!("rustDraw 启动失败：{e}");
+            eprintln!("Devtoolkit 启动失败：{e}");
             std::process::exit(1);
         });
 }

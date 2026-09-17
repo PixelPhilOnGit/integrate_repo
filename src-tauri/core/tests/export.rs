@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rustdraw_core::write_export;
+use devtoolkit_core::write_export;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -22,7 +22,7 @@ fn temp_dir(tag: &str) -> PathBuf {
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "rustdraw-export-{tag}-{}-{nanos}-{seq}",
+        "devtoolkit-export-{tag}-{}-{nanos}-{seq}",
         std::process::id()
     ));
     fs::create_dir_all(&dir).expect("无法创建临时目录");

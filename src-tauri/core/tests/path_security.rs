@@ -6,7 +6,7 @@
 mod common;
 
 use common::{expect_err, Sandbox};
-use rustdraw_core::CoreError;
+use devtoolkit_core::CoreError;
 
 // ---------------------------------------------------------------- `..` 逃逸
 
@@ -41,8 +41,8 @@ fn rejects_deep_parent_traversal() {
 
     expect_err(sb.ws.resolve("../../etc/passwd"));
     expect_err(sb.ws.read_text_file("../../etc/passwd"));
-    expect_err(sb.ws.write_text_file("../../../../../../tmp/rustdraw-escape.txt", "x"));
-    assert!(!std::path::Path::new("/tmp/rustdraw-escape.txt").exists());
+    expect_err(sb.ws.write_text_file("../../../../../../tmp/devtoolkit-escape.txt", "x"));
+    assert!(!std::path::Path::new("/tmp/devtoolkit-escape.txt").exists());
 
     // 爬到根之后再往下走，同样要拦。
     expect_err(sb.ws.resolve("../../../../../../../../../../etc/passwd"));
@@ -74,7 +74,7 @@ fn rejects_absolute_paths() {
 
     for p in [
         "/etc/passwd",
-        "/tmp/rustdraw-absolute-escape.txt",
+        "/tmp/devtoolkit-absolute-escape.txt",
         "//etc/passwd",
     ] {
         let err = expect_err(sb.ws.resolve(p));
@@ -85,8 +85,8 @@ fn rejects_absolute_paths() {
     }
 
     expect_err(sb.ws.read_text_file("/etc/passwd"));
-    expect_err(sb.ws.write_text_file("/tmp/rustdraw-absolute-escape.txt", "x"));
-    assert!(!std::path::Path::new("/tmp/rustdraw-absolute-escape.txt").exists());
+    expect_err(sb.ws.write_text_file("/tmp/devtoolkit-absolute-escape.txt", "x"));
+    assert!(!std::path::Path::new("/tmp/devtoolkit-absolute-escape.txt").exists());
 
     // 删除同样不能拿绝对路径去删。
     expect_err(sb.ws.delete_entry("/etc/passwd"));
@@ -210,9 +210,9 @@ fn rejects_windows_style_separator_mixing() {
 
     // 端到端：确认真的没文件漏出去。
     expect_err(sb.ws.write_text_file("sub\\..\\..\\escape.json", "{}"));
-    expect_err(sb.ws.write_text_file("..\\..\\tmp\\rustdraw-win-escape.txt", "x"));
+    expect_err(sb.ws.write_text_file("..\\..\\tmp\\devtoolkit-win-escape.txt", "x"));
     assert!(!sb.base.path().join("escape.json").exists());
-    assert!(!std::path::Path::new("/tmp/rustdraw-win-escape.txt").exists());
+    assert!(!std::path::Path::new("/tmp/devtoolkit-win-escape.txt").exists());
 
     // Windows 盘符 / UNC 路径在 Linux 上也是普通字符串，一律拒。
     let err = expect_err(sb.ws.resolve("C:\\Windows\\System32\\drivers\\etc\\hosts"));

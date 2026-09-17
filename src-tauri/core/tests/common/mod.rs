@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rustdraw_core::Workspace;
+use devtoolkit_core::Workspace;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -20,7 +20,7 @@ impl TempDir {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let path = std::env::temp_dir().join(format!(
-            "rustdraw-test-{tag}-{}-{nanos}-{n}",
+            "devtoolkit-test-{tag}-{}-{nanos}-{n}",
             std::process::id()
         ));
         std::fs::create_dir_all(&path).expect("创建临时目录");
@@ -104,7 +104,7 @@ impl Sandbox {
 
 /// 命令一律返回 `Result`；这里断言它失败了，并给出原始错误方便定位。
 #[track_caller]
-pub fn expect_err<T: std::fmt::Debug>(result: Result<T, rustdraw_core::CoreError>) -> rustdraw_core::CoreError {
+pub fn expect_err<T: std::fmt::Debug>(result: Result<T, devtoolkit_core::CoreError>) -> devtoolkit_core::CoreError {
     match result {
         Ok(v) => panic!("本应失败，却成功了：{v:?}"),
         Err(e) => e,

@@ -4,11 +4,11 @@ import {
   parseDoc,
   serializeDoc,
   titleFromFileName,
-} from '../../src/core/schema';
-import { addMessage } from '../../src/core/commands';
-import { __resetIdsForTest } from '../../src/core/ids';
-import { createDemoDoc } from '../../src/core/samples';
-import { DARK_THEME, LIGHT_THEME, MONO_THEME, THEMES, themeToCss } from '../../src/core/theme';
+} from '../../src/modules/diagram/core/schema';
+import { addMessage } from '../../src/modules/diagram/core/commands';
+import { __resetIdsForTest } from '../../src/shared/ids';
+import { createDemoDoc } from '../../src/modules/diagram/core/samples';
+import { DARK_THEME, LIGHT_THEME, MONO_THEME, THEMES, themeToCss } from '../../src/modules/diagram/core/theme';
 
 beforeEach(() => __resetIdsForTest());
 

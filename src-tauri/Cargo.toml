@@ -1,8 +1,8 @@
 [package]
-name = "rustdraw"
-version = "0.1.0"
-description = "rustDraw —— 顺序图桌面编辑器"
-authors = ["rustDraw"]
+name = "devtoolkit"
+version = "0.2.0"
+description = "Devtoolkit —— 开发者工作台：顺序图 / 数据库 / SSH"
+authors = ["Devtoolkit"]
 edition = "2021"
 rust-version = "1.83"
 license = "MIT"
@@ -11,7 +11,7 @@ exclude = ["core/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
-name = "rustdraw_lib"
+name = "devtoolkit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -25,8 +25,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # 纯逻辑内核（路径安全校验 + 文件操作）。不依赖 tauri，
-# 所以 `cargo test -p rustdraw-core` 可以在没有 WebKit/GTK 的机器上单独跑。
-rustdraw-core = { path = "core" }
+# 所以 `cargo test -p devtoolkit-core` 可以在没有 WebKit/GTK 的机器上单独跑。
+devtoolkit-core = { path = "core" }
 
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]

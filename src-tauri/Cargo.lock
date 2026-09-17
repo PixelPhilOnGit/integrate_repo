@@ -576,6 +576,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "devtoolkit"
+version = "0.2.0"
+dependencies = [
+ "devtoolkit-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-store",
+]
+
+[[package]]
+name = "devtoolkit-core"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2552,27 +2573,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rustdraw"
-version = "0.1.0"
-dependencies = [
- "rustdraw-core",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-store",
-]
-
-[[package]]
-name = "rustdraw-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
 ]
 
 [[package]]

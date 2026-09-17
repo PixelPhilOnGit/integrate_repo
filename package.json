@@ -1,7 +1,7 @@
 {
-  "name": "rustdraw",
-  "version": "0.1.0",
-  "description": "顺序图桌面编辑器 —— 工作区管理、所见即所得的 UML 顺序图绘制",
+  "name": "devtoolkit",
+  "version": "0.2.0",
+  "description": "开发者工作台：顺序图 / 数据库 / SSH，一个桌面应用里全干",
   "type": "module",
   "private": true,
   "scripts": {

@@ -1,7 +1,7 @@
 //! 统一的错误类型。
 //!
 //! 这里刻意手写 `Display` / `std::error::Error` 而不引入 `thiserror`，
-//! 一来让 `rustdraw-core` 的依赖树只有 serde（`cargo test` 秒级完成），
+//! 一来让 `devtoolkit-core` 的依赖树只有 serde（`cargo test` 秒级完成），
 //! 二来方便把面向用户的文案（中文）集中在一处维护。
 
 use std::fmt;

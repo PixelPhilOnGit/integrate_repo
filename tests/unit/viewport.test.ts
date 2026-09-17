@@ -10,8 +10,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AppStore, FIT_PADDING, MAX_ZOOM, MIN_ZOOM } from '../../src/state/store';
-import { __resetIdsForTest } from '../../src/core/ids';
+import { AppStore, FIT_PADDING, MAX_ZOOM, MIN_ZOOM } from '../../src/modules/diagram/state/store';
+import { __resetIdsForTest } from '../../src/shared/ids';
 
 beforeEach(() => {
   __resetIdsForTest();
@@ -269,15 +269,17 @@ describe('新增消息跟随选中', () => {
 
   it('没有参与者时给出提示而不是崩溃', () => {
     const s = mk();
+    // 状态和错误现在归外壳显示，所以装一个假外壳来接
+    const errors: unknown[] = [];
+    s.attachShell({ setStatus: () => {}, reportError: (e) => void errors.push(e) });
+
     const doc = s.getSnapshot().doc;
-    s.select({ type: 'none' });
-    // 手动清空参与者
     for (const p of doc.participants) {
       s.select({ type: 'participant', id: p.id });
       s.deleteSelection();
     }
     s.addMessage('sync');
-    expect(s.getSnapshot().error).toBeTruthy();
+    expect(errors.length).toBeGreaterThan(0);
   });
 });
 

@@ -17,10 +17,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # 路径安全那套逻辑是纯 Rust 的（rustdraw-core 不依赖 tauri），
+  # 路径安全那套逻辑是纯 Rust 的（devtoolkit-core 不依赖 tauri），
   # 所以能在几秒内跑完，不用等 WebKit 装好，也不用等前端构建。
   test:
-    name: 单元测试（rustdraw-core）
+    name: 单元测试（devtoolkit-core）
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
 
       - name: 跑测试（路径安全 + 文件操作）
         working-directory: src-tauri
-        run: cargo test --package rustdraw-core --locked
+        run: cargo test --package devtoolkit-core --locked
 
   publish-tauri:
     name: 打包 ${{ matrix.label }}
@@ -108,7 +108,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'rustDraw v__VERSION__'
+          releaseName: 'Devtoolkit v__VERSION__'
           releaseBody: |
             各平台安装包见下方 Assets。
 
@@ -145,7 +145,7 @@ jobs:
 #    并在 bundle.windows 里配 digestAlgorithm / timestampUrl。
 #
 # 4. 自动更新（tauri-plugin-updater）还需要：
-#    - 生成签名密钥：npx tauri signer generate -w ~/.tauri/rustdraw.key
+#    - 生成签名密钥：npx tauri signer generate -w ~/.tauri/devtoolkit.key
 #    - 把公钥填到 tauri.conf.json 的 plugins.updater.pubkey
 #    - 私钥和密码存成 TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 #    - 把 tauri-action 的 uploadUpdaterJson 设为 true
