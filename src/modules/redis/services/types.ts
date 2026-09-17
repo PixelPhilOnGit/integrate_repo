@@ -1,19 +1,23 @@
 /**
  * Redis 模块的服务层契约。
  *
- * 为什么模块要有自己的一套服务层，而不是塞进 `shared/platform`：
+ * `KeyValueStore` / `ProfileStore` / `ConnStatus` 这些通用的东西已经搬到
+ * `shared/connections/`（三个连接类模块共用）。这里只剩 Redis 专属的那部分。
  *
- * 1. 平台层的 `Platform` 接口是**所有模块共用**的，它只该认识「文件操作」这种
- *    谁都可能用到的东西。Redis 是具体模块的能力，放进去等于让共享层认识具体模块。
- * 2. 平台层没有、也不该有通用的 `invoke` 逃生舱 —— 有了它，任何模块都能绕过
- *    抽象直接捅后端，那层抽象就白做了。
- * 3. 浏览器版必须能用（e2e 全靠它），所以每个模块自己带 tauri / web 两份实现。
+ * 为什么模块要有自己的一套服务层，而不是塞进 `shared/platform`：
+ * 那个接口是所有模块共用的，只该认识「文件操作」这类谁都可能用到的东西；
+ * 网络连接是具体模块的能力。另外平台层刻意没有通用的 `invoke` 逃生舱 ——
+ * 有了它，任何模块都能绕过抽象直接捅后端，那层抽象就白做了。
  */
 
+import type { ProfileStore } from '../../../shared/connections/types';
 import type {
   ConnectParams,
   ConnectionProfile,
+  DbInfo,
+  KeyDetail,
   RedisReply,
+  ScanPage,
   ServerInfo,
 } from '../core/types';
 
@@ -31,26 +35,34 @@ export interface RedisClient {
    * 它是命令的结果，不是执行失败，前端把它内联显示在日志里。
    */
   exec(id: string, args: readonly string[]): Promise<RedisReply>;
-}
 
-/**
- * 一个极小的键值存储，用来落盘连接档案。
- *
- * 单独抽出来是因为「存哪儿」在两个平台上完全不同（桌面端走
- * `tauri-plugin-store`，浏览器走 localStorage），而「存什么」是一样的 ——
- * 后者（也就是密码的处理方式）只该写一遍，见 `credentials.ts`。
- */
-export interface KeyValueStore {
-  get<T>(key: string): Promise<T | null>;
-  set(key: string, value: unknown): Promise<void>;
-}
+  // ---- 浏览式界面用的四个查询。和上面三个是两条路：
+  //      exec 是「用户敲什么发什么」，这几个是「界面为了渲染自己需要的结构」 ----
 
-export interface ProfileStore {
-  load(): Promise<ConnectionProfile[]>;
-  save(profiles: readonly ConnectionProfile[]): Promise<void>;
+  /** 库列表（含每个库的 key 数）。空库也会列出来 */
+  keyspace(id: string): Promise<DbInfo[]>;
+  /** 切到另一个库。`SELECT` 是连接级的 */
+  select(id: string, db: number): Promise<void>;
+  /** 扫一页 key。`cursor` 传 0 开始，返回的 `cursor` 为 0 表示翻完了 */
+  scan(id: string, pattern: string, cursor: number, count: number): Promise<ScanPage>;
+  /**
+   * 一个 key 的类型、TTL 和值。
+   *
+   * `key` 用**原始字节**而不是字符串：Redis 的 key 是二进制安全的，
+   * 用 `keyBytesOf()` 从 `KeyMeta` 取（见 `core/types.ts`）。
+   *
+   * `knownType` 是从 key 列表里带过来的类型提示 —— 有它就能少一次往返。
+   * 传错也没关系，后端会发现并自动退回慢路径。
+   */
+  keyDetail(
+    id: string,
+    key: Uint8Array,
+    limit: number,
+    knownType?: string,
+  ): Promise<KeyDetail>;
 }
 
 export interface RedisServices {
   client: RedisClient;
-  profiles: ProfileStore;
+  profiles: ProfileStore<ConnectionProfile>;
 }

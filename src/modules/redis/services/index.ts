@@ -1,7 +1,7 @@
 /**
- * 服务层入口：按运行环境挑一份实现。
+ * Redis 模块的服务层入口：按运行环境挑一份实现，并接上共享的档案存储。
  *
- * 结构和 `shared/platform/index.ts` 一样（模块加载时决定一次，导出单例）。
+ * 结构和 `shared/platform/index.ts` 一样（模块加载时决定一次，导出单例），
  * 区别是这个单例**属于 redis 模块**，共享层不认识它。
  *
  * 判定用 `isTauri()`，读的是 `window.__TAURI_INTERNALS__` —— 这个标记由 Tauri 在
@@ -12,11 +12,20 @@
  * 真正要读盘的初始化放在 store 的 `init()` 里（由 `onActivate` 惰性触发）。
  */
 
+import { createKeyValue } from '../../../shared/connections/kv';
 import { isTauri } from '../../../shared/platform/detect';
-import { createTauriServices } from './tauri';
-import { createWebServices } from './web';
+import { createRedisProfileStore } from './profiles';
+import { createTauriRedisClient } from './tauri';
+import { createWebRedisClient } from './web';
 import type { RedisServices } from './types';
 
-export const redisServices: RedisServices = isTauri()
-  ? createTauriServices()
-  : createWebServices();
+// 各模块用各自的文件/存储键：共用一个的话，任何一方的结构变化都会波及另外两方
+const kv = createKeyValue({
+  tauriFile: 'redis.json',
+  webKey: 'devtoolkit.redis.v1',
+});
+
+export const redisServices: RedisServices = {
+  client: isTauri() ? createTauriRedisClient() : createWebRedisClient(),
+  profiles: createRedisProfileStore(kv),
+};

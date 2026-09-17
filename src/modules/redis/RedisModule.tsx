@@ -10,9 +10,9 @@
 
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { formatElapsed } from './core/render';
+import { BrowsePane } from './panels/BrowsePane';
 import { ConnectionForm } from './panels/ConnectionForm';
-import { ConnectionList } from './panels/ConnectionList';
-import { Console } from './panels/Console';
+import { ConnectionTree } from './panels/ConnectionTree';
 import { redisStore } from './state/store';
 
 /** 订阅模块自己的 store。外壳不掺和模块的状态 */
@@ -23,12 +23,12 @@ function useRedis() {
 
 export function RedisSidebar(): ReactNode {
   const { state } = useRedis();
-  return <ConnectionList state={state} store={redisStore} />;
+  return <ConnectionTree state={state} store={redisStore} />;
 }
 
 export function RedisMain(): ReactNode {
   const { state } = useRedis();
-  return <Console state={state} store={redisStore} />;
+  return <BrowsePane state={state} store={redisStore} />;
 }
 
 export function RedisInspector(): ReactNode {
@@ -50,10 +50,14 @@ export function RedisStatusItems(): ReactNode {
     );
   }
 
+  // 显示**当前实际在的库**而不是档案里的默认库：浏览时切了库，状态栏得跟上，
+  // 否则用户会以为命令台还打在默认库上
+  const db = state.browse.db ?? profile.db;
+
   return (
     <>
       <span className="rd-muted" data-testid="conn-status">
-        {profile.name} · {profile.host}:{profile.port}/{profile.db} · {statusText(runtime?.status)}
+        {profile.name} · {profile.host}:{profile.port}/{db} · {statusText(runtime?.status)}
       </span>
       {runtime?.lastElapsedMs != null && (
         <span className="rd-muted" data-testid="conn-elapsed">

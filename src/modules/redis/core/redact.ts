@@ -4,8 +4,8 @@
  * 命令台会把用户敲的命令原样记进日志，而 `AUTH mypassword` 这样一条命令
  * 就等于把密码写进了界面日志里（还可能被截图、被贴进 issue）。
  *
- * 这一层不解决「密码以明文落盘」那个已知妥协（那个见 `services/credentials.ts`），
- * 它解决的是**别让同样一个密码再泄漏到第二个地方**。
+ * 这一层不解决「密码以明文落盘」那个已知妥协（那个见 `shared/connections/profiles.ts`），
+ * 它解决的是**别让同一个密码再泄漏到第二个地方**。
  *
  * 规则：任何位置出现 `AUTH` 这个 token（大小写不敏感）之后的内容一律隐藏。
  * 这样 `AUTH user pass`、`HELLO 3 AUTH default pass` 都能覆盖 ——

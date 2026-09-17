@@ -4,6 +4,7 @@
  * 纯函数，不碰平台也不碰 store —— 表单和高亮哪一项写错了都靠它。
  */
 
+import { nextAvailableName } from '../../../shared/connections/profiles';
 import { newId } from '../../../shared/ids';
 import type { ConnectParams, ConnectionProfile } from './types';
 
@@ -22,25 +23,17 @@ const MAX_NAME_LENGTH = 60;
 export function newProfile(existing: readonly ConnectionProfile[]): ConnectionProfile {
   return {
     id: newId('conn'),
-    name: nextAvailableName(existing),
+    name: nextAvailableName(
+      existing.map((p) => p.name),
+      '新建连接',
+    ),
     host: DEFAULT_HOST,
     port: DEFAULT_PORT,
     db: DEFAULT_DB,
     username: '',
-    // ⚠️ 明文密码，见 services/credentials.ts 的 TODO(security)
+    // ⚠️ 明文密码，见 shared/connections/profiles.ts 的 TODO(security)
     password: '',
   };
-}
-
-function nextAvailableName(existing: readonly ConnectionProfile[]): string {
-  const taken = new Set(existing.map((p) => p.name));
-  const base = '新建连接';
-  if (!taken.has(base)) return base;
-
-  for (let n = 2; ; n += 1) {
-    const candidate = `${base} ${n}`;
-    if (!taken.has(candidate)) return candidate;
-  }
 }
 
 /**

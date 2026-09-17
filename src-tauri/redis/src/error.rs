@@ -17,6 +17,12 @@ pub enum RedisError {
     /// 尝试连接时失败：拒绝连接、DNS 查不到、握手超时
     Connect { address: String, reason: String },
 
+    /// 服务器**明确拒绝**了这个操作（`SELECT 9999` 报库号越界之类）。
+    ///
+    /// 和 `Transport` 分开：连接是好的，只是这次操作不合法。
+    /// 前端该弹个提示，而不是把连接标成断开。
+    Rejected { reason: String },
+
     /// 这个 id 上没有活动连接（没连过，或者已经断开了）
     NotConnected { id: String },
 
@@ -40,6 +46,9 @@ impl fmt::Display for RedisError {
                     "连接 Redis（{address}）失败：{reason}。\
                      请确认地址和端口正确、服务已启动、防火墙放行。"
                 )
+            }
+            RedisError::Rejected { reason } => {
+                write!(f, "服务器拒绝了这次操作：{reason}")
             }
             RedisError::NotConnected { id } => {
                 write!(f, "连接 “{id}” 当前不在活动状态，请先连接。")

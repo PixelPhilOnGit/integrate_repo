@@ -2,12 +2,17 @@
 name = "devtoolkit-redis"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.89"
 description = "Devtoolkit 的 Redis 内核：连接管理、命令执行、回复解析（不依赖 Tauri，可脱离 WebKit 快速测试）"
 license = "MIT"
 
 [dependencies]
-# 0.32 而不是 1.x：1.x 的 MSRV 是 1.88，会顶破本仓库声明的 rust-version = "1.83"。
+# 0.32 而不是 1.x。
+#
+# 当初选 0.32 是因为 1.x 的 MSRV 是 1.88、顶破了当时声明的 1.83。
+# 现在的 rust-version 已经是 1.89，**那个理由不成立了** —— 1.x 现在是可选项。
+# 之所以还是留在 0.32：它已经跑通并被 29 个测试覆盖，升级要改 Value 枚举的匹配
+# 并重验一遍，而当前没有任何功能受益。想升的话这是个普通的升级任务，没有坑。
 # 只开 tokio-comp：异步连接 + tokio 运行时，不要 async-std/rustls 那些用不上的。
 # 刻意**不开** connection-manager —— 它会在后台自动重连，而「断开」在这里是
 # 用户的一个明确动作，隐藏的重连会让界面显示的连接状态和真实情况对不上。

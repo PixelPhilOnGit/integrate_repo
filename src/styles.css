@@ -923,3 +923,274 @@ textarea:focus {
 .rd-hint.is-error {
   color: var(--danger);
 }
+
+/* ------------------------------------------------- 浏览式界面（连接树 + key） */
+
+/* 连接行左侧的展开箭头（复用文件树那个 .rd-tree-caret 的旋转） */
+.rd-conn-caret {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+}
+
+.rd-conn-caret:hover {
+  background: transparent;
+  color: var(--accent);
+  border: none;
+}
+
+/* 库列表：缩进一层，和连接行区分开 */
+.rd-db-list {
+  padding: 2px 0 4px;
+}
+
+.rd-db-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 10px 3px 32px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+}
+
+.rd-db-row:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text);
+  border: none;
+}
+
+.rd-db-row.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.rd-db-row:disabled {
+  opacity: 0.45;
+}
+
+.rd-db-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rd-db-row.is-active .rd-db-count {
+  color: var(--accent);
+}
+
+.rd-db-hint {
+  padding: 4px 10px 4px 32px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* 主区：页签 + 左右分栏 */
+.rd-browse {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rd-browse-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.rd-keylist {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  flex: none;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.rd-keylist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-keylist-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0;
+}
+
+.rd-key-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.rd-key-row:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text);
+  border: none;
+}
+
+.rd-key-row.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 类型标签：固定宽度，让 key 名统一从同一条竖线开始 */
+.rd-key-type {
+  flex: none;
+  width: 30px;
+  padding: 1px 0;
+  border-radius: 3px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 9px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.rd-key-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.rd-key-more {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 6px 8px;
+  font-size: 11px;
+}
+
+/* 值的展示 */
+.rd-value {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rd-value-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-value-key {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.rd-value-meta {
+  display: flex;
+  gap: 14px;
+  flex: none;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rd-value-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+}
+
+.rd-value-text {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rd-value-nil {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-value-list {
+  margin: 0;
+  padding-left: 28px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.rd-value-list li {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rd-value-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.rd-value-table th {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 400;
+  text-align: left;
+}
+
+.rd-value-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.rd-value-table td:first-child {
+  width: 40%;
+  color: var(--muted);
+}

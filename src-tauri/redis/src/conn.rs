@@ -31,6 +31,7 @@ use redis::{
     RedisConnectionInfo, Value,
 };
 
+use crate::browse::{self, DbInfo, KeyDetail, ScanPage};
 use crate::error::RedisError;
 use crate::reply::Reply;
 
@@ -194,6 +195,176 @@ impl ConnectionRegistry {
         }
     }
 
+    // ------------------------------------------------------------ 浏览
+
+    /// 库列表。
+    ///
+    /// 要**合并两个来源**：`INFO keyspace` 只列出**有 key 的库**，空库根本不出现；
+    /// `CONFIG GET databases` 才能拿到总数。少了后者，一个全新实例的库列表会是空的。
+    ///
+    /// `CONFIG` 在有些环境里被禁用或改名 —— 那种情况下退化成「INFO 里出现过的库」，
+    /// 而不是整个列表都拿不出来。
+    pub async fn keyspace(&self, id: &str) -> Result<Vec<DbInfo>, RedisError> {
+        let mut conn = self.clone_conn(id)?;
+
+        // 两条命令互不依赖，**管道一起发** —— 一次往返而不是两次。
+        //
+        // 顺带解决一个边界：`CONFIG` 在有些环境里被禁用，那时它回一条 `-ERR`。
+        // 管道里每条命令各占一个回复位置，一条报错不影响另一条 —— 这里正好需要
+        // 这种「各自独立」的语义。
+        let mut pipeline = redis::Pipeline::new();
+        pipeline
+            .cmd("CONFIG")
+            .arg("GET")
+            .arg("databases")
+            .cmd("INFO")
+            .arg("keyspace");
+
+        let values = conn
+            .send_packed_commands(&pipeline, 0, 2)
+            .await
+            .map_err(|e| self.classify_failure(id, "INFO", e))?;
+
+        let total = values
+            .first()
+            .and_then(|value| match value {
+                Value::Array(items) => items.get(1).and_then(browse::as_text),
+                _ => None,
+            })
+            .and_then(|text| text.trim().parse::<i64>().ok());
+
+        let text = values.get(1).and_then(browse::as_text).unwrap_or_default();
+        Ok(browse::merge_keyspace(total, &browse::parse_keyspace(&text)))
+    }
+
+    /// 切到另一个库。
+    ///
+    /// 注意 `SELECT` 是**连接级**的：这条连接的所有克隆都会跟着切
+    /// （它们共用同一个 socket）。前端一个连接同时只对应一个库，所以这正是想要的。
+    pub async fn select(&self, id: &str, db: i64) -> Result<(), RedisError> {
+        let mut conn = self.clone_conn(id)?;
+        let value = conn
+            .send_packed_command(redis::cmd("SELECT").arg(db))
+            .await
+            .map_err(|e| self.classify_failure(id, "SELECT", e))?;
+
+        match value {
+            // 库号越界时服务端回 `-ERR DB index is out of range` —— 那是一条回复，
+            // 不是传输失败，所以单独归一类，前端弹提示而不是把连接标成断开
+            Value::ServerError(e) => Err(RedisError::Rejected {
+                reason: crate::reply::server_error_text(e.code(), e.details()),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// 扫一页 key。`cursor` 传 0 开始，返回的 `cursor` 是 0 就说明翻完了。
+    ///
+    /// 每个 key 的类型是**另外问的**：`SCAN` 只给 key 名。用管道一次问完 ——
+    /// N 次往返在大库上会慢到没法用。
+    pub async fn scan(
+        &self,
+        id: &str,
+        pattern: &str,
+        cursor: u64,
+        count: u32,
+    ) -> Result<ScanPage, RedisError> {
+        let mut conn = self.clone_conn(id)?;
+
+        let value = conn
+            .send_packed_command(
+                redis::cmd("SCAN")
+                    .arg(cursor)
+                    .arg("MATCH")
+                    .arg(pattern)
+                    .arg("COUNT")
+                    .arg(count),
+            )
+            .await
+            .map_err(|e| self.classify_failure(id, "SCAN", e))?;
+
+        let (next, names) = split_scan_page(&value);
+        if names.is_empty() {
+            return Ok(ScanPage { cursor: next, keys: Vec::new() });
+        }
+
+        let mut pipeline = redis::Pipeline::new();
+        for name in &names {
+            pipeline.cmd("TYPE").arg(name.as_slice());
+        }
+
+        let types = conn
+            .send_packed_commands(&pipeline, 0, names.len())
+            .await
+            .map_err(|e| self.classify_failure(id, "TYPE", e))?;
+
+        let keys = names
+            .into_iter()
+            .zip(types.iter())
+            .map(|(name, value)| {
+                browse::make_key_meta(name, browse::as_text(value).unwrap_or_else(|| "none".into()))
+            })
+            .collect();
+
+        Ok(ScanPage { cursor: next, keys })
+    }
+
+    /// 一个 key 的类型、TTL 和值。
+    ///
+    /// 值只取前 `limit` 项 —— 一个百万字段的 hash 全拉过来能把内存和界面一起打爆。
+    /// 容器一律用 `SCAN` 家族（`HSCAN`/`SSCAN`）而不是 `HGETALL`/`SMEMBERS`，
+    /// 前者天然支持分页。
+    /// `known_type` 是调用方**从 key 列表里带过来的**类型提示。
+    ///
+    /// 给了它就能把「TTL + 值 + 总数」压进一个管道，**一次往返**搞定；
+    /// 不给（或者给的已经过时）就走「先问类型、再取值」的慢路径，两次往返。
+    ///
+    /// 这个提示在浏览场景里几乎总是有效的：用户是从列表里点的 key，
+    /// 而那份列表刚刚才问过每个 key 的类型。
+    pub async fn key_detail(
+        &self,
+        id: &str,
+        key: &[u8],
+        limit: u64,
+        known_type: Option<&str>,
+    ) -> Result<KeyDetail, RedisError> {
+        let mut conn = self.clone_conn(id)?;
+
+        // 快路径
+        if let Some(key_type) = known_type {
+            if let Some(hit) = fetch_by_type(&mut conn, key, key_type, limit).await {
+                return Ok(build_detail(key, key_type, hit));
+            }
+        }
+
+        // 慢路径：先问类型和 TTL
+        let mut head = redis::Pipeline::new();
+        head.cmd("TYPE").arg(key).cmd("TTL").arg(key);
+        let head_values = conn
+            .send_packed_commands(&head, 0, 2)
+            .await
+            .map_err(|e| self.classify_failure(id, "TYPE", e))?;
+
+        let key_type = head_values
+            .first()
+            .and_then(browse::as_text)
+            .unwrap_or_else(|| "none".into());
+
+        let ttl = int_of(head_values.get(1)).unwrap_or(-2);
+
+        if key_type == "none" {
+            return Ok(build_detail(key, &key_type, (ttl, None, Reply::Nil, false)));
+        }
+
+        // 认不出的类型（将来 Redis 加了新类型）、或者取值失败：不猜，如实说
+        let hit = match fetch_by_type(&mut conn, key, &key_type, limit).await {
+            Some(hit) => hit,
+            None => (ttl, None, Reply::Nil, false),
+        };
+
+        Ok(build_detail(key, &key_type, hit))
+    }
+
     /// 把连接复制一份出来，guard 当场释放（见模块文档）。
     fn clone_conn(&self, id: &str) -> Result<MultiplexedConnection, RedisError> {
         self.lock()?
@@ -243,6 +414,173 @@ fn non_empty(value: &Option<String>) -> Option<String> {
 /// 失败的文案里带上命令名，用户才知道是**哪一条**命令挂了。
 fn describe_command_failure(name: &str, e: &redis::RedisError) -> String {
     format!("{name}：{e}")
+}
+
+/// 一次取值的结果：TTL、元素总数、值、是否被截断
+type ValueHit = (i64, Option<u64>, Reply, bool);
+
+/// 按已知类型一次取回「TTL + 值 + 总数」—— 三条命令一个管道，**一次往返**。
+///
+/// 返回 `None` 表示这个类型提示用不通：值的位置回来了一个错误回复，
+/// 说明扫描之后那个 key 被改成了别的类型。调用方该退回慢路径。
+async fn fetch_by_type(
+    conn: &mut MultiplexedConnection,
+    key: &[u8],
+    key_type: &str,
+    limit: u64,
+) -> Option<ValueHit> {
+    let (value_cmd, size_cmd) = value_commands(key, key_type, limit)?;
+
+    let mut pipe = redis::Pipeline::new();
+    pipe.cmd("TTL").arg(key).add_command(value_cmd).add_command(size_cmd);
+
+    let values = conn.send_packed_commands(&pipe, 0, 3).await.ok()?;
+
+    if matches!(values.get(1), Some(Value::ServerError(_))) {
+        return None;
+    }
+
+    let ttl = int_of(values.first()).unwrap_or(-2);
+    let size = int_of(values.get(2)).filter(|n| *n >= 0).map(|n| n as u64);
+    let (value, truncated) = normalize_value(
+        key_type,
+        values.into_iter().nth(1).unwrap_or(Value::Nil),
+        limit,
+    );
+
+    Some((ttl, size, value, truncated))
+}
+
+/// 从回复里取一个整数
+fn int_of(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(Value::Int(n)) => Some(*n),
+        _ => None,
+    }
+}
+
+fn build_detail(key: &[u8], key_type: &str, hit: ValueHit) -> KeyDetail {
+    let (ttl, size, value, truncated) = hit;
+    KeyDetail {
+        key: String::from_utf8_lossy(key).into_owned(),
+        // 非法 UTF-8 的 key 要带上原始字节，前端才查得回来
+        key_bytes: std::str::from_utf8(key).is_err().then(|| key.to_vec()),
+        key_type: key_type.to_string(),
+        ttl,
+        size,
+        value,
+        truncated,
+    }
+}
+
+/// 拆开 `SCAN` 的回复：`[游标, [key...]]`。
+fn split_scan_page(value: &Value) -> (u64, Vec<Vec<u8>>) {
+    let Value::Array(items) = value else {
+        return (0, Vec::new());
+    };
+
+    let cursor = items
+        .first()
+        .and_then(browse::as_text)
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let names = match items.get(1) {
+        Some(Value::Array(keys)) => keys.iter().filter_map(browse::as_bytes).collect(),
+        _ => Vec::new(),
+    };
+
+    (cursor, names)
+}
+
+/// 每种类型怎么取「前若干项」和「总数」。
+///
+/// 容器一律用 `SCAN` 家族（`HSCAN` / `SSCAN`）而不是 `HGETALL` / `SMEMBERS`：
+/// 后者会一次把整个容器拉过来，一个百万字段的 hash 能把内存和界面一起打爆。
+fn value_commands(key: &[u8], key_type: &str, limit: u64) -> Option<(redis::Cmd, redis::Cmd)> {
+    let last = limit.saturating_sub(1);
+    // 先声明后赋值：下面每个分支都要构造两条命令，写成 `let (a, b) = match ...`
+    // 会把每条命令都挤成一行，反而看不清参数
+    let mut value;
+    let mut size;
+
+    match key_type {
+        "string" => {
+            value = redis::cmd("GET");
+            value.arg(key);
+            size = redis::cmd("STRLEN");
+            size.arg(key);
+        }
+        "list" => {
+            value = redis::cmd("LRANGE");
+            value.arg(key).arg(0).arg(last);
+            size = redis::cmd("LLEN");
+            size.arg(key);
+        }
+        "hash" => {
+            value = redis::cmd("HSCAN");
+            value.arg(key).arg(0).arg("COUNT").arg(limit);
+            size = redis::cmd("HLEN");
+            size.arg(key);
+        }
+        "set" => {
+            value = redis::cmd("SSCAN");
+            value.arg(key).arg(0).arg("COUNT").arg(limit);
+            size = redis::cmd("SCARD");
+            size.arg(key);
+        }
+        "zset" => {
+            value = redis::cmd("ZRANGE");
+            value.arg(key).arg(0).arg(last).arg("WITHSCORES");
+            size = redis::cmd("ZCARD");
+            size.arg(key);
+        }
+        "stream" => {
+            value = redis::cmd("XRANGE");
+            value.arg(key).arg("-").arg("+").arg("COUNT").arg(limit);
+            size = redis::cmd("XLEN");
+            size.arg(key);
+        }
+        // 认不出的类型（将来 Redis 加了新类型）：不猜
+        _ => return None,
+    }
+
+    Some((value, size))
+}
+
+/// 把容器类的回复整形成前端好用的形状。
+///
+/// `HSCAN` / `SSCAN` 返回的是 `[游标, [项...]]`，这里拆掉外面那层信封 ——
+/// 否则前端要为 hash 和 set 各写一套解包逻辑，而 list 又不用，很别扭。
+///
+/// 另外判断有没有被截断：元素数正好顶到上限时标记出来（可能还有更多）。
+fn normalize_value(key_type: &str, raw: Value, limit: u64) -> (Reply, bool) {
+    match key_type {
+        "hash" | "set" => {
+            let items = match &raw {
+                Value::Array(outer) => match outer.get(1) {
+                    Some(Value::Array(items)) => items.clone(),
+                    _ => Vec::new(),
+                },
+                _ => Vec::new(),
+            };
+            let truncated = items.len() as u64 >= limit;
+            (
+                Reply::Array {
+                    items: items.into_iter().map(Reply::from_value).collect(),
+                },
+                truncated,
+            )
+        }
+        "list" | "zset" | "stream" => {
+            let truncated = match &raw {
+                Value::Array(items) => items.len() as u64 >= limit,
+                _ => false,
+            };
+            (Reply::from_value(raw), truncated)
+        }
+        _ => (Reply::from_value(raw), false),
+    }
 }
 
 async fn fetch_version(conn: &mut MultiplexedConnection) -> Option<String> {

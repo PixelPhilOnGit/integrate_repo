@@ -7,6 +7,11 @@
  * 改字段名两边必须一起动。
  */
 
+import type {
+  ConnectionProfileBase,
+  ConnectionRuntime as SharedRuntime,
+} from '../../../shared/connections/types';
+
 /**
  * 一条命令的回复。
  *
@@ -35,6 +40,50 @@ export interface ServerInfo {
   version: string | null;
 }
 
+// ---------------------------------------------------------------- 浏览
+
+/** 一个库的概况 */
+export interface DbInfo {
+  db: number;
+  keys: number;
+}
+
+/** key 列表里的一项 */
+export interface KeyMeta {
+  key: string;
+  /**
+   * 原始字节。**只在 `key` 不是合法 UTF-8 时才出现**（省得每个 key 都带一份）。
+   *
+   * 查详情时必须用 `keyBytes ?? TextEncoder().encode(key)` —— Redis 的 key 是
+   * 二进制安全的，只传 lossy 字符串的话二进制 key 点开就会「不存在」。
+   */
+  keyBytes?: number[];
+  keyType: string;
+}
+
+export interface ScanPage {
+  cursor: number;
+  keys: KeyMeta[];
+}
+
+export interface KeyDetail {
+  key: string;
+  keyBytes?: number[];
+  keyType: string;
+  /** TTL 秒：`-1` 永不过期，`-2` 键不存在 */
+  ttl: number;
+  /** 容器里的元素总数；string 没有 */
+  size?: number;
+  value: RedisReply;
+  /** 值被截断了吗（容器元素超过一次取的上限） */
+  truncated: boolean;
+}
+
+/** 取 key 的原始字节：二进制 key 用后端给的那份，其余按 UTF-8 编码 */
+export function keyBytesOf(meta: { key: string; keyBytes?: number[] }): Uint8Array {
+  return meta.keyBytes ? new Uint8Array(meta.keyBytes) : new TextEncoder().encode(meta.key);
+}
+
 /** 传给服务层的连接参数（只含连上所需的东西，不含名字这种纯 UI 字段） */
 export interface ConnectParams {
   id: string;
@@ -45,19 +94,18 @@ export interface ConnectParams {
   password: string;
 }
 
-export type ConnStatus = 'idle' | 'connecting' | 'connected' | 'error';
+// 通用的连接状态类型在 shared/connections —— Redis / SQL / SSH 三个模块共用一份。
+// 这里 re-export 出去，模块内部继续从 './types' 取，调用方不用关心它住在哪。
+export type { ConnStatus, WithoutSeq } from '../../../shared/connections/types';
 
-/** 一个连接的运行时状态（不持久化，每次启动从 idle 开始） */
-export interface ConnectionRuntime {
-  status: ConnStatus;
-  /** 上一次失败的原因，成功时清空 */
-  error: string | null;
-  /**
-   * 连上之后又改了连接参数 —— 新参数要重连才生效。
-   * 不自动重连：用户正在命令台上敲东西的时候连接被换掉，比多一步点击更烦人。
-   */
-  stale: boolean;
-  server: ServerInfo | null;
+/**
+ * redis 的运行时状态 = 通用那份（状态/错误/stale/服务端信息）+ 命令台要的耗时。
+ *
+ * `server` 的类型参数就是 redis 的 `ServerInfo` —— 共享层不知道长什么样，
+ * 由模块决定。
+ */
+export interface ConnectionRuntime
+  extends SharedRuntime<ServerInfo> {
   /** 上一条命令的往返耗时（毫秒） */
   lastElapsedMs: number | null;
 }
@@ -65,27 +113,14 @@ export interface ConnectionRuntime {
 /**
  * 一条连接档案（会持久化）。
  *
- * ⚠️ 安全边界：`password` 目前以**明文**落在磁盘上，
- * 读写只发生在 `services/credentials.ts` 一处。见那里的 TODO(security)。
+ * ⚠️ 安全边界：`password` 目前以**明文**落在磁盘上。
+ * 读写路径已经收拢到 `shared/connections/profiles.ts` 一处
+ * （三个连接类模块共用，将来换钥匙串一次覆盖全部），见那里的 TODO(security)。
  */
-export interface ConnectionProfile {
-  id: string;
-  name: string;
-  host: string;
-  port: number;
+export interface ConnectionProfile extends ConnectionProfileBase {
+  /** Redis 的库号（0–15，可配） */
   db: number;
-  username: string;
-  password: string;
 }
-
-/**
- * 分布式 `Omit`。
- *
- * 直接写 `Omit<LogEntry, 'seq'>` 是错的：`Omit` 作用在联合类型上时会把各分支的
- * **独有字段全部丢掉**，只剩下公共字段（kind/connection），于是 `{kind:'note',
- * message}` 这种字面量一个都通不过。写成条件类型让它逐分支分配。
- */
-export type WithoutSeq<T> = T extends unknown ? Omit<T, 'seq'> : never;
 
 /** 命令台日志里的一行 */
 export type LogEntry =

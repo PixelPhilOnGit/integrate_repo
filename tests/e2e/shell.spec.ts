@@ -58,7 +58,8 @@ test('当前模块在图标栏上有选中标记', async ({ page }) => {
 test('Ctrl+1 / Ctrl+2 / Ctrl+3 也能切换模块', async ({ page }) => {
   // 序号就是注册表里的顺序
   await page.keyboard.press('Control+2');
-  await expect(page.getByTestId('redis-console')).toBeVisible();
+  // 认主区的根节点，不是命令台 —— 命令台只是 Redis 模块里的一个页签
+  await expect(page.getByTestId('redis-main')).toBeVisible();
 
   await page.keyboard.press('Control+3');
   await expect(page.getByTestId('placeholder-main')).toBeVisible();

@@ -4,7 +4,13 @@ version = "0.2.0"
 description = "Devtoolkit —— 开发者工作台：顺序图 / 数据库 / SSH"
 authors = ["Devtoolkit"]
 edition = "2021"
-rust-version = "1.83"
+# 由依赖决定，不是拍脑袋定的：tokio-postgres 要 1.85、russh 要 1.89。
+# 写低了不只是"保守" —— cargo 的 MSRV 感知解析会**因此给我挑旧版本的 crate**，
+# 结果是在陈旧的 API 上开发，而且升级时才发现问题。
+#
+# 说清楚：这个值没有在 1.89 上真跑过（CI 用的是 stable 最新版）。
+# 它表达的是"最低需要"，不是"验证过的下限"。
+rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
 exclude = ["core/**", "redis/**", "target/**"]

@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetIdsForTest } from '../../src/shared/ids';
 import { RedisStore } from '../../src/modules/redis/state/store';
+import type { ProfileStore } from '../../src/shared/connections/types';
+import type { RedisClient, RedisServices } from '../../src/modules/redis/services/types';
 import type {
-  ProfileStore,
-  RedisClient,
-  RedisServices,
-} from '../../src/modules/redis/services/types';
-import type { ConnectionProfile, RedisReply } from '../../src/modules/redis/core/types';
+  ConnectionProfile,
+  DbInfo,
+  KeyDetail,
+  KeyMeta,
+  RedisReply,
+  ScanPage,
+} from '../../src/modules/redis/core/types';
 import type { ShellApi } from '../../src/shell/types';
 
 beforeEach(() => __resetIdsForTest());
@@ -17,11 +21,17 @@ interface Harness {
   store: RedisStore;
   saved: ConnectionProfile[][];
   errors: string[];
+  /** 状态栏消息（浏览相关的失败走这里，不弹错误条） */
+  statuses: string[];
   setStored(profiles: ConnectionProfile[]): void;
   client: {
     connect: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
     exec: ReturnType<typeof vi.fn>;
+    keyspace: ReturnType<typeof vi.fn>;
+    select: ReturnType<typeof vi.fn>;
+    scan: ReturnType<typeof vi.fn>;
+    keyDetail: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -29,14 +39,38 @@ function harness(options: { stored?: ConnectionProfile[] } = {}): Harness {
   let stored: ConnectionProfile[] = options.stored ?? [];
   const saved: ConnectionProfile[][] = [];
   const errors: string[] = [];
+  const statuses: string[] = [];
 
+  // 假 client 必须**把新方法都实现全**：浏览那几条路径各自有 try/catch，
+  // 少一个方法的话错误会被吞掉，测试照样绿 —— 那就是「绿得没有意义」。
   const client = {
     connect: vi.fn(async () => ({ address: '127.0.0.1:6379', db: 0, version: '7.0.15' })),
     disconnect: vi.fn(async () => {}),
     exec: vi.fn(async (): Promise<RedisReply> => OK),
+    keyspace: vi.fn(async (): Promise<DbInfo[]> => [
+      { db: 0, keys: 2 },
+      { db: 1, keys: 0 },
+      { db: 2, keys: 5 },
+    ]),
+    select: vi.fn(async () => {}),
+    scan: vi.fn(async (): Promise<ScanPage> => ({
+      cursor: 0,
+      keys: [
+        { key: 'user:1', keyType: 'string' },
+        { key: '计数器', keyType: 'hash' },
+      ],
+    })),
+    keyDetail: vi.fn(async (): Promise<KeyDetail> => ({
+      key: 'user:1',
+      keyType: 'string',
+      ttl: -1,
+      size: 5,
+      value: { type: 'bulk', text: 'hello', binary: false, bytes: 5 },
+      truncated: false,
+    })),
   };
 
-  const profiles: ProfileStore = {
+  const profiles: ProfileStore<ConnectionProfile> = {
     load: async () => stored,
     save: async (next) => {
       stored = [...next];
@@ -51,7 +85,7 @@ function harness(options: { stored?: ConnectionProfile[] } = {}): Harness {
 
   const store = new RedisStore(services);
   const shell: ShellApi = {
-    setStatus: () => {},
+    setStatus: (msg) => statuses.push(String(msg)),
     reportError: (e) => errors.push(String(e)),
   };
   store.attachShell(shell);
@@ -60,6 +94,7 @@ function harness(options: { stored?: ConnectionProfile[] } = {}): Harness {
     store,
     saved,
     errors,
+    statuses,
     setStored: (next) => {
       stored = next;
     },
@@ -367,6 +402,220 @@ describe('命令台', () => {
   });
 });
 
+describe('浏览', () => {
+  async function connected() {
+    const h = harness();
+    const id = await h.store.createProfile();
+    await h.store.connect(id);
+    return { ...h, id };
+  }
+
+  it('连上之后自动加载库列表和默认库的 key', async () => {
+    const { store, client, id } = await connected();
+
+    expect(client.keyspace).toHaveBeenCalledWith(id);
+    expect(store.getSnapshot().keyspace[id]).toHaveLength(3);
+
+    // 默认看档案里配的那个库
+    expect(store.getSnapshot().browse.db).toBe(0);
+    expect(client.scan).toHaveBeenCalledWith(id, '*', 0, expect.any(Number));
+    expect(store.getSnapshot().browse.keys.map((k) => k.key)).toEqual(['user:1', '计数器']);
+  });
+
+  it('连上之后这个连接是展开的', async () => {
+    const { store, id } = await connected();
+    expect(store.getSnapshot().expanded[id]).toBe(true);
+  });
+
+  it('没连上的连接展开只给提示，不发请求', async () => {
+    const { store, client } = harness();
+    const id = await store.createProfile();
+
+    await store.toggleExpanded(id);
+
+    expect(store.getSnapshot().expanded[id]).toBe(true);
+    expect(client.keyspace).not.toHaveBeenCalled();
+    expect(store.getSnapshot().browse.db).toBeNull();
+  });
+
+  /**
+   * 这条盯着一个具体的坑：判断「加载过没有」如果用 `!keyspace[id]`，
+   * 那空数组会被当成没加载过，于是每次展开都重新请求一遍。
+   */
+  it('已经加载过的连接再展开不会重复请求', async () => {
+    const { store, client, id } = await connected();
+    const before = client.keyspace.mock.calls.length;
+
+    await store.toggleExpanded(id); // 折叠
+    await store.toggleExpanded(id); // 再展开
+
+    expect(client.keyspace).toHaveBeenCalledTimes(before);
+  });
+
+  it('切库会先 SELECT 再重新加载 key', async () => {
+    const { store, client, id } = await connected();
+    client.scan.mockClear();
+
+    await store.openDb(id, 2);
+
+    expect(client.select).toHaveBeenCalledWith(id, 2);
+    expect(store.getSnapshot().browse.db).toBe(2);
+    expect(client.scan).toHaveBeenCalledWith(id, '*', 0, expect.any(Number));
+  });
+
+  it('切库失败时错误记在浏览态里，连接不受影响', async () => {
+    const { store, client, id } = await connected();
+    client.select.mockRejectedValueOnce(new Error('服务器拒绝了这次操作：out of range'));
+
+    await store.openDb(id, 9999);
+
+    expect(store.getSnapshot().browse.keysError).toContain('out of range');
+    expect(store.getSnapshot().runtime[id]?.status).toBe('connected');
+  });
+
+  it('翻页把新一页追加在后面', async () => {
+    const { store, client, id } = await connected();
+    client.scan
+      .mockResolvedValueOnce({ cursor: 7, keys: [{ key: 'a', keyType: 'string' }] })
+      .mockResolvedValueOnce({ cursor: 0, keys: [{ key: 'b', keyType: 'list' }] });
+
+    await store.openDb(id, 0);
+    expect(store.getSnapshot().browse.cursor).toBe(7);
+    expect(store.getSnapshot().browse.keys.map((k) => k.key)).toEqual(['a']);
+
+    await store.loadMoreKeys();
+    expect(store.getSnapshot().browse.keys.map((k) => k.key)).toEqual(['a', 'b']);
+    expect(store.getSnapshot().browse.cursor).toBe(0);
+  });
+
+  it('翻到底之后不再发请求', async () => {
+    const { store, client } = await connected();
+    const after = client.scan.mock.calls.length;
+
+    // 默认 mock 返回 cursor 0（翻完了）
+    await store.loadMoreKeys();
+    await store.loadMoreKeys();
+
+    expect(client.scan).toHaveBeenCalledTimes(after);
+  });
+
+  it('选中 key 取详情，并把列表里的类型作为提示传下去', async () => {
+    const { store, client, id } = await connected();
+    const meta = firstKey(store);
+
+    await store.selectKey(meta);
+
+    // 第四个参数是类型提示 —— 有它后端能少一次往返
+    expect(client.keyDetail).toHaveBeenCalledWith(
+      id,
+      expect.any(Uint8Array),
+      expect.any(Number),
+      'string',
+    );
+    expect(store.getSnapshot().browse.detail?.value).toEqual({
+      type: 'bulk',
+      text: 'hello',
+      binary: false,
+      bytes: 5,
+    });
+  });
+
+  it('二进制 key 用后端给的原始字节去查', async () => {
+    const { store, client } = await connected();
+    const meta = { key: '乱码', keyBytes: [0xff, 0xfe], keyType: 'string' };
+
+    await store.selectKey(meta);
+
+    const passed = client.keyDetail.mock.calls.at(-1)?.[1] as Uint8Array;
+    expect(Array.from(passed)).toEqual([0xff, 0xfe]);
+  });
+
+  it('取详情时选中的 key 变了，迟到的结果会被丢掉', async () => {
+    const { store, client } = await connected();
+    const first = firstKey(store);
+    const second = firstKey(store, 1);
+
+    let release = (): void => {};
+    client.keyDetail.mockImplementationOnce(
+      () => new Promise<KeyDetail>((resolve) => (release = () => resolve(detailOf('stale')))),
+    );
+
+    const pending = store.selectKey(first);
+    await store.selectKey(second); // 用户又点了别的
+    release();
+    await pending;
+
+    expect(store.getSnapshot().browse.selected?.key).toBe(second.key);
+    expect(store.getSnapshot().browse.detail?.key).toBe('user:1');
+    expect(store.getSnapshot().browse.detail?.key).not.toBe('stale');
+  });
+
+  it('改过滤条件后重新加载，从第一页开始', async () => {
+    const { store, client, id } = await connected();
+    client.scan.mockClear();
+
+    store.setPattern('user:*');
+    await store.reloadKeys();
+
+    expect(client.scan).toHaveBeenCalledWith(id, 'user:*', 0, expect.any(Number));
+    expect(store.getSnapshot().browse.keys).toHaveLength(2);
+  });
+
+  it('断开之后库列表和 key 都清掉', async () => {
+    const { store, id } = await connected();
+    expect(store.getSnapshot().keyspace[id]).toBeDefined();
+
+    await store.disconnect(id);
+
+    expect(store.getSnapshot().keyspace[id]).toBeUndefined();
+    expect(store.getSnapshot().browse.db).toBeNull();
+    expect(store.getSnapshot().browse.keys).toEqual([]);
+  });
+
+  it('库列表读不到时走状态栏提示，不弹错误条', async () => {
+    const h = harness();
+    const id = await h.store.createProfile();
+    h.client.keyspace.mockRejectedValueOnce(new Error('INFO 被禁用了'));
+
+    await h.store.connect(id);
+
+    expect(h.errors).toEqual([]); // 没弹错误条
+    expect(h.statuses.some((s) => s.includes('INFO 被禁用了'))).toBe(true);
+    // 但连接本身是好的，key 列表照常加载
+    expect(h.store.getSnapshot().runtime[id]?.status).toBe('connected');
+  });
+
+  it('切到别的连接会重置浏览态', async () => {
+    const { store, id } = await connected();
+    const other = await store.createProfile();
+
+    store.select(other);
+
+    expect(store.getSnapshot().browse.db).toBeNull();
+    expect(store.getSnapshot().browse.keys).toEqual([]);
+    // 但原来那个连接的库列表还在（没必要丢）
+    expect(store.getSnapshot().keyspace[id]).toBeDefined();
+  });
+});
+
+/** 取夹具里第 n 个 key；没有就报错（免得测试在 undefined 上静静地过） */
+function firstKey(store: RedisStore, index = 0): KeyMeta {
+  const meta = store.getSnapshot().browse.keys[index];
+  if (meta === undefined) throw new Error(`夹具里应该已经有第 ${index} 个 key 了`);
+  return meta;
+}
+
+function detailOf(key: string): KeyDetail {
+  return {
+    key,
+    keyType: 'string',
+    ttl: -1,
+    size: 5,
+    value: { type: 'bulk', text: 'hello', binary: false, bytes: 5 },
+    truncated: false,
+  };
+}
+
 describe('历史导航', () => {
   it('上下键在 store 里也能用', async () => {
     const { store } = harness();
@@ -480,7 +729,7 @@ describe('初始化', () => {
   it('读盘失败也会把 ready 置上，并把错误交给外壳', async () => {
     const { store, errors } = harness();
     // 让 load 抛错
-    const broken = store as unknown as { services: { profiles: ProfileStore } };
+    const broken = store as unknown as { services: { profiles: ProfileStore<ConnectionProfile> } };
     broken.services.profiles.load = async () => {
       throw new Error('读不出来');
     };

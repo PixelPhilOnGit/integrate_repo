@@ -36,6 +36,10 @@ pub fn run() {
             redis_commands::redis_connect,
             redis_commands::redis_disconnect,
             redis_commands::redis_exec,
+            redis_commands::redis_keyspace,
+            redis_commands::redis_select,
+            redis_commands::redis_scan,
+            redis_commands::redis_key_detail,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

@@ -14,14 +14,31 @@
  * 协议层的正确性由 Rust 侧打真 Redis 的集成测试负责，这里只保证界面链路能跑通。
  */
 
-import type { RedisReply } from './types';
+import type { DbInfo, KeyDetail, KeyMeta, RedisReply, ScanPage } from './types';
 
 export interface FakeRedis {
   /** 执行一条命令。分词在外面做完，这里收的是 token 数组 */
   exec(args: readonly string[]): RedisReply;
+
+  // ---- 浏览式界面用的三个操作。形状和 Rust 侧的 `devtoolkit-redis` 对齐 ----
+
+  /** 库列表（含每个库的 key 数） */
+  keyspace(): DbInfo[];
+  /**
+   * 扫一页 key。
+   *
+   * 游标在这里是「已返回的 key 数量的下标」—— 真 Redis 的游标是哈希槽的扫描位置，
+   * 但对一个替身来说，只要满足**两条契约**就够了：翻完返回 0、不会漏也不会重。
+   */
+  scan(pattern: string, cursor: number, count: number): ScanPage;
+  /** key 的类型、TTL 和值 */
+  keyDetail(key: string, limit: number): KeyDetail;
 }
 
 const VERSION = '7.0.15';
+
+/** 假实现固定 16 个库，和真 Redis 的默认配置一致 */
+const DATABASE_COUNT = 16;
 
 type Entry =
   | { kind: 'string'; value: string; expireAt: number | null }
@@ -68,30 +85,54 @@ function p(args: readonly string[], index: number): string {
 
 // ------------------------------------------------------------------ 实现
 
-export function createFakeRedis(): FakeRedis {
+/**
+ * 演示数据。
+ *
+ * 浏览器版是给人看的门面：一个空的 Redis 打开浏览界面什么都没有，
+ * 看起来像坏了，也没法验证「库 → key → 值」这条链路。塞几条真形状的数据，
+ * 和浏览器版给工作区塞示例图是一个道理。
+ *
+ * 刻意**默认不塞**：单元测试要的是干净的空实例，让它自己造数据。
+ * 只有 `services/web.ts` 显式打开它。
+ */
+export interface FakeRedisOptions {
+  seed?: boolean;
+}
+
+export function createFakeRedis(options: FakeRedisOptions = {}): FakeRedis {
   /** 库号 → (key → 值)。默认 16 个库，和真 Redis 的默认配置一致 */
   const databases = new Map<number, Map<string, Entry>>();
   let currentDb = 0;
 
-  const db = (): Map<string, Entry> => {
-    let store = databases.get(currentDb);
+  const storeOf = (index: number): Map<string, Entry> => {
+    let store = databases.get(index);
     if (!store) {
       store = new Map();
-      databases.set(currentDb, store);
+      databases.set(index, store);
     }
     return store;
   };
 
-  /** 取一个还没过期的值；顺手清掉过期的 */
-  const live = (key: string): Entry | undefined => {
-    const entry = db().get(key);
+  const db = (): Map<string, Entry> => storeOf(currentDb);
+
+  /**
+   * 取一个还没过期的值；顺手清掉过期的。
+   *
+   * 带库号参数是因为浏览界面要跨库统计（`keyspace`），
+   * 不能只看当前选中的那个库。
+   */
+  const liveIn = (index: number, key: string): Entry | undefined => {
+    const store = storeOf(index);
+    const entry = store.get(key);
     if (!entry) return undefined;
     if (entry.expireAt !== null && entry.expireAt <= Date.now()) {
-      db().delete(key);
+      store.delete(key);
       return undefined;
     }
     return entry;
   };
+
+  const live = (key: string): Entry | undefined => liveIn(currentDb, key);
 
   const put = (key: string, entry: Entry): void => {
     db().set(key, entry);
@@ -108,6 +149,42 @@ export function createFakeRedis(): FakeRedis {
   const fail = (message: string): RedisReply => err(message);
   const unknown = (name: string): RedisReply =>
     fail(`ERR unknown command '${name}', with args beginning with: `);
+
+  if (options.seed === true) seedDemoData();
+
+  /** 塞一份演示数据，覆盖五种类型 + 一个用于验证过滤的公共前缀 */
+  function seedDemoData(): void {
+    const put0 = (key: string, entry: Entry): void => {
+      databases.set(0, databases.get(0) ?? new Map());
+      databases.get(0)?.set(key, entry);
+    };
+    const now = Date.now();
+
+    put0('user:1', { kind: 'string', value: '张三', expireAt: null });
+    put0('user:2', { kind: 'string', value: '李四', expireAt: null });
+    put0('会话:1001', {
+      kind: 'hash',
+      value: new Map([
+        ['用户', '张三'],
+        ['登录时间', '2026-09-17 09:12'],
+      ]),
+      expireAt: now + 3600 * 1000,
+    });
+    put0('队列:待处理', { kind: 'list', value: ['发邮件', '导报表', '清理缓存'], expireAt: null });
+    put0('标签', { kind: 'set', value: new Set(['前端', '后端', '运维']), expireAt: null });
+    put0('排行榜', {
+      kind: 'zset',
+      value: new Map([
+        ['张三', 98],
+        ['李四', 87],
+        ['王五', 76],
+      ]),
+      expireAt: null,
+    });
+
+    // 另一个库也放一条，好验证「切库真的换了数据」
+    databases.set(1, new Map([['来自db1', { kind: 'string', value: '另一个库', expireAt: null }]]));
+  }
 
   return {
     exec(rawArgs: readonly string[]): RedisReply {
@@ -296,7 +373,101 @@ export function createFakeRedis(): FakeRedis {
           return unknown(name);
       }
     },
+
+    keyspace(): DbInfo[] {
+      const out: DbInfo[] = [];
+      for (let index = 0; index < DATABASE_COUNT; index += 1) {
+        const store = databases.get(index);
+        const keys = store
+          ? [...store.keys()].filter((key) => liveIn(index, key) !== undefined).length
+          : 0;
+        out.push({ db: index, keys });
+      }
+      return out;
+    },
+
+    scan(pattern: string, cursor: number, count: number): ScanPage {
+      const names = [...db().keys()]
+        .filter((key) => live(key) !== undefined && matchPattern(pattern, key))
+        .sort();
+
+      const start = Math.max(0, cursor);
+      const page = names.slice(start, start + Math.max(1, count));
+      const next = start + page.length;
+
+      return {
+        // 翻完了返回 0 —— 和真 Redis 一样，0 既是起点也是终点
+        cursor: next >= names.length ? 0 : next,
+        keys: page.map((key): KeyMeta => {
+          const entry = live(key);
+          return { key, keyType: entry ? entry.kind : 'none' };
+        }),
+      };
+    },
+
+    keyDetail(key: string, limit: number): KeyDetail {
+      const entry = live(key);
+      if (!entry) {
+        return { key, keyType: 'none', ttl: -2, value: nil(), truncated: false };
+      }
+
+      const ttl =
+        entry.expireAt === null
+          ? -1
+          : Math.max(0, Math.round((entry.expireAt - Date.now()) / 1000));
+      const { value, size, truncated } = valueOf(entry, limit);
+
+      return { key, keyType: entry.kind, ttl, size, value, truncated };
+    },
   };
+
+  /** 按类型把值取成回复树，只取前 `limit` 项 */
+  function valueOf(
+    entry: Entry,
+    limit: number,
+  ): { value: RedisReply; size: number; truncated: boolean } {
+    switch (entry.kind) {
+      case 'string':
+        return { value: bulk(entry.value), size: byteLength(entry.value), truncated: false };
+
+      case 'list': {
+        const shown = entry.value.slice(0, limit);
+        return {
+          value: arr(shown.map(bulk)),
+          size: entry.value.length,
+          truncated: entry.value.length > shown.length,
+        };
+      }
+
+      case 'set': {
+        const all = [...entry.value];
+        const shown = all.slice(0, limit);
+        return {
+          value: arr(shown.map(bulk)),
+          size: all.length,
+          truncated: all.length > shown.length,
+        };
+      }
+
+      case 'hash': {
+        const all = [...entry.value.entries()];
+        const shown = all.slice(0, limit);
+        const items: RedisReply[] = [];
+        for (const [field, value] of shown) items.push(bulk(field), bulk(value));
+        return { value: arr(items), size: all.length, truncated: all.length > shown.length };
+      }
+
+      case 'zset': {
+        const all = [...entry.value.entries()].sort((a, b) =>
+          a[1] === b[1] ? (a[0] < b[0] ? -1 : 1) : a[1] - b[1],
+        );
+        const shown = all.slice(0, limit);
+        const items: RedisReply[] = [];
+        for (const [member, score] of shown) items.push(bulk(member), bulk(String(score)));
+        return { value: arr(items), size: all.length, truncated: all.length > shown.length };
+      }
+    }
+  }
 
   // ---------------------------------------------------------------- 各命令
 

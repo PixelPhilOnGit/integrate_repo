@@ -18,10 +18,12 @@
 //!
 //! 这条语义靠 [`Reply::Error`] 承载：`exec` 遇到服务端错误返回 `Ok(Reply::Error{..})`。
 
+mod browse;
 mod conn;
 mod error;
 mod reply;
 
+pub use browse::{DbInfo, KeyDetail, KeyMeta, ScanPage};
 pub use conn::{ConnectionConfig, ConnectionRegistry, ServerInfo, COMMAND_TIMEOUT, CONNECT_TIMEOUT};
 pub use error::RedisError;
 pub use reply::Reply;
