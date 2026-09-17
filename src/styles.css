@@ -1194,3 +1194,142 @@ textarea:focus {
   width: 40%;
   color: var(--muted);
 }
+
+/* ------------------------------------------------------------- SQL 模块 */
+
+/* 侧栏里的小节标题（「库」/「表」） */
+.rd-section-label {
+  padding: 6px 10px 2px 32px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+/* 主区：编辑器 + 结果，上下分 */
+.rd-query-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rd-sql-editor {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-sql-editor textarea {
+  height: 132px;
+  border: none;
+  border-radius: 0;
+  padding: 10px 12px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.rd-sql-editor textarea:focus {
+  outline: none;
+  border: none;
+}
+
+.rd-sql-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+/* 结果区：自己占满剩下的高度，表格在里层滚 */
+.rd-sql-result {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.rd-sql-result-meta {
+  flex: none;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rd-sql-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.rd-sql-table {
+  border-collapse: collapse;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.rd-sql-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 列类型用小字跟在列名后面，不抢视线 */
+.rd-sql-coltype {
+  margin-left: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.rd-sql-table td {
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* NULL 必须和空串一眼分得开 */
+.rd-sql-table td.is-null {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* 行号列：窄、灰、不可选 */
+.rd-sql-table .rd-sql-rownum {
+  width: 1%;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  background: var(--panel);
+}
+
+.rd-sql-error {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  color: var(--danger);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

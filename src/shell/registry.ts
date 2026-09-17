@@ -11,9 +11,15 @@
 import { diagramModule } from '../modules/diagram';
 import { devPlaceholderModule } from '../modules/devplaceholder';
 import { redisModule } from '../modules/redis';
+import { sqlModule } from '../modules/sql';
 import type { Module } from './types';
 
-export const MODULES: readonly Module[] = [diagramModule, redisModule, devPlaceholderModule];
+export const MODULES: readonly Module[] = [
+  diagramModule,
+  redisModule,
+  sqlModule,
+  devPlaceholderModule,
+];
 
 export function moduleById(id: string): Module | undefined {
   return MODULES.find((m) => m.id === id);

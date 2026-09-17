@@ -12,6 +12,7 @@
 
 mod commands;
 mod redis_commands;
+mod sql_commands;
 
 /// 供 `main.rs`（以及将来的移动端入口）调用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,6 +24,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         // 活连接表。空表构造，不会碰 tokio 运行时，启动期是安全的。
         .manage(devtoolkit_redis::ConnectionRegistry::new())
+        .manage(devtoolkit_sql::ConnectionRegistry::new())
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,
@@ -40,6 +42,12 @@ pub fn run() {
             redis_commands::redis_select,
             redis_commands::redis_scan,
             redis_commands::redis_key_detail,
+            sql_commands::sql_connect,
+            sql_commands::sql_disconnect,
+            sql_commands::sql_query,
+            sql_commands::sql_databases,
+            sql_commands::sql_tables,
+            sql_commands::sql_use_database,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
