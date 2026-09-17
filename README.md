@@ -1,28 +1,58 @@
-# rustDraw
+# Devtoolkit
 
-一个**顺序图（UML sequence diagram）桌面编辑器**。
+一个**开发者工作台**：把平时要开好几个软件才干完的事收进一个桌面应用。
 
-选一个本地文件夹当「工作区」，左侧显示该目录的文件树，图以 `.seq.json` 文件的形式存在里面——
-和 VS Code 打开文件夹的体验类似，没有云端、没有数据库，工作区就是你磁盘上的一个普通目录。
+模块化架构，每个模块自包含。目前有：
 
-技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有文件系统操作，
-前端是 React + TypeScript + Vite 渲染的 WebView。
+| 模块 | 状态 |
+|---|---|
+| **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树，图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库 |
+| **Redis** | 可用（连接管理 + 命令台）。保存多个连接、连上之后敲命令、结果按 redis-cli 的记号渲染 |
+| MySQL / PostgreSQL / MongoDB | 待做 |
+| SSH 终端 | 待做 |
+
+技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有系统操作（文件、
+网络连接），前端是 React + TypeScript + Vite 渲染的 WebView。
+
+## 加一个模块
+
+模块化架构的检验标准就一句话：**加一个模块 = 写一个目录 + 注册表加一行**。
+
+```ts
+// src/shell/registry.ts
+export const MODULES = [diagramModule, redisModule, devPlaceholderModule];
+```
+
+模块要实现的接口在 `src/shell/types.ts`（`Module`）。外壳不认识任何具体模块，
+只认这个接口——它只管把当前模块的槽位摆出来、显示状态和错误。
+每个模块自己持有自己的 store，模块之间不通过外壳通信。
+
+`src/modules/devplaceholder/` 是一个活体检验：它只用了一个目录 + 注册表一行，
+没有改动外壳的任何内部实现。
 
 ---
 
 ## 目录结构
 
 ```
-rustDraw/
+Devtoolkit/
 ├── src/                     前端源码（React + TypeScript）
+│   ├── shared/              通用层：几何、id、文字测量、撤销栈、平台桥、通用组件
+│   │                        ★ 不 import 任何模块
+│   ├── shell/               外壳：模块注册表、图标栏、状态栏、错误条
+│   │                        ★ 不认识任何具体模块，只认 Module 接口
+│   └── modules/
+│       ├── diagram/         顺序图模块
+│       ├── redis/           Redis 模块
+│       └── devplaceholder/  占位模块（验证「加模块 = 一个目录 + 一行」）
 ├── src-tauri/               Rust 后端
 │   ├── src/
 │   │   ├── main.rs          程序入口
 │   │   ├── lib.rs           Tauri 应用组装：注册插件、挂载 command
-│   │   └── commands.rs      #[tauri::command] 薄封装层
-│   ├── core/                纯逻辑内核（不依赖 Tauri，可独立测试）
-│   │   ├── src/workspace.rs 路径安全边界 + 文件操作
-│   │   └── tests/           路径安全 / 文件操作测试
+│   │   ├── commands.rs      工作区文件相关的 #[tauri::command] 薄封装
+│   │   └── redis_commands.rs Redis 相关的三个 command
+│   ├── core/                纯逻辑内核：路径安全边界 + 文件操作
+│   ├── redis/               Redis 内核：连接管理、命令执行、回复解析
 │   ├── capabilities/        权限配置
 │   ├── icons/               图标（logo.svg 是源文件）
 │   └── tauri.conf.json      窗口、打包配置
@@ -30,8 +60,10 @@ rustDraw/
 └── package.json
 ```
 
-`src-tauri/core` 被刻意拆成独立 crate：它**不依赖 tauri**，所以路径安全那套逻辑
-不需要装 WebKit / GTK 就能在几秒内跑完测试。
+`src-tauri/core` 和 `src-tauri/redis` 都被刻意拆成独立 crate：它们**不依赖 tauri**，
+所以路径安全那套逻辑和 Redis 协议那套逻辑，都不需要装 WebKit / GTK 就能单独跑测试。
+`devtoolkit-redis` 的集成测试还会**自己拉起一个真 `redis-server`**（随机端口、不落盘、
+`Drop` 时杀掉）—— 所以机器上要装了 `redis-server` 才会过，没装会明确报错并给安装命令。
 
 ---
 
@@ -121,15 +153,32 @@ npm install
 
 ### 只跑后端测试
 
-后端的核心逻辑在 `src-tauri/core`，**不需要 WebKit / GTK** 就能测：
+后端的核心逻辑在 `src-tauri/core` 和 `src-tauri/redis`，**不需要 WebKit / GTK** 就能测：
 
 ```bash
 cd src-tauri
-cargo test --package rustdraw-core
+cargo test --package devtoolkit-core    # 路径安全 + 文件操作
+cargo test --package devtoolkit-redis   # Redis 协议层
 ```
 
-覆盖的内容包括路径穿越（`../`、`../../etc/passwd`、`sub/../../`）、绝对路径、
+`devtoolkit-core` 覆盖路径穿越（`../`、`../../etc/passwd`、`sub/../../`）、绝对路径、
 符号链接逃逸、Windows 风格分隔符混用，以及原子写、目录树排序、增删改移等文件操作。
+
+`devtoolkit-redis` 的集成测试**会自己拉起一个真 `redis-server`**（随机端口、不落盘、
+`Drop` 时杀掉），所以本机要先装：
+
+```bash
+sudo apt-get install -y redis-server    # macOS: brew install redis
+```
+
+没装的话测试会**明确失败并给出安装命令**，不会静默跳过 —— 静默跳过等于这些测试
+永远不跑，而没有任何人会发现。这几个测试覆盖的是：服务器返回错误必须是一条「回复」
+而不是执行失败、二进制值要被标记出来、选库真的生效、连不上的主机要在超时内报错、
+服务中途被杀要变成传输层错误并把连接摘掉。
+
+> 在 `src-tauri` 下直接敲 `cargo test` 会跑**全部** crate 的测试
+> （`Cargo.toml` 里的 `default-members` 管这件事）。加新 crate 时记得同步加进去，
+> 否则它的测试会静默不跑。
 
 ### 只编译后端
 
@@ -159,26 +208,45 @@ npx tauri build --bundles dmg          # macOS
 
 ## 前端架构
 
-一句话：**图的逻辑和界面、平台彻底分开**。
+一句话：**外壳 / 模块 / 共享层三层，每一层只认识下面那层**。
 
 ```
 src/
-├── core/        纯 TypeScript：数据模型、布局、命令、撤销、导出
-│                ★ 不 import React，不碰 DOM，不碰 Tauri
-├── platform/    运行时适配层：统一文件操作接口
-│   ├── tauri.ts   走 invoke() + 系统对话框
-│   └── web.ts     浏览器实现，工作区是 localStorage 里的虚拟目录
-├── render/      SVG 渲染 + 画布交互
-├── panels/      工具栏、文件树、属性面板
-└── state/       应用状态（单个 store）
+├── shared/      通用层：几何、id、文字测量、撤销栈、平台桥、通用组件
+│                ★ 不 import 任何模块
+├── shell/       外壳：模块注册表、图标栏、状态栏、错误条
+│                ★ 不认识任何具体模块，只认 Module 接口
+└── modules/
+    ├── diagram/        顺序图
+    │   ├── core/       纯 TypeScript：数据模型、布局、命令、撤销、导出
+    │   │               ★ 不 import React，不碰 DOM，不碰 Tauri
+    │   ├── render/     SVG 渲染 + 画布交互
+    │   ├── panels/     工具栏、文件树、属性面板
+    │   └── state/      模块自己的 store
+    ├── redis/
+    │   ├── core/       纯逻辑：分词、回复渲染、历史、校验、假 Redis
+    │   ├── services/   平台桥：tauri 走 invoke，web 走内存假实现
+    │   ├── panels/     连接列表、命令台、连接表单
+    │   └── state/      模块自己的 store
+    └── devplaceholder/ 占位模块
 ```
+
+`src/shared/platform/` 是**所有模块共用**的运行时适配层，它只提供「文件操作 +
+系统对话框」这类通用能力：tauri 实现走 `invoke()`，web 实现把工作区放在 localStorage 里。
+
+具体模块自己的网络能力**不放进共享层** —— 那会让共享层认识具体模块。Redis 模块
+自己带一套 `services/`（接口 + tauri 实现 + 浏览器实现），结构和 `shared/platform/`
+一样，只是归模块所有。
 
 ### 为什么要有浏览器实现
 
-`platform/web.ts` 不是"顺便支持一下浏览器"，它承担一个具体职责：
-**让前端能在普通浏览器里完整跑起来**。编辑器里所有交互逻辑（拖拽、内联编辑、
-撤销、导出）都因此能用 Playwright 驱动和断言，而不依赖启动原生窗口。
-Tauri 那层外壳只剩「提供文件系统和对话框」这一件事。
+`shared/platform/web.ts` 和 `modules/redis/services/web.ts` 不是"顺便支持一下浏览器"，
+它们承担一个具体职责：**让前端能在普通浏览器里完整跑起来**。编辑器里所有交互逻辑
+（拖拽、内联编辑、撤销、导出）、命令台的完整链路（连接 → 执行 → 展示结果）
+都因此能用 Playwright 驱动和断言，而不依赖启动原生窗口。
+
+Redis 那份假实现做得足够真：`SET a 1` 之后再 `GET a` 真的能拿回 `1`。
+对着写死的假数据做断言等于自欺，那样 e2e 绿了也说明不了什么。
 
 平台判定用 `window.__TAURI_INTERNALS__`，不是 `__TAURI__` ——
 后者只有开了 `withGlobalTauri` 才存在。
@@ -254,6 +322,32 @@ Mermaid 时的语义标注（这条注释挂在谁身上）。曾经写成「有
 整棵树看起来是平的**。另外新建之后会自动展开目标目录，否则新图会消失在
 一个折叠的文件夹里，用户以为没建成功。
 
+**Redis 客户端放在 Rust 侧，不放前端。** `tauri.conf.json` 的 CSP 是
+`connect-src 'self' ipc:`，前端直连外部网络会被拦；放 Rust 侧还顺带让它能被打真
+Redis 的集成测试覆盖。capabilities 也不用动 —— 自定义 `#[tauri::command]`
+不受 ACL 约束。
+
+**命令台的「错误」是内联在日志里的，不弹外壳错误条。** 服务器说
+`-ERR unknown command` 的时候命令执行**完了**，只是结果是个错误。用户敲错一个命令
+就弹一个横贯屏幕的红色横幅，那是用错了语义。只有传输层失败（连不上、断了、超时）
+才值得那样打断。规则写在 `modules/redis/state/store.ts` 的文件头注释里，
+e2e 里有一条守门测试盯着它。
+
+**连接选中、编辑对象、命令台的目标是同一个概念**（`selectedId`）。
+拆成两个状态会立刻产生「侧栏选着 A，命令发给了 B」这种 bug。
+
+**切模块不断开连接。** 连接是廉价且用户预期跨模块存活的资源：去顺序图模块看一眼
+再回来，连接还在。`onDeactivate` 里那句注释写清了理由，免得后人以为是漏了。
+
+**命令台的回显对 `AUTH` 打码**（`core/redact.ts`）。命令台会把敲的命令记进日志，
+`AUTH mypassword` 就等于把密码写进了界面日志 —— 而日志会被截图、会被贴进 issue。
+它解决的不是「明文落盘」那件事（那是凭据存储的问题），而是**别让同一个密码
+再泄漏到第二个地方**。
+
+**命令参数逐个塞进 `Cmd`，绝不拼字符串。** `Cmd` 会把每个参数打包成独立的
+bulk string，天然免疫 RESP 注入；拼字符串的话 `SET k "a\r\nFLUSHALL"` 这种值
+就能挟持连接。Rust 侧有一条测试专门盯这个。
+
 ---
 
 ## 测试
@@ -264,7 +358,7 @@ Mermaid 时的语义标注（这条注释挂在谁身上）。曾经写成「有
 | --- | --- | --- |
 | 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出 |
 | 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动编辑器：滚动、拖拽、中文输入、导出下载、文件管理 |
-| Rust 后端 | `cd src-tauri && cargo test -p rustdraw-core` | 路径逃逸攻击向量、文件操作、导出 |
+| Rust 后端 | `cd src-tauri && cargo test -p devtoolkit-core` | 路径逃逸攻击向量、文件操作、导出 |
 | 原生窗口 | 见下 | 真 Tauri 应用启动 + 读写落盘 |
 
 两个值得一提的点：
@@ -285,7 +379,7 @@ headless Linux 上可以用 Xvfb 真跑起来并截图：
 ```bash
 xvfb-run -a --server-args="-screen 0 1440x900x24" \
   env WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 \
-  ./src-tauri/target/debug/rustdraw
+  ./src-tauri/target/debug/devtoolkit
 ```
 
 > 注意：**没有窗口管理器时，WebKitGTK 会抑制表单控件的激活事件** ——
@@ -312,8 +406,32 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" \
 | `delete_entry` | `root`, `path` | — | 删除（目录递归） |
 | `move_entry` | `root`, `path`, `newDir` | `string` | 移动，返回新相对路径 |
 | `write_export` | `path`, `data` | — | 导出到工作区**外**（用户「另存为」选的绝对路径） |
+| `redis_connect` | `id`, `config` | `ServerInfo` | 建立连接。同 `id` 再连是**替换**，不是新建 |
+| `redis_disconnect` | `id` | — | 断开。幂等 |
+| `redis_exec` | `id`, `args` | `Reply` | 执行一条命令。`args[0]` 是命令名 |
 
 `path` 一律是**相对于工作区根目录**、**正斜杠分隔**的路径（Windows 上也是正斜杠）。
+
+### Redis 的三个命令
+
+`config` 是 `{ host, port, db, username, password }`；`args` 是**已经分好词的**
+token 数组（分词在前端的 `modules/redis/core/tokenize.ts` 里做，Rust 侧只收结果）。
+
+**`redis_exec` 的错误语义是最容易搞错的一条：**
+
+- 服务器报错（`-ERR unknown command`）→ 返回 **`Ok(Reply::Error)`**。
+  它是命令的**结果**，不是执行失败，前端把它内联显示在命令台日志里，连接不动。
+- 只有传输层失败（连不上、超时、连接断了）才返回 `Err(String)`。
+
+实现上靠的是 `send_packed_command` 而不是 `query_async` —— 后者内部会调
+`extract_error()`，**递归**把嵌在数组/Map 里的 `ServerError` 也提成 `Err`，
+那样 `CONFIG GET` 这类返回嵌套结构的命令会整条变成「执行失败」。
+
+命令参数是**逐个塞进 `Cmd`** 的，不拼字符串：`Cmd` 会把每个参数打包成独立的
+bulk string，天然免疫 RESP 注入（否则 `SET k "a\r\nFLUSHALL"` 就能挟持连接）。
+
+`Reply` 的字段名是前后端契约，Rust 侧有单元测试逐个钉死（`redis/src/reply.rs`
+的 `json_contract`）。
 
 `FileNode` 的字段：
 
@@ -364,7 +482,7 @@ interface FileNode {
 ### 唯一的例外：`write_export`
 
 「另存为」要把文件写到工作区外面（用户自己选的桌面、文档目录），这条路径没法也不该
-套工作区校验。它单独放在 `rustdraw-core/src/export.rs`，仍然拒绝空路径、相对路径、
+套工作区校验。它单独放在 `devtoolkit-core/src/export.rs`，仍然拒绝空路径、相对路径、
 把目录当文件写，并且要求父目录存在、用原子写。
 
 需要注意的是：**这个约束靠约定，不靠机制**。`write_export` 接受前端传来的任意绝对路径，
@@ -384,6 +502,21 @@ fn export_as(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
 ```
 
 这样「只能写到用户当面选过的文件」就成了机制上的保证，而不是一句注释。
+
+### ⚠️ 凭据目前是明文存储
+
+Redis 连接的密码以**明文**落在本机配置文件里（桌面端是应用配置目录下的 `redis.json`，
+浏览器版是 localStorage）。这是明确知情的妥协，沿用工作区路径那套「先明文、标记待改」的做法。
+
+代价说清楚：**任何能读到那个文件的进程都能拿到你的 Redis 密码** —— 同机器上的其他程序、
+备份软件、误传的配置目录快照，都算。共用电脑上不要填生产库密码。
+
+读写收敛在一处：`src/modules/redis/services/credentials.ts`。换成系统钥匙串
+（Windows 凭据管理器 / macOS Keychain / Linux Secret Service）时，改动面就是那一个文件
+加上 `ConnectionProfile` 类型上的一个字段。那个文件的注释里写了迁移的三步。
+
+顺带一提，命令台的回显对 `AUTH` 做了脱敏（`core/redact.ts`）—— 那解决的是**另一个**问题：
+别让同一个密码再泄漏到界面日志里（日志会被截图、会被贴进 issue）。两件事都要做。
 
 ---
 
@@ -413,7 +546,7 @@ Tauri 会**按当前平台自动过滤**，不需要为每个平台改配置：
 
 - **触发**：推送 `v*` 标签（`git tag v0.1.0 && git push origin v0.1.0`），
   或在 Actions 页面手动触发（手动触发只出包，不建 Release）。
-- **先跑测试**：`rustdraw-core` 的单元测试作为前置 job，不通过就不打包。
+- **先跑测试**：`devtoolkit-core` 的单元测试作为前置 job，不通过就不打包。
 - **矩阵**：`macos-latest`（分别出 Apple Silicon 和 Intel 两个包）、
   `ubuntu-22.04`、`windows-latest`，四份产物汇总到同一个 Release。
 - **Release 默认是草稿**，方便先补 release notes 再点发布；
