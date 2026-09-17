@@ -12,7 +12,7 @@
 技术形态是 **[Tauri 2](https://v2.tauri.app/)**：Rust 进程提供系统能力（文件、网络连接），
 它内嵌一个系统 WebView 渲染界面。前端是 React 19 + TypeScript + Vite。
 
-**当前有两个可用模块：顺序图编辑器、Redis 客户端。** MySQL/PostgreSQL、SSH 还没开始做。
+**当前有三个可用模块：顺序图编辑器、Redis 客户端、数据库（SQL）。** SSH 还没开始做。
 
 ---
 
@@ -37,6 +37,14 @@
 - 故意**不做**的：key 浏览器（SCAN 列表/看值）、集群、pub/sub、哨兵。
   这是用户拍板的范围。
 
+### SQL 模块（数据库：MySQL + PostgreSQL）
+
+- 保存多个**连接**，配置里选引擎（PostgreSQL / MySQL）
+- 侧栏「连接 → 库 / 表」，点一张表会在编辑器里生成 `SELECT * FROM 表 LIMIT 100`
+- **查询台**：SQL 编辑器 + Segoe 结果表格。Ctrl+Enter 执行，Alt+↑↓ 翻历史
+- 结果区三种形态：表格 / 「影响 N 行」/ 红字报错
+- NULL 和空串在视觉上分得开（NULL 是灰色斜体的 `(NULL)`）
+
 打包成 Windows / macOS / Linux 安装包。
 
 ---
@@ -55,16 +63,32 @@ Playwright 靠它才能驱动完整的编辑器逻辑。
 
 ```bash
 npm run typecheck    # 类型检查
-npm test             # 407 个纯逻辑单测（秒级）
-npm run test:e2e     # 85 个端到端测试（真实 Chromium）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 82 个 Rust 测试
+npm test             # 490 个纯逻辑单测（秒级）
+npm run test:e2e     # 109 个端到端测试（真实 Chromium）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 141 个 Rust 测试
 ```
 
-> `CARGO_BUILD_JOBS=2` 不是可选项：这台机器 2 核 3.6G，默认并行度会 OOM。
+> **跑重活时请套上 `nice`**：这台机器只有 2 核，cargo 编译会把两个核吃满，
+> code-server（Node）抢不到 CPU 就会掉线。
+>
+> ```bash
+> nice -n 19 ionice -c3 env CARGO_BUILD_JOBS=2 cargo test
+> ```
+>
+> 另外**不要并发跑多个构建**。这一条是拿真实体验换来的：漏过孤儿进程 +
+> 并发编译，把用户从 code-server 上踢下去过好几次。
 
-Redis 那部分 Rust 测试**要机器上装了 `redis-server`**（见「环境变更」）。它们会自己
-拉起一个随机端口、不落盘的真实例，`Drop` 时杀掉。没装的话会明确报错并给安装命令，
-不会静默跳过。
+Redis / SQL 那部分 Rust 测试**要机器上装了对应的服务端**：
+
+```bash
+sudo apt-get install -y redis-server postgresql mysql-server
+```
+
+它们会自己拉起随机端口、不落盘的真实例，`Drop` 时杀掉。没装的话会明确报错并给
+安装命令，不会静默跳过。
+
+> SQL 那套还有个额外要求：**测试进程要能切到 `postgres` / `mysql` 系统用户** ——
+> 这两个引擎拒绝以 root 运行，夹具靠 `CommandExt::uid/gid` 降权。
 
 ---
 
@@ -79,6 +103,7 @@ src/
 └── modules/
     ├── diagram/        顺序图（全部功能都在这）
     ├── redis/          Redis 客户端
+    ├── sql/            数据库（MySQL + PostgreSQL 合一个模块）
     └── devplaceholder/ 占位模块，验证架构用
 ```
 
@@ -93,7 +118,7 @@ src/
 
 ```ts
 // src/shell/registry.ts
-export const MODULES = [diagramModule, redisModule, devPlaceholderModule];
+export const MODULES = [diagramModule, redisModule, sqlModule, devPlaceholderModule];
 ```
 
 接口定义在 `src/shell/types.ts` 的 `Module`：`id / name / icon / Toolbar? / Sidebar /
@@ -104,7 +129,7 @@ Main / Inspector? / StatusItems? / platform / onActivate? / onDeactivate?`。
 （`modules/redis/services/`：接口 + tauri 实现 + 浏览器实现），结构和
 `shared/platform/` 一样，只是归模块所有。
 
-> 注册表里的顺序 = 图标栏顺序 = `Ctrl+1/2/3` 的顺序，所以它**是面向用户的**。
+> 注册表里的顺序 = 图标栏顺序 = `Ctrl+1..4` 的顺序，所以它**是面向用户的**。
 > 另外 `main.tsx` 的 `defaultExtension` 取的是 `MODULES[0]`，顺序图必须留在第一位，
 > 否则「新建文件」的默认后缀会变空。
 
@@ -165,9 +190,9 @@ Main / Inspector? / StatusItems? / platform / onActivate? / onDeactivate?`。
 
 | 层 | 数量 | 状态 |
 |---|---|---|
-| 前端单测 | 407 | ✅ 全过 |
-| e2e | 85 | ✅ 全过（含 13 条 Redis、7 条外壳） |
-| Rust | 82 | ✅ 全过（含 21 条打真 Redis 的集成测试） |
+| 前端单测 | 490 | ✅ 全过 |
+| e2e | 109 | ✅ 全过（14 条 SQL、14 条 Redis、7 条外壳） |
+| Rust | 141 | ✅ 全过（35 条 SQL + 50 条 Redis 打真服务端） |
 | 打包 | — | ✅ 见下 |
 
 重构本身做过**像素级验证**：搬 28 个文件、拆掉 `App.tsx` 建起整个外壳之后，
@@ -250,15 +275,25 @@ grep -rl 'rd-conn-\|rd-console' src/ | grep -v '^src/modules/redis/'   # 应该�
 
 ### 下一步做模块
 
-按用户定的顺序：**PostgreSQL/MySQL → SSH → MongoDB**。
+按用户定的顺序：**SSH → MongoDB**。（Redis 和 SQL 已完成。）
+
+SSH 是用户明确要求的下一个，范围也定了：**完整终端**（xterm.js + PTY），
+实现用**纯 Rust 的 `russh`**（换来三平台打包不用装系统库，代价是 69 个直接依赖、
+编译慢）。开工前先量一次真实编译耗时。
+
+⚠️ **SSH 的主机密钥必须做 TOFU（首次信任）并持久化指纹**，指纹变了要明确告警。
+一个静默接受任何主机密钥的 SSH 客户端就是 MITM 的靶子 —— 这条不能省。
+
+注意 SSH 的数据流模型和前面三个模块**完全不同**：不是请求-响应，而是长连接上的
+双向流（读循环 → 事件推给前端；写/resize/关闭走 command）。
 
 ### ⚠️ 加 SSH / 数据库之前必须解决的
 
 **凭据存储。** 现在 Redis 的连接密码是**明文**存进 `redis.json`（桌面端）
 或 localStorage（浏览器版）——用户明确选了这条路（沿用工作区路径那套「先明文、标记待改」）。
 
-读写收敛在一处：`src/modules/redis/services/credentials.ts`，那里的注释写了迁移到
-系统钥匙串的三步。**真正开始存服务器密码/库密码之前必须换成钥匙串**
+读写收敛在一处：`src/shared/connections/profiles.ts`（三个连接类模块共用），那里的注释写了迁移到
+系统钥匙串的三步。**共用一份的好处就是迁移一次覆盖三个模块**。**真正开始存服务器密码/库密码之前必须换成钥匙串**
 （Windows 凭据管理器 / macOS Keychain / Linux Secret Service），否则等于把密码摊在
 文件系统上——任何能读你文件的进程都能拿到。
 
@@ -278,6 +313,26 @@ grep -rl 'rd-conn-\|rd-console' src/ | grep -v '^src/modules/redis/'   # 应该�
 ---
 
 ## 踩过的坑（省得你再踩）
+
+### ⚠️ 最容易骗到自己的那个坑
+
+- **跑 release 二进制之前，先把 dev server 关掉。**
+  `Cargo.toml` 里少一个 `[features] custom-protocol`（本轮已补上），
+  release 二进制就**不内嵌前端产物**，而是去连 `devUrl`（localhost:5173）。
+  后果是：**开发机上它永远是"好的"** —— 只要 dev server 还开着，UI 就是最新的那份，
+  看起来一切正常。之前几次「真机冒烟」其实连的都是 dev server，根本没测到内嵌产物。
+  直到关掉 dev server 才白屏报 `Could not connect to localhost`。
+  **装到用户机器上就是一片白。**
+
+  验证打包产物时要这样做：
+
+  ```bash
+  pkill -f 'vit[e]'                       # 先关掉 dev server，否则测的不是打包产物
+  npx tauri build --no-bundle             # 或 cargo build --release --features custom-protocol
+  xvfb-run -a --server-args="-screen 0 1440x900x24" ./src-tauri/target/release/devtoolkit
+  ```
+
+  判断依据：带 `custom-protocol` 的二进制会**大 10 万字节左右**（内嵌了 dist）。
 
 ### 环境
 
@@ -308,6 +363,31 @@ grep -rl 'rd-conn-\|rd-console' src/ | grep -v '^src/modules/redis/'   # 应该�
   外壳和模块之间那两层容器如果忘了 `flex: 1; min-height: 0`，工具栏和主区域的尺寸就变了。
 - **`.rd-app` 是纵向 flex**，图标栏必须先包进一个横向容器（`.rd-body`），
   否则它会变成"顶部的一行"而不是"左侧的一列"。这个错犯过一次。
+
+### Rust / SQL 那摊
+
+- **PostgreSQL 和 MySQL 拒绝以 root 运行**（redis-server 没这个限制）。测试夹具用
+  `CommandExt::uid/gid` 降权到 `postgres` / `mysql` 系统用户，数据目录还要先 `chown`。
+- **`mysqld --initialize-insecure` 建的 root 是 `root@localhost`，只认 unix socket**。
+  直接走 TCP 连会报 `ERROR 1130: Host '127.0.0.1' is not allowed to connect`。
+  夹具的做法是先用 socket 连进去建一个 `root@'%'`。
+- **收尾必须杀整个进程组**：数据库是 shell `&` 出来的子进程，只杀 shell 会留下孤儿。
+  而且**不能写 `kill -KILL -12345`** —— procps 的 kill 会把 `-12345` 当成选项解析，
+  结果一个都杀不掉。要用 `sh -c "kill -9 -<pgid>"`（借 shell 内建的 kill）。
+  > 这条是拿代价换来的：漏了 6 个 mysqld，把 3.6G 的机器吃到只剩 500M，
+  > 用户的 code-server 会话被反复踢下线。
+- **启动失败之后不要再重试**。`OnceLock::get_or_init` 在闭包 panic 之后不缓存，
+  每个后续用例都会再起一个实例 —— 会形成"越起越慢、越慢越超时、越超时越起"的死亡螺旋。
+  夹具里加了个原子计数器，失败一次就不再重试。
+- **PostgreSQL 的 `SimpleColumn` 只有列名、没有类型**，而且**零行的 SELECT 连
+  RowDescription 都不给**。类型名要单独走一次 `prepare`（纯元数据往返）补上。
+- **PG 的 `Error::to_string()` 对引擎报错只给 `"db error"`**，真正的原因在 `DbError` 里，
+  要把 severity/message/detail/hint 拼出来。
+- **多语句要按语句分开收行**：`SELECT 1; SELECT 2` 混在一起会变成「两行」。
+  另外只有**没产出行**的语句才把 `CommandComplete` 的数当影响行数 —— SELECT 给的也是行数。
+- **MySQL 的 DATE 和 DATETIME 在协议上长得一样**，得看列类型才分得出
+  `2026-09-17` 和 `2026-09-17 00:00:00`。TIME 可以超过 24 小时（值里带 days）。
+- **递归 CTE 默认上限是 1000**（`cte_max_recursion_depth`），造 2000 行要先抬上限。
 
 ### Rust / Redis 那摊
 

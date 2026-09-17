@@ -7,8 +7,9 @@
 | 模块 | 状态 |
 |---|---|
 | **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树，图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库 |
-| **Redis** | 可用（连接管理 + 命令台）。保存多个连接、连上之后敲命令、结果按 redis-cli 的记号渲染 |
-| MySQL / PostgreSQL / MongoDB | 待做 |
+| **Redis** | 可用。左侧「连接 → 库 → key」，主区看 key 列表和值；命令台是一个页签 |
+| **数据库**（MySQL / PostgreSQL） | 可用。连接配置里选引擎，侧栏「连接 → 库 / 表」，主区写 SQL 看结果表格 |
+| MongoDB | 待做 |
 | SSH 终端 | 待做 |
 
 技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有系统操作（文件、
@@ -20,7 +21,7 @@
 
 ```ts
 // src/shell/registry.ts
-export const MODULES = [diagramModule, redisModule, devPlaceholderModule];
+export const MODULES = [diagramModule, redisModule, sqlModule, devPlaceholderModule];
 ```
 
 模块要实现的接口在 `src/shell/types.ts`（`Module`）。外壳不认识任何具体模块，
@@ -38,12 +39,14 @@ export const MODULES = [diagramModule, redisModule, devPlaceholderModule];
 Devtoolkit/
 ├── src/                     前端源码（React + TypeScript）
 │   ├── shared/              通用层：几何、id、文字测量、撤销栈、平台桥、通用组件
+│   │   └── connections/     三个连接类模块（Redis / SQL / SSH）共用的连接层
 │   │                        ★ 不 import 任何模块
 │   ├── shell/               外壳：模块注册表、图标栏、状态栏、错误条
 │   │                        ★ 不认识任何具体模块，只认 Module 接口
 │   └── modules/
 │       ├── diagram/         顺序图模块
-│       ├── redis/           Redis 模块
+│       ├── redis/           Redis 模块（浏览式：库树 + key 列表 + 值）
+│       ├── sql/             数据库模块（MySQL + PostgreSQL）
 │       └── devplaceholder/  占位模块（验证「加模块 = 一个目录 + 一行」）
 ├── src-tauri/               Rust 后端
 │   ├── src/
@@ -53,6 +56,7 @@ Devtoolkit/
 │   │   └── redis_commands.rs Redis 相关的三个 command
 │   ├── core/                纯逻辑内核：路径安全边界 + 文件操作
 │   ├── redis/               Redis 内核：连接管理、命令执行、回复解析
+│   ├── sql/                 SQL 内核：MySQL / PostgreSQL 的连接与查询
 │   ├── capabilities/        权限配置
 │   ├── icons/               图标（logo.svg 是源文件）
 │   └── tauri.conf.json      窗口、打包配置
