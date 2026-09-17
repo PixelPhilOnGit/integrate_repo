@@ -1,0 +1,27 @@
+[package]
+name = "devtoolkit-sql"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的 SQL 内核：MySQL / PostgreSQL 的连接与查询（不依赖 Tauri，可脱离 WebKit 测试）"
+license = "MIT"
+
+[dependencies]
+# 刻意**不用 sqlx**：它 MSRV 1.94，而且会拉进上百个包 + 编译期宏，
+# 查询台不需要编译期 SQL 校验，不值这个编译成本。
+tokio-postgres = "0.7"
+
+# 用 `minimal` 而不是默认特性：默认会多带 `derive`（编译期宏），这里用不上。
+# 注意**不能把默认特性全关** —— 那会把 flate2 的压缩后端一起关掉，而 flate2
+# 没有后端根本编不过。
+mysql_async = { version = "0.37", default-features = false, features = ["minimal"] }
+
+# mysql_async 的 QueryResult 是个 Stream，要 StreamExt 才能逐行取。
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json = "1"
