@@ -20,6 +20,15 @@ exclude = ["core/**", "redis/**", "sql/**", "target/**"]
 name = "devtoolkit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# 内嵌前端产物，**release 打包必须开**。
+#
+# 少了它，release 二进制不会内嵌 `../dist`，而是去连 `devUrl`
+# （localhost:5173）—— 如果本机恰好开着 dev server，应用看起来一切正常，
+# 一旦关掉就白屏报「Could not connect to localhost」。
+# 这个坑很隐蔽：开发机上永远是"好的"，装到别人机器上才炸。
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
