@@ -17,10 +17,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # 路径安全那套逻辑是纯 Rust 的（devtoolkit-core 不依赖 tauri），
+  # 路径安全 / 文件操作 / Redis 那几套逻辑都是纯 Rust 的
+  # （devtoolkit-core 和 devtoolkit-redis 都不依赖 tauri），
   # 所以能在几秒内跑完，不用等 WebKit 装好，也不用等前端构建。
   test:
-    name: 单元测试（devtoolkit-core）
+    name: 单元测试（devtoolkit-core + devtoolkit-redis）
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -33,9 +34,18 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      - name: 跑测试（路径安全 + 文件操作）
+      # devtoolkit-redis 的集成测试会自己拉起一个真 redis-server。
+      # 不装的话那些测试会**明确失败并提示安装命令**（刻意不静默跳过 ——
+      # 静默跳过等于它们永远不跑而没人发现）。
+      - name: 安装 Redis（集成测试要用真实例）
+        run: sudo apt-get update && sudo apt-get install -y redis-server
+
+      # 显式列出两个 package 而不是用 --workspace：
+      # 后者会把 app crate 也拉进来，那就得先装 WebKit/GTK，
+      # 这个 job「不装系统依赖、几秒跑完」的意义就没了。
+      - name: 跑测试（路径安全 + 文件操作 + Redis）
         working-directory: src-tauri
-        run: cargo test --package devtoolkit-core --locked
+        run: cargo test --package devtoolkit-core --package devtoolkit-redis --locked
 
   publish-tauri:
     name: 打包 ${{ matrix.label }}

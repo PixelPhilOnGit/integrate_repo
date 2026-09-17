@@ -23,8 +23,9 @@ test('图标栏列出所有注册的模块', async ({ page }) => {
   await expect(rail).toBeVisible();
 
   // 有几个模块就有几个图标
-  await expect(rail.getByRole('tab')).toHaveCount(2);
+  await expect(rail.getByRole('tab')).toHaveCount(3);
   await expect(page.getByTestId('module-diagram')).toBeVisible();
+  await expect(page.getByTestId('module-redis')).toBeVisible();
   await expect(page.getByTestId('module-devplaceholder')).toBeVisible();
 });
 
@@ -54,8 +55,12 @@ test('当前模块在图标栏上有选中标记', async ({ page }) => {
   await expect(page.getByTestId('module-diagram')).toHaveAttribute('aria-selected', 'false');
 });
 
-test('Ctrl+1 / Ctrl+2 也能切换模块', async ({ page }) => {
+test('Ctrl+1 / Ctrl+2 / Ctrl+3 也能切换模块', async ({ page }) => {
+  // 序号就是注册表里的顺序
   await page.keyboard.press('Control+2');
+  await expect(page.getByTestId('redis-console')).toBeVisible();
+
+  await page.keyboard.press('Control+3');
   await expect(page.getByTestId('placeholder-main')).toBeVisible();
 
   await page.keyboard.press('Control+1');

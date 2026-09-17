@@ -11,6 +11,7 @@
 //! `tauri-plugin-store`，两者都在前端通过 JS 插件调用，这里只负责注册。
 
 mod commands;
+mod redis_commands;
 
 /// 供 `main.rs`（以及将来的移动端入口）调用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -20,6 +21,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // 前端 Store.load('settings.json') —— 最近工作区、窗口尺寸等
         .plugin(tauri_plugin_store::Builder::default().build())
+        // 活连接表。空表构造，不会碰 tokio 运行时，启动期是安全的。
+        .manage(devtoolkit_redis::ConnectionRegistry::new())
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,
@@ -30,6 +33,9 @@ pub fn run() {
             commands::delete_entry,
             commands::move_entry,
             commands::write_export,
+            redis_commands::redis_connect,
+            redis_commands::redis_disconnect,
+            redis_commands::redis_exec,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

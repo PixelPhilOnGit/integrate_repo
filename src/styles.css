@@ -781,3 +781,145 @@ textarea:focus {
   border-color: rgb(255 255 255 / 55%);
   color: #fff;
 }
+
+/* ------------------------------------------------------------- Redis 模块 */
+/* 只追加，不动上面任何已有规则 —— 那些是别的模块在用的 */
+
+.rd-conn-list {
+  border-right: 1px solid var(--border);
+}
+
+.rd-conn-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  cursor: default;
+}
+
+.rd-conn-row:hover,
+.rd-conn-row.is-selected {
+  background: var(--accent-soft);
+}
+
+/* 注意别复用文件树那个 .rd-dot —— 它带了 margin-left:auto，语义也不一样 */
+.rd-conn-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.rd-conn-dot.is-connected {
+  background: #3fa46a;
+}
+
+.rd-conn-dot.is-connecting {
+  background: var(--accent);
+}
+
+.rd-conn-dot.is-error {
+  background: var(--danger);
+}
+
+.rd-conn-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.rd-conn-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-conn-addr {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-conn-toggle {
+  flex: none;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.rd-conn-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.rd-console {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.rd-console-output {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.rd-console-line {
+  position: relative;
+  padding-right: 46px;
+}
+
+.rd-console-cmd {
+  font-weight: 600;
+}
+
+.rd-console-prompt {
+  flex: none;
+  color: var(--accent);
+}
+
+.rd-console-line.is-error {
+  color: var(--danger);
+}
+
+.rd-console-elapsed {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.rd-console-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+
+.rd-console-input input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rd-hint.is-error {
+  color: var(--danger);
+}

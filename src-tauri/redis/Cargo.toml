@@ -1,0 +1,21 @@
+[package]
+name = "devtoolkit-redis"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Devtoolkit 的 Redis 内核：连接管理、命令执行、回复解析（不依赖 Tauri，可脱离 WebKit 快速测试）"
+license = "MIT"
+
+[dependencies]
+# 0.32 而不是 1.x：1.x 的 MSRV 是 1.88，会顶破本仓库声明的 rust-version = "1.83"。
+# 只开 tokio-comp：异步连接 + tokio 运行时，不要 async-std/rustls 那些用不上的。
+# 刻意**不开** connection-manager —— 它会在后台自动重连，而「断开」在这里是
+# 用户的一个明确动作，隐藏的重连会让界面显示的连接状态和真实情况对不上。
+redis = { version = "0.32", features = ["tokio-comp"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# 集成测试要用 #[tokio::test]；运行时由它提供，被测代码本身不建运行时。
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# 只用来把 Reply 的 JSON 字段名钉死 —— 前端 TS 类型是照着它写的（同 core 的做法）。
+serde_json = "1"
