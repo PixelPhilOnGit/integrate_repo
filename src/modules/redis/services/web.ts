@@ -9,7 +9,7 @@
  * 协议层的正确性不归这里管：那是 Rust 侧打真 Redis 的集成测试的职责。
  * 这个文件只保证界面链路（连接、执行、展示、报错、断开）都是通的。
  *
- * 档案持久化在 `shared/connections/kv.ts`，不在这里。
+ * 档案持久化在 `shared/platform/kv.ts`，不在这里。
  */
 
 import { createFakeRedis } from '../core/fakeRedis';

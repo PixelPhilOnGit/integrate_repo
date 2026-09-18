@@ -10,17 +10,6 @@
  * 和网络连接没有关系，混进去会让那层的职责变模糊。
  */
 
-/**
- * 一个极小的键值存储。
- *
- * 只做「取/存」，不做「列表/删除」—— 连接档案永远是整个数组一起存的，
- * 拆成细粒度的增删改反而会引入中间状态。
- */
-export interface KeyValueStore {
-  get<T>(key: string): Promise<T | null>;
-  set(key: string, value: unknown): Promise<void>;
-}
-
 /** 连接档案的持久化。实现见 `profiles.ts` */
 export interface ProfileStore<P> {
   load(): Promise<P[]>;

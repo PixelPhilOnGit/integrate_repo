@@ -10,7 +10,7 @@
  * 真正要读盘的初始化放在 store 的 `init()` 里（由 `onActivate` 惰性触发）。
  */
 
-import { createKeyValue } from '../../../shared/connections/kv';
+import { createKeyValue } from '../../../shared/platform/kv';
 import { isTauri } from '../../../shared/platform/detect';
 import { createKnownHostStore, createSshProfileStore } from './profiles';
 import { createTauriSshClient } from './tauri';

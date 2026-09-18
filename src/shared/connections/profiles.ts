@@ -32,7 +32,8 @@
  * 界面日志里）。两件事都要做。
  */
 
-import type { KeyValueStore, ProfileStore } from './types';
+import type { KeyValueStore } from '../platform/kv';
+import type { ProfileStore } from './types';
 
 export interface ProfileStoreOptions<P> {
   /** 存储里的键名。三个模块各用各的文件，所以默认值够用 */

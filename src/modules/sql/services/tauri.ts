@@ -1,7 +1,7 @@
 /**
  * 桌面端的 SQL 客户端：走 Rust command。
  *
- * 档案持久化不在这里 —— 那是 `shared/connections/kv.ts` 的事。
+ * 档案持久化不在这里 —— 那是 `shared/platform/kv.ts` 的事。
  * 这个文件只负责「把请求发给后端的 SQL 内核」。
  */
 

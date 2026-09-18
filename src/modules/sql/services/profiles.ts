@@ -13,7 +13,8 @@ import {
   asString,
   createProfileStore,
 } from '../../../shared/connections/profiles';
-import type { KeyValueStore, ProfileStore } from '../../../shared/connections/types';
+import type { KeyValueStore } from '../../../shared/platform/kv';
+import type { ProfileStore } from '../../../shared/connections/types';
 import type { SqlKind, SqlProfile } from '../core/types';
 
 export function createSqlProfileStore(kv: KeyValueStore): ProfileStore<SqlProfile> {

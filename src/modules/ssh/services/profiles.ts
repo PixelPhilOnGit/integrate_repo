@@ -16,7 +16,8 @@ import {
   asString,
   createProfileStore,
 } from '../../../shared/connections/profiles';
-import type { KeyValueStore, ProfileStore } from '../../../shared/connections/types';
+import type { KeyValueStore } from '../../../shared/platform/kv';
+import type { ProfileStore } from '../../../shared/connections/types';
 import { DEFAULT_SSH_PORT, type KnownHost, type SshAuthKind, type SshProfile } from '../core/types';
 import { KNOWN_HOSTS_KEY, sanitizeKnownHosts } from '../core/knownHosts';
 

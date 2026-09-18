@@ -14,7 +14,8 @@ import {
   asArray,
   createProfileStore,
 } from '../../../shared/connections/profiles';
-import type { KeyValueStore, ProfileStore } from '../../../shared/connections/types';
+import type { KeyValueStore } from '../../../shared/platform/kv';
+import type { ProfileStore } from '../../../shared/connections/types';
 import type { ConnectionProfile } from '../core/types';
 
 const DEFAULT_PORT = 6379;

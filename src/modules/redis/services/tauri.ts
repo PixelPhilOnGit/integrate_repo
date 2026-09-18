@@ -1,7 +1,7 @@
 /**
  * 桌面端的 Redis 客户端：走 Rust command。
  *
- * 连接的持久化不在这里 —— 那是 `shared/connections/kv.ts` 的事，三个模块共用。
+ * 连接的持久化不在这里 —— 那是 `shared/platform/kv.ts` 的事，三个模块共用。
  * 这个文件只负责「把命令发给后端的 Redis 内核」。
  */
 
