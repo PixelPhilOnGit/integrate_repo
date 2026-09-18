@@ -45,9 +45,14 @@ async fn 命令跑完之后_shell_还在_还能接着敲() {
 async fn 注入的环境变量在子进程里看得见() {
     let dir = TempDir::new("env");
     let reg = AgentRegistry::new();
+    // ⚠️ 两个平台的**语法不一样**，而且 Windows 那边**不是 cmd 的 `%VAR%`**：
+    // 默认 shell 是探测出来的（`pwsh` → `powershell` → `cmd`，见 `pty.rs` 的
+    // `default_shell`），runner 上落到 PowerShell —— `%DEVTOOLKIT_PANE_ID%` 会被
+    // **原样**打出来，看着就像「变量没进去」，其实注入得好好的（注入走的是
+    // `CommandBuilder::env`，和 shell 是谁毫无关系）。
     let mut config = cfg(
         dir.path(),
-        &cmd("echo PANE=$DEVTOOLKIT_PANE_ID", "echo PANE=%DEVTOOLKIT_PANE_ID%"),
+        &cmd("echo PANE=$DEVTOOLKIT_PANE_ID", "echo PANE=$env:DEVTOOLKIT_PANE_ID"),
     );
     config
         .env

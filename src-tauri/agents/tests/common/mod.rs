@@ -78,7 +78,13 @@ pub fn cmd(unix: &str, windows: &str) -> String {
 ///
 /// Unix 上一定要**显式**给 `/bin/sh`：默认走 `$SHELL`，而 CI 上的 `$SHELL`
 /// 可能是任何东西（bash/zsh/dash），用例里那句命令的语法得能对上。
-/// Windows 上给 `None`（用 `%COMSPEC%`，就是 cmd.exe）。
+///
+/// Windows 上给 `None` = 走产品那条默认路（`pty::default_shell`）。
+/// ⚠️ **那不等于 cmd.exe**（这里原来写的「用 `%COMSPEC%`」是错的，产品的注释里
+/// 明确说了为什么不用它）：默认 shell 是**探测**出来的 —— `pwsh.exe` →
+/// `powershell.exe` → `cmd.exe`，runner 上是 PowerShell 7。
+/// 所以下面 `cmd(unix, windows)` 里的 Windows 串要按 **PowerShell** 的语法写：
+/// 变量是 `$env:NAME`，不是 `%NAME%`（后者会被原样打出来，看着像变量没进去）。
 pub fn test_shell() -> Option<String> {
     if cfg!(windows) {
         None
