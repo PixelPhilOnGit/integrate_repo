@@ -63,11 +63,14 @@
 | 来源 | 能给什么 | 说明 |
 |---|---|---|
 | Claude Code 的 hooks | 工作 / 需要你 / 完成 | 最准。**等授权要用 `PermissionRequest`**，见下 |
-| Codex 的 hooks | 同上 | 它有一套和 Claude 对齐的 hooks 引擎（源码里就叫 `ClaudeHooksEngine`） |
-| Codex 的 `notify` | **只有「完成」** | 只有 `agent-turn-complete` 一个事件，是退路 |
+| Codex 的 `notify` | **只有「完成」** | **v1 用的就是这条**：只有 `agent-turn-complete` 一个事件 |
+| Codex 的 hooks | 三态齐全（**下一轮**） | 0.149.0 里有一套和 Claude 对齐的 hooks 引擎（源码里叫 `ClaudeHooksEngine`），事件名一样、含 `permission_request`。**但要用户在 `/hooks` 里审阅信任一次，而且信任按哈希记账 —— 我们改一次他就要重审**。切换前必须先确认两件事：配置写哪个文件（`hooks.json` 还是 `config.toml` 的 `[hooks]`）、信任怎么落盘。这两条只能在真机上确认 |
 | 终端通知序列（OSC 9 / 777） | 至少「完成」 | 零配置那条路。⚠️ 别写「Codex 默认会发」，没证实 |
 | 用户在窗格里的键盘 | 「需要你」→「正在工作」 | 用户的动作，不是猜测 |
 | 进程退出 | 终态 | pty 报的，比脚本可靠 |
+
+**所以 Codex 的「需要你」在 v1 拿不到**（`notify` 只有回合完成），靠 OSC 和键盘兜底。
+拿不到就是拿不到，代码里没有编一个假的「等待中」出来 —— 下一轮换 hooks 才补上。
 
 **要命的那条**：「等授权」不能用 `Notification`。官方文档写明它要等约 6 秒、
 而且**只在你看起来离开了终端时才发**；即时的信号是 **`PermissionRequest`**
@@ -396,6 +399,44 @@ SSH 的标签栏图省事复用了 `rd-tabs`，结果**标签和那个 × 各占
 `client::Config` 的 `keepalive_interval` 默认是 `None`（死连接永远发现不了），
 要自己设；`Handler::check_server_key` 的**默认实现拒绝一切**，TOFU 正好挂在这上面。
 
+### 智能体会话那一轮踩到的
+
+- **关窗格要杀「两个」进程组，不是一个。** 子进程 spawn 时 `setsid()` 过，
+  它是一个会话首进程、自己的组的组长；可它**开了作业控制之后**，跑在前台的
+  那个命令（`claude` 本尊）会被放进**另一个**组 —— 那才是 tty 的前台组。
+  只杀前者 = shell 死了 claude 还活着；只杀后者 = 反过来。两个都杀才对
+  （`pty.rs` 的 `kill_tree`，写成测试钉住了：起一个会 fork 的脚本，
+  断言孙进程也没了）。
+  > 自己 `setsid()` 逃走的进程（`nohup`、daemon）**故意不覆盖** —— 那正是
+  > `setsid` 的用途，所有终端模拟器都是这条边界。Windows 上的 Job Object
+  > 反而更彻底（除非显式 `CREATE_BREAKAWAY_FROM_JOB`）。
+- **`portable-pty` 的 `Child::kill()` 在 Windows 上只有一句 `TerminateProcess`**
+  （源码 `win/mod.rs`，就一行），指望不上。Windows 要靠 Job Object
+  （`KILL_ON_JOB_CLOSE`）—— 顺带的好处是**Devtoolkit 自己崩掉也收尸**，
+  因为进程一死内核就关句柄。
+- **`2>/dev/null` 拦不住重定向失败。** 那种时候说话的是 **shell 自己**，
+  不是被执行的命令，所以错误照样打到用户的终端上（实测 dash：钩子脚本在事件
+  目录不存在时打出一句 `cannot create ...: Directory nonexistent`）。
+  得把重定向放进子 shell：`( : > "$F" ) 2>/dev/null`。
+  包装脚本现在还会先 `mkdir -p` —— 用户在自己的终端里跑 claude 时，
+  钩子**必须**安静，这条有测试盯着（退出码 0 + 没有输出 + 没有文件）。
+- **Windows 上那条钩子命令不能用 shell 形式写。** `"C:\路径\hook.cmd" waiting`
+  这种写法只在 cmd 里成立：PowerShell 里带引号的路径必须加 `&` 调用运算符，
+  而 Git Bash 里根本跑不了 `.cmd`（而 Claude Code 默认走哪个 shell 取决于
+  **机器上有没有装 Git Bash**）。所以 Windows 上用 exec 形式
+  （`command` + `args`，参数逐个传、不经过任何 shell），Unix 上才用
+  `"<脚本>" <状态>` 那句。见 `integration.rs` 的 `claude_entry`。
+- **`claude doctor` 和 `codex doctor` 是现成的 schema 校验器。**
+  两边都会读配置文件并把不合法的地方**逐条列出来**（`Invalid settings` /
+  `could not be loaded`），而且都认 `HOME` / `CODEX_HOME` 这种临时目录 ——
+  所以 `tests/claude_schema.rs` 和 `tests/codex_schema.rs` 就是「用我们自己的
+  代码装一遍，再让真的 CLI 去读它」。**写错 schema 是静默失效**（配置躺着、
+  界面显示已启用、状态点不动），只有这个能抓到。它们不在 CI 里（runner 上没装
+  这两个 CLI），属于本机验证。
+- **pty 会把我们敲进去的命令回显出来。** 测试里「等 `KID=` 出现」会先等到
+  **回显**里的那个 `KID=$!`（后面跟的不是数字）—— 这类断言最容易假绿。
+  `tests/common/mod.rs` 的 `read_pid` 是等「标记后面真的跟着数字」那一次。
+
 ### 前端
 
 - **`noUncheckedIndexedAccess` 开着**，`arr[i]` 一律是 `T | undefined`。
@@ -462,6 +503,23 @@ tauri-plugin-store 用的是 `app_data_dir`）。那份 `*.json` 可以直接预
 - **深色只认 `<html data-theme>` 一个属性，不用 `@media (prefers-color-scheme)`。**
   纯 CSS 表达不了「用户明确选了浅色但系统是深色」；两套机制并存的话，深色那套变量
   得写两遍（媒体查询一份、属性选择器一份），迟早对不上。
+- **`portable-pty` 钉死在 `=0.8.1`，不要升 0.9。** 0.9 为了暴露 `signal()` 顺手打开了
+  `PSUEDOCONSOLE_INHERIT_CURSOR`：那一会让 ConPTY 往输出里插 `ESC[6n` 问「光标在哪」
+  并**在后台线程等应答**，不应答就卡住（MS 文档原话是 "may cause the calling
+  application to hang"，上游 wezterm#6783 至今未修）。症状是**终端一片空白且不报错** ——
+  对「用来盯 agent」的应用来说这是最糟的失败模式。
+  更关键的是：**`signal` 是 Unix 独有的**（portable-pty 只在 `#[cfg(unix)]` 里填它，
+  Windows 上永远是 `None`），而 Windows 是第一目标平台 —— 为一个只在最低优先级平台上
+  存在的装饰性字段，去换主力平台上的启动风险，不划算。
+  真要 `signal()` 的话正确做法是 **vendor Codex 的 Windows PTY 后端**
+  （`codex-rs/utils/pty/src/win/`，MIT，约 700 行），它在**创建时**就挂 job object，
+  顺带消掉我们那个 assign 竞态窗口。`pty.rs` 是唯一碰 portable-pty 的地方，就是为这天留的。
+- **关一格窗格要杀两个进程组**，不是直觉里的一个：子进程 `setsid()` 之后是会话首进程，
+  但它开了作业控制、跑在前台的 `claude` 在**另一个**组（tty 的前台组）里。只杀一个必留另一半。
+  测试里有一条**回归用例专门证明「只杀直接子进程」确实会留孤儿**。
+- **事件目录「取走即删」**（一个事件只用一次）。文件名里的状态只有三个白名单值，
+  认出来才消费；认不出来的（编辑器残留、用户手扔的）**静静留着不动** ——
+  动它就可能删掉别人的东西，而收益是零。
 - **模块图标上的角标是个组件，不是一个数字。** 外壳只摆一个槽位，模块在自己的角标里
   订阅自己的 store（和 `StatusItems` 同一个模式）。这样外壳依然不认识任何具体模块，
   而用户在别的模块里画图时，「有 agent 停下来等你」还剩这一个地方能看见。
@@ -497,8 +555,9 @@ tauri-plugin-store 用的是 `app_data_dir`）。那份 `*.json` 可以直接预
 - [ ] 装上集成钩子之后，新开一个 Claude Code：随便让它干一件事，
       侧栏状态点应该从「空闲」变成「正在工作」，干完变「已完成」
 - [ ] 让它问你要授权（比如让它执行一条命令），应该变「需要你」并进队列
-- [ ] Codex 那边三态都要能到（它走 hooks，不是 `notify`），
-      首次要在它的 `/hooks` 里审阅信任一次
+- [ ] Codex 那边**只需要「已完成」能到**（v1 走 `notify`，它只有回合完成一个事件）。
+      「需要你」拿不到是**已知缺口**，别当成 bug 报 —— 补法是下一轮换 hooks
+      （见上面那张表里「Codex 的 hooks」那一行）
 - [ ] **hook 会不会闪出黑框**：有人报过 Windows 上 hook 进程会弹一下控制台窗口
       （claude-code #64688）。如果闪，那是个真烦人的问题 —— 记下来，看能不能
       在包装脚本那边缓解

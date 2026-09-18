@@ -47,6 +47,17 @@ import { __resetIdsForTest } from '../../src/shared/ids';
 
 const encoder = new TextEncoder();
 
+/**
+ * 事件文件的时间戳。
+ *
+ * ⚠️ **必须是真实量级**（`Date.now()` 附近），不能图省事写 `1000` / `2000`：
+ * store 会丢掉「比会话当前状态还早」的事件（那是为了挡住「文件删不掉被重读」
+ * 那条路），而会话的 `statusAt` 是 `Date.now()` —— 用小数字的话所有事件都会被
+ * 当成十几年前的旧事丢掉，测试就变成假的绿。
+ */
+const stamp = (offsetMs: number): number => Date.now() + offsetMs;
+
+
 /** 记账用的假客户端：它不跑进程，但把每一次调用**如实记下来** */
 class FakeClient implements AgentsClient {
   opened: PtyOpenRequest[] = [];
@@ -484,15 +495,48 @@ describe('状态事件（外部程序报进来的那一路）', () => {
     return (await h.store.createSession(ws, 'claude'))!;
   }
 
+  it('⚠️ 回归：删不掉的事件被重读时，不能把状态改回旧值', async () => {
+    // Rust 那边「取走即删」在删不掉的时候（Windows 上文件被别的进程占着）
+    // **不回滚也不重试**，宁可下次扫描再读一遍 —— 而那条重读带着**旧的 mtime**。
+    // 不挡的话：会话已经跑到「已完成」，一条十秒前的「在等你」被重读一次，
+    // 状态点就倒回去了，用户看到的是一个早就过去的状态
+    const h = make();
+    const id = await session(h);
+
+    h.client.events.push({ name: `done.${id}`, at: stamp(1) });
+    await h.store.drainEvents();
+    expect(h.store.getSnapshot().sessions[0]!.status).toBe('done');
+
+    // 重读的那条：十秒前写的
+    h.client.events.push({ name: `waiting.${id}`, at: Date.now() - 10_000 });
+    await h.store.drainEvents();
+    expect(h.store.getSnapshot().sessions[0]!.status).toBe('done');
+  });
+
+  it('但刚写下的文件不能被误伤 —— 有些文件系统的 mtime 只精确到 2 秒', async () => {
+    // exFAT / FAT32 的 mtime 粒度是 2 秒：文件确实是刚写的，mtime 却可能比
+    // 上一次状态变化早上一秒多。误伤它比重复应用更糟 —— **提醒会凭空消失**，
+    // 而用户完全无从察觉。所以宽限窗口就是照着最粗的 2 秒来的
+    const h = make();
+    const id = await session(h);
+
+    h.client.events.push({ name: `working.${id}`, at: stamp(1) });
+    await h.store.drainEvents();
+
+    h.client.events.push({ name: `waiting.${id}`, at: Date.now() - 1_500 });
+    await h.store.drainEvents();
+    expect(h.store.getSnapshot().sessions[0]!.status).toBe('waiting');
+  });
+
   it('事件文件把会话推进「需要你」，并进入队列', async () => {
     const h = make();
     const id = await session(h);
-    h.client.events.push({ name: `waiting.${id}`, at: 5000 });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(5) });
     await h.store.drainEvents();
 
     const s = h.store.getSnapshot().sessions[0]!;
     expect(s.status).toBe('waiting');
-    expect(h.store.getSnapshot().lastEventAt).toBe(5000);
+    expect(h.store.getSnapshot().lastEventAt).toBe(stamp(5));
   });
 
   it('⚠️ 认不出这个会话就丢掉 —— 这是防伪造那一道', async () => {
@@ -500,7 +544,7 @@ describe('状态事件（外部程序报进来的那一路）', () => {
     // 不该能影响界面。会话 id 是我们随机生成的，外面得先猜中它
     const h = make();
     await session(h);
-    h.client.events.push({ name: 'waiting.pane_别人编的', at: 5000 });
+    h.client.events.push({ name: 'waiting.pane_别人编的', at: stamp(5) });
     await h.store.drainEvents();
     expect(h.store.getSnapshot().sessions[0]!.status).not.toBe('waiting');
   });
@@ -508,9 +552,9 @@ describe('状态事件（外部程序报进来的那一路）', () => {
   it('目录里的杂物被静静忽略，不弹错误条', async () => {
     const h = make();
     const id = await session(h);
-    h.client.events.push({ name: 'README.txt.swp', at: 1 });
-    h.client.events.push({ name: 'exited.abc', at: 2 });
-    h.client.events.push({ name: 'waiting.a/b', at: 3 });
+    h.client.events.push({ name: 'README.txt.swp', at: stamp(1) });
+    h.client.events.push({ name: 'exited.abc', at: stamp(2) });
+    h.client.events.push({ name: 'waiting.a/b', at: stamp(3) });
     await h.store.drainEvents();
     expect(h.shell.errors).toEqual([]);
     expect(h.store.getSnapshot().sessions[0]!.status).not.toBe('waiting');
@@ -520,9 +564,9 @@ describe('状态事件（外部程序报进来的那一路）', () => {
   it('攒了一堆只按最新的那条算', async () => {
     const h = make();
     const id = await session(h);
-    h.client.events.push({ name: `working.${id}`, at: 100 });
-    h.client.events.push({ name: `done.${id}`, at: 300 });
-    h.client.events.push({ name: `waiting.${id}`, at: 200 });
+    h.client.events.push({ name: `working.${id}`, at: stamp(1) });
+    h.client.events.push({ name: `done.${id}`, at: stamp(3) });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(2) });
     await h.store.drainEvents();
     expect(h.store.getSnapshot().sessions[0]!.status).toBe('done');
   });
@@ -533,13 +577,13 @@ describe('状态事件（外部程序报进来的那一路）', () => {
     // 场景：它在等你 → 你点了「知道了」→ 它接着干 → 又停下等你
     const h = make();
     const id = await session(h);
-    h.client.events.push({ name: `waiting.${id}`, at: 1000 });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(1) });
     await h.store.drainEvents();
     h.store.acknowledge(id);
     expect(h.store.jumpToAttention()).toBe(false); // 确认过了，不在队列里
 
-    h.client.events.push({ name: `working.${id}`, at: 2000 });
-    h.client.events.push({ name: `waiting.${id}`, at: 3000 });
+    h.client.events.push({ name: `working.${id}`, at: stamp(2) });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(3) });
     await h.store.drainEvents();
 
     expect(h.store.jumpToAttention()).toBe(true);
@@ -604,7 +648,7 @@ describe('用户的键盘', () => {
   async function waiting(h: Harness): Promise<string> {
     const ws = await withWorkspace(h);
     const id = (await h.store.createSession(ws, 'claude'))!;
-    h.client.events.push({ name: `waiting.${id}`, at: 5000 });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(5) });
     await h.store.drainEvents();
     return id;
   }
@@ -625,7 +669,7 @@ describe('用户的键盘', () => {
     const h = make();
     const ws = await withWorkspace(h);
     const id = (await h.store.createSession(ws, 'claude'))!;
-    h.client.events.push({ name: `working.${id}`, at: 1000 });
+    h.client.events.push({ name: `working.${id}`, at: stamp(1) });
     await h.store.drainEvents();
     expect(h.store.getSnapshot().sessions[0]!.status).toBe('working');
 
@@ -714,9 +758,9 @@ describe('「需要你」队列', () => {
       ids.push((await h.store.createSession(ws, 'claude'))!);
     }
     // 先等的最后一个建，所以给它们错开的时间
-    h.client.events.push({ name: `waiting.${ids[0]}`, at: 3000 });
-    h.client.events.push({ name: `waiting.${ids[1]}`, at: 1000 });
-    h.client.events.push({ name: `waiting.${ids[2]}`, at: 2000 });
+    h.client.events.push({ name: `waiting.${ids[0]}`, at: stamp(3) });
+    h.client.events.push({ name: `waiting.${ids[1]}`, at: stamp(1) });
+    h.client.events.push({ name: `waiting.${ids[2]}`, at: stamp(2) });
     await h.store.drainEvents();
     return ids;
   }
@@ -746,14 +790,14 @@ describe('「需要你」队列', () => {
     const ws = await withWorkspace(h);
     const id = (await h.store.createSession(ws, 'claude'))!;
 
-    h.client.events.push({ name: `waiting.${id}`, at: 1000 });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(1) });
     await h.store.drainEvents();
     h.store.acknowledge(id);
 
     expect(h.store.jumpToAttention()).toBe(false); // 队列空
 
-    h.client.events.push({ name: `working.${id}`, at: 2000 });
-    h.client.events.push({ name: `waiting.${id}`, at: 3000 });
+    h.client.events.push({ name: `working.${id}`, at: stamp(2) });
+    h.client.events.push({ name: `waiting.${id}`, at: stamp(3) });
     await h.store.drainEvents();
     expect(h.store.jumpToAttention()).toBe(true);
   });

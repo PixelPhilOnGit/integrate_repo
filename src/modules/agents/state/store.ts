@@ -64,6 +64,12 @@ const INITIAL_ROWS = 24;
 const POLL_MS = 1000;
 
 /**
+ * 事件时间戳的宽限。见 `drainEvents` 里那段 —— 它挡的是「删不掉被重读」，
+ * 但**不能误伤刚写下的文件**（有些文件系统的 mtime 只精确到 2 秒）。
+ */
+const EVENT_GRACE_MS = 2000;
+
+/**
  * 各 agent 的默认启动命令。
  *
  * v1 只有这三个预设。自定义命令的入口（`createSession` 的 `opts.command`）
@@ -277,6 +283,21 @@ export class AgentsStore {
     let latest: number | null = null;
     // 目录的列举顺序没有保证（Windows 上尤其是），自己排一遍
     for (const event of [...parsed].sort((a, b) => a.at - b.at)) {
+      const session = this.sessionById(event.paneId);
+      if (session === null) continue;
+
+      // ⚠️ **比当前状态还早的事件丢掉。**
+      //
+      // Rust 那边「取走即删」在删不掉的时候（Windows 上文件被别的进程占着）
+      // **不会回滚**，宁可下次重读一遍 —— 那条重读带着**旧的 mtime**。
+      // 不挡的话它会把状态改回旧值：比如会话已经跑了十分钟，一条十秒前的
+      // 「在等你」被重读一次，状态点就倒回去了。
+      //
+      // 留 2 秒的宽限是因为**文件系统的 mtime 精度不一样**：NTFS 是 100ns，
+      // 而 exFAT/FAT32 只有 2 秒。放一个刚写下的文件却因为「mtime 比刚刚那次
+      // 按键早 1.4 秒」被丢掉，是比重复应用更糟的错 —— 提醒会凭空消失。
+      if (event.at + EVENT_GRACE_MS < session.statusAt) continue;
+
       this.applySignal(event.paneId, signalOf(event), event.at);
       latest = latest === null ? event.at : Math.max(latest, event.at);
     }
