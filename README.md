@@ -10,6 +10,7 @@
 | **Redis** | 可用。左侧「连接 → 库 → key」，主区看 key 列表和值；命令台是一个页签 |
 | **数据库**（MySQL / PostgreSQL） | 可用。连接配置里选引擎，侧栏「连接 → 库 / 表」，主区写 SQL 看结果表格 |
 | **SSH 终端** | 可用。多标签的真终端（xterm.js），密码 / 私钥认证，**首次连接要核对主机密钥指纹** |
+| **智能体会话** | 可用。一个窗口里分屏跑多个 Claude Code / Codex，按工作目录分组；**谁在等你一眼看出来**（窗格边框 + 侧栏队列 + 模块图标角标）。状态检测要往 Claude Code / Codex 的配置里装一个钩子，向导里能看到改了什么、随时撤销 |
 | MongoDB | 待做 |
 
 技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有系统操作（文件、
@@ -27,6 +28,11 @@ export const MODULES = [diagramModule, redisModule, sqlModule, devPlaceholderMod
 模块要实现的接口在 `src/shell/types.ts`（`Module`）。外壳不认识任何具体模块，
 只认这个接口——它只管把当前模块的槽位摆出来、显示状态和错误。
 每个模块自己持有自己的 store，模块之间不通过外壳通信。
+
+接口里除了四个槽位（`Sidebar` / `Main` / `Inspector` / `StatusItems`），还有两个可选的：
+`Toolbar`（跨内容区的工具栏）和 **`badge`**（模块图标上的角标，是个**组件**而不是数字，
+这样模块能在自己的角标里订阅自己的状态，外壳依然不认识它）。目前只有智能体会话模块
+用了 `badge`——用户在别的模块里画图时，「有 agent 停下来等你」只剩这一个地方能看见。
 
 `src/modules/devplaceholder/` 是一个活体检验：它只用了一个目录 + 注册表一行，
 没有改动外壳的任何内部实现。
@@ -56,11 +62,13 @@ Devtoolkit/
 │   │   ├── commands.rs      工作区文件相关的 #[tauri::command] 薄封装
 │   │   ├── redis_commands.rs Redis 相关的 command
 │   │   ├── sql_commands.rs  SQL 相关的 command
-│   │   └── ssh_commands.rs  SSH 相关的 command（唯一用了 IPC Channel 的一层）
+│   │   ├── ssh_commands.rs  SSH 相关的 command
+│   │   └── agent_commands.rs 智能体会话相关的 command
 │   ├── core/                纯逻辑内核：路径安全边界 + 文件操作
 │   ├── redis/               Redis 内核：连接管理、命令执行、回复解析
 │   ├── sql/                 SQL 内核：MySQL / PostgreSQL 的连接与查询
 │   ├── ssh/                 SSH 内核：连接、认证、主机密钥校验、PTY 会话
+│   ├── agents/              智能体会话内核：本机进程、状态事件目录、集成配置读写
 │   ├── capabilities/        权限配置
 │   ├── icons/               图标（logo.svg 是源文件）
 │   └── tauri.conf.json      窗口、打包配置
@@ -244,8 +252,18 @@ src/
     │   ├── services/   平台桥：tauri 走 Command + IPC Channel，web 走内存假实现
     │   ├── panels/     连接树、标签栏 + 终端、连接表单、首次信任弹窗
     │   └── state/      模块自己的 store（只装元数据，**不装终端字节**）
+    ├── agents/         智能体会话（cmux 那种「一屏多个 agent」的工作台）
+    │   ├── core/       纯逻辑：**分屏树**（layout）、**状态机**（status）、
+    │   │               **OSC 扫描**（osc）、事件文件解析（events）、假 agent
+    │   ├── services/   平台桥：tauri 走 Command + IPC Channel，web 走假 agent；
+    │   │               还有集成向导（往用户配置里装钩子）
+    │   ├── panels/     工作目录树、需要你队列、分屏、窗格、检查器、集成向导
+    │   └── state/      模块自己的 store
     └── devplaceholder/ 占位模块
 ```
+
+`agents` 的三块纯逻辑（分屏树、状态机、OSC 扫描）特意做成了不含 DOM、不含 React、
+不含服务层的函数 —— 它们是这个模块最容易出错、也最值得被单测盖满的地方。
 
 `src/shared/platform/` 是**所有模块共用**的运行时适配层，它只提供「文件操作 +
 系统对话框」这类通用能力：tauri 实现走 `invoke()`，web 实现把工作区放在 localStorage 里。
@@ -372,16 +390,24 @@ bulk string，天然免疫 RESP 注入；拼字符串的话 `SET k "a\r\nFLUSHAL
 
 | 层 | 命令 | 覆盖内容 |
 | --- | --- | --- |
-| 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出、各模块的假实现 |
-| 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动界面：滚动、拖拽、中文输入、导出下载、文件管理、连接与查询、**SSH 终端与首次信任** |
-| Rust 后端 | `cd src-tauri && cargo test` | 路径逃逸攻击向量、文件操作、导出；三个连接内核打真服务端 |
+| 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出、各模块的假实现；**智能体会话的分屏树、状态机、OSC 扫描、事件文件解析** |
+| 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动界面：滚动、拖拽、中文输入、导出下载、文件管理、连接与查询、**SSH 终端与首次信任**、**智能体会话的分屏与状态流转** |
+| Rust 后端 | `cd src-tauri && cargo test` | 路径逃逸攻击向量、文件操作、导出；三个连接内核打真服务端；**本机进程与事件目录** |
 | 原生窗口 | 见下 | 真 Tauri 应用启动 + 读写落盘 + **IPC Channel 那条流式路径** |
 
-数量（会随开发变动，看实际输出为准）：前端单测 ~620、e2e ~130、Rust ~180。
+数量（会随开发变动，看实际输出为准）：前端单测 ~760、e2e ~150、Rust ~180。
 
 **为什么 SSH 要额外做原生验证**：浏览器版走的是内存假实现，
 **完全不经过 `tauri::ipc::Channel`** —— 那条流式路径在前端测试里一次都没被跑过。
 所以终端必须在真窗口里连一次真 `sshd` 才算验过（见下面「在无显示器环境里跑原生窗口」）。
+
+**智能体会话的假实现是多走一步的**：浏览器里那个假 agent（`core/fakeAgent.ts`）
+报状态时**也走事件文件那条路**（web 客户端把它变成「目录里出现了一个文件」，
+前端照常取走、解析、进状态机）。图省事直接改 store 的话，「文件名格式、
+取走即删除、对不上号的会话要丢掉」这几条在浏览器里一条都不会被走到 ——
+而它们恰恰是外部程序唯一能影响界面的入口。`tests/unit/agents-fake.test.ts`
+把这条链路单独串了一遍（敲键盘 → 假 agent → 客户端 → store → 状态机），
+和 e2e 的分工是「e2e 管画出来没有，那一组管每一环的语义对不对」。
 
 **打真 `sshd` 的那组 Rust 测试要 root**（sshd 要切换用户身份），所以它**不在 CI 里**，
 和 `devtoolkit-sql` 那组一样属于本机验证。CI 只跑 SSH 那组进程内的假服务器测试
@@ -509,6 +535,40 @@ interface FileNode {
 }
 ```
 
+### 智能体会话的命令
+
+```
+agent_open(id, config, channel)   ← 同 ssh_open：流式，字节走 base64
+agent_write(id, bytes)            ← 前端串行调用（同 ssh_write）
+agent_resize(id, cols, rows)
+agent_close(id)                   ← 连同**整棵子进程树**一起收掉
+agent_close_all()
+agent_take_events()               ← 取走攒下的状态事件，取走即删除
+agent_events_dir()                ← 事件目录路径（界面上要显示它）
+agent_integration_status(target)  ← target 只能是 "claude" / "codex"
+agent_integration_apply(target)
+agent_integration_revert(target)
+```
+
+两个和别的模块不一样的地方：
+
+- **`config.cwd` 是用户的项目目录**，不是 Devtoolkit 的工作区 —— 这个模块起的是
+  **用户本机的进程**，和「工作区是唯一的文件沙箱」是两件事。工作区的路径校验
+  在这里不适用，因为压根不经过它。
+- **`agent_integration_*` 只收一个枚举值，不收路径。** 要改的两个文件
+  （`~/.claude/settings.json`、`~/.codex/config.toml`）由 Rust 侧自己算出来。
+  路径只要有机会从 JS 传进来，这里就变成一个任意文件写入的口子 ——
+  这和「选文件让 Rust 自己弹对话框」是同一条规矩。
+
+**状态事件那条路**：agent 自己（通过我们装进它配置里的钩子）往事件目录里写一个文件，
+文件名是 `<状态>.<会话id>`，状态只有 `working` / `waiting` / `done` 三种，
+时间戳用文件的 mtime。前端每秒取一次，解析 → 状态机 → 界面。
+
+为什么是文件而不是「让钩子调我们的程序」：**Tauri 二进制启动要 200ms+，而 Claude Code
+的钩子是同步阻塞 agent 的** —— 每回合卡 200ms，用户会以为工具坏了。写一个文件是
+shell 一句重定向的事，启动开销个位数毫秒。顺带的好处是应用没开着时事件也不丢
+（下次启动读到，对不上号的会话丢掉）。
+
 ### 几个约定
 
 - **只列 `.seq.json` 文件**。隐藏项（以 `.` 开头，比如 `.git`）和符号链接会被跳过。
@@ -567,6 +627,24 @@ fn export_as(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
 ```
 
 这样「只能写到用户当面选过的文件」就成了机制上的保证，而不是一句注释。
+
+### 第二个例外：往 Claude Code / Codex 的配置里装钩子
+
+智能体会话模块的状态检测要改用户主目录里的两个文件（`~/.claude/settings.json`、
+`~/.codex/config.toml`）—— 也在工作区外面，那条沙箱同样不适用。
+
+它和 `write_export` 的差别在于：**这里的路径完全由 Rust 侧算出来**，前端只能传
+一个枚举值（`"claude"` / `"codex"`）。所以它不是靠约定，是**机制上就写不了别的地方**。
+`write_export` 那条已知边界的教训，在这个模块里是直接按解法做的。
+
+向导里做到的事：写入前**备份**、把要改的内容原样**预览**、可以**撤销**、
+文件不是合法的 JSON/TOML 时**拒绝写入**并说明原因（而不是把用户的配置搞坏）。
+合并用的是真的 JSON 解析，用户其它字段原样保留。
+
+另外记一笔这个模块**扩大了攻击面**：它会起用户本机进程（`claude` / `codex` /
+一个 shell）。能改会话启动命令的人就能在这台机器上以用户身份执行命令 ——
+但那个人本来就能开一个终端，所以这不算新增能力，只是要写下来别让人以为
+「Devtoolkit 只会读文件」。
 
 ### 主机密钥：TOFU，而且默认拒绝
 
