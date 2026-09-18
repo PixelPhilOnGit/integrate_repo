@@ -13,7 +13,7 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
-exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "target/**"]
+exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
@@ -60,13 +60,18 @@ devtoolkit-sql = { path = "sql" }
 # 由 `ssh_commands.rs` 在 Tauri 那一层适配成 Channel。
 devtoolkit-ssh = { path = "ssh" }
 
+# 智能体会话内核（本地 PTY / 事件目录 / 集成配置读写）。同样不依赖 tauri。
+# 和前四个不同的一点：它会**起用户的进程**（shell、claude、codex），
+# 那些进程的生命周期管理（关 pane、应用退出不能留孤儿）是这个 crate 的重头戏。
+devtoolkit-agents = { path = "agents" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh"]
+members = ["core", "redis", "sql", "ssh", "agents"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents"]
 resolver = "2"
 
 [profile.release]

@@ -1,0 +1,87 @@
+[package]
+name = "devtoolkit-agents"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的智能体会话内核：本地 PTY、状态事件目录、集成配置读写（不依赖 Tauri）"
+license = "MIT"
+
+[dependencies]
+# PTY 的跨平台实现（wezterm 抽出来的那个库）。
+#
+# 为什么是它而不是自己写：Windows 那一半是 ConPTY —— CreatePseudoConsole、
+# STARTUPINFOEX 里的 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE、属性链表、
+# ResizePseudoConsole、句柄生命周期，任何一处写错都不报错，只是行为诡异；
+# 而 Unix 那一半（openpty + fork + setsid + TIOCSCTTY）同样琐碎。这个库两边都
+# 被 wezterm 真机磨过。
+#
+# ⚠️ **精确钉在 0.8.1，不要升到 0.9 —— 升上去终端会白屏。**
+#
+# 两个版本只差 `CreatePseudoConsole` 的 flags 一位：
+#   0.8.1 → PSEUDOCONSOLE_RESIZE_QUIRK | PSEUDOCONSOLE_WIN32_INPUT_MODE   (0x6)
+#   0.9.0 → 多一个 PSUEDOCONSOLE_INHERIT_CURSOR                            (0x7)
+# 而 INHERIT_CURSOR 会让 ConPTY 往输出流里发 `ESC[6n` **问光标位置**，
+# **不问到就不继续往下产出**；MS 文档里 CreatePseudoConsole 那句
+# "cause the calling application to hang" 说的就是这一类。
+# 上游 wezterm#6783 从 2025-03 开到现在没修，症状是「终端起来一片空白、不报错」。
+# （两个版本都在 ~/.cargo/registry/src/ 里，`diff` 一下 psuedocon.rs 就能看见。）
+#
+# 另外两个坑，免得后来人以为是脏：
+#   * 0.8.1 的依赖里有 `serial`（串口后端，用不上）和 `futures`，都是无条件的。
+#     serial 在 unix 上只用 libc（不碰 libudev），所以没有多出系统依赖。
+#   * Windows 上它拉的是 `winapi` 0.3（不是 windows-sys）。功能都在，只是风格旧。
+#   * **0.8.1 的 `ExitStatus` 没有 `signal()`**（0.9.0 才加的），所以「被信号杀掉」
+#     这件事得我们自己记（见 pty.rs 的 `killed` 标志）。
+#
+# ⚠️ 它**不**帮我们杀进程树：Windows 上的 `Child::kill()` 只调一次
+# TerminateProcess（见 win/mod.rs），`claude` 再起的 node/bash 子进程一个都不会死。
+# 进程组 / Job Object 得我们自己上，见 pty.rs 的 `close`。
+portable-pty = "=0.8.1"
+
+# 配置里的结构体要能被前端反序列化、事件要能被序列化。
+serde = { version = "1", features = ["derive"] }
+
+# 改用户的 `~/.claude/settings.json` 用**真的 JSON 解析**，不做字符串拼接
+# （拼接会吃掉用户的注释性字段、也会在重复启用时追加出两份）。
+#
+# `preserve_order` 不是可有可无的：默认的 serde_json 把 object 存成 BTreeMap，
+# 于是**我们每写一次就把用户整个文件的键按字母重排一遍**。字段一个不丢，
+# 但用户下次打开自己的配置文件会看到整篇乱序 —— 那看起来就像被谁改坏了。
+# 打开它之后键的顺序原样保留（代价是多一个 indexmap，本来就在依赖树里）。
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# 终端字节过 IPC 走 base64，理由和 SSH 那边一样：serde 把 Vec<u8> 编成数字数组
+# （每个字节三四个字符），而按字符串传会在多字节 UTF-8 被块边界切断时变成 U+FFFD。
+base64 = "0.22"
+
+# 事件出口是一条异步 mpsc（Tauri 那层把它适配成 Channel）。
+# 只声明用得到的能力：sync 是通道，测试另外要 macros/rt。
+# **不需要 rt-multi-thread** —— 读线程是 std::thread，不占 tokio 的线程池。
+tokio = { version = "1", features = ["sync"] }
+
+[target.'cfg(unix)'.dependencies]
+# 杀整个进程组要 killpg。portable-pty 用了 libc 但没重新导出它，所以自己声明。
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Job Object（KILL_ON_JOB_CLOSE）：Windows 上唯一能保证「关 pane 不留孤儿」的机制，
+# 而且它在 Devtoolkit **自己崩掉**时也成立 —— 进程一死句柄就关，整个作业一起没。
+# 0.59 而不是最新版：这个版本的 `AssignProcessToJobObject` 等符号路径稳定，
+# 而且它本来就在依赖树里（tauri 拉进来的），不新增包。
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# 测试要 #[tokio::test]（事件通道是 tokio 的）；被测代码自己不起运行时。
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+serde_json = "1"
+base64 = "0.22"
+
+# 测试里用它**真的解析一遍**写出来的 config.toml。
+# 「notify 是不是根键」这件事不能靠「行号靠前」这种自己跟自己玩的断言 ——
+# 找个真解析器读一遍，解析出来是根键才算数（0.8 本来就在依赖树里，不新增包）。
+toml = "0.8"

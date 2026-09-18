@@ -65,9 +65,58 @@ jobs:
           cargo test --package devtoolkit-ssh --locked
           --lib --test session --test registry
 
+  # 智能体会话那个内核单独一个 job，跑在 **Windows** 上。
+  #
+  # 为什么非要 Windows：这一套里有几件事**在 Linux 上验不了**，而它们恰恰是
+  # 用户最容易踩到的：
+  #
+  #   * **进程树的回收** —— 关窗格时 `claude` 底下那串 node 到底死没死。
+  #     Linux 靠的是进程组（killpg），Windows 靠的是 Job Object
+  #     （`KILL_ON_JOB_CLOSE`）—— 后者在 Linux 上连编译都进不去那个分支。
+  #   * **ConPTY 的真行为** —— 输出管道什么时候 EOF（这决定了退出事件早到还是晚到
+  #     250 毫秒）、resize 会不会重排已显示的内容。
+  #   * 包装脚本的批处理形态（换行必须是 CRLF、`goto` 的标号）。
+  #
+  # 它**是**发布门槛（写进 publish-tauri 的 needs）：Windows 上那些代码路径
+  # 在任何别的地方都跑不到，让没在 Windows 上执行过的代码进安装包是更糟的风险。
+  #
+  # 第一次跑的时候留意一条：portable-pty 0.8.1 依赖的 `serial 0.4` 是**无 target
+  # 限定**的依赖（不是 cfg 门控），它支持 Windows 但很老，是这个 job 上唯一
+  # 没法在 Linux 本机预验的编译风险。真挂了再谈怎么办。
+  test-agents-windows:
+    name: 单元测试（智能体会话 / Windows）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # 不需要任何服务端、不需要 WebKit：它起的是本机进程（`cmd.exe`），
+      # 用的是系统自带的 PowerShell / tasklist 做断言。
+      #
+      # 显式列出测试目标而不是整个 package：`tests/claude_schema.rs` 要机器上
+      # 真装了 Claude Code（它拿 `claude doctor` 当 schema 校验器），runner 上没有。
+      # 那组属于**本机验证**，和 SSH 打真 sshd 的那组同一个待遇 —— 它也是
+      # 明确失败并给安装命令，不静默跳过。
+      - name: 跑测试（PTY 进程树 / 事件目录 / 配置读写 / 会话表）
+        working-directory: src-tauri
+        run: >-
+          cargo test --package devtoolkit-agents --locked
+          --lib --test events --test integration --test pty --test registry
+
   publish-tauri:
     name: 打包 ${{ matrix.label }}
-    needs: test
+    # 两个 test job 都要过。`test-agents-windows` 尤其不能省：
+    # Windows 上那些代码路径（ConPTY、Job Object 收进程树）**在任何别的地方
+    # 都不会被执行到**，让一个「PTY 代码从没在 Windows 上跑过」的包发出去，
+    # 正好是这个仓库已经记录过的那类坑（「release 二进制在开发机上永远是好的」）。
+    needs: [test, test-agents-windows]
     strategy:
       # 一个平台挂了不要取消其它平台，先把能出的包出来。
       fail-fast: false

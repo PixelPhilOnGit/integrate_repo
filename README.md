@@ -76,12 +76,17 @@ Devtoolkit/
 └── package.json
 ```
 
-四个内核 crate（`core` / `redis` / `sql` / `ssh`）都被刻意拆成独立 crate：它们
-**不依赖 tauri**，所以那几套逻辑都不需要装 WebKit / GTK 就能单独跑测试。
+五个内核 crate（`core` / `redis` / `sql` / `ssh` / `agents`）都被刻意拆成独立 crate：
+它们**不依赖 tauri**，所以那几套逻辑都不需要装 WebKit / GTK 就能单独跑测试。
 集成测试还会**自己拉起真的服务端**（随机端口、不落盘、`Drop` 时杀掉）：
 `devtoolkit-redis` 起 `redis-server`，`devtoolkit-sql` 起 pg / mysqld，
 `devtoolkit-ssh` 起一个**进程内的 russh 服务端**（零系统依赖），
 另有一组打真 `sshd` 的。没装对应的服务端时会**明确报错并给安装命令，不静默跳过**。
+
+`devtoolkit-agents` 是唯一**不需要任何服务端**的连接类内核 —— 它起的是本机进程，
+所以它的测试在任何机器上都能跑（包括真起 `sh` / `cmd.exe` 然后断言进程树被杀干净）。
+Windows 上那部分（ConPTY 行为、Job Object 收尸）只能在 Windows 上验，
+CI 里专门有一个 `windows-latest` 的 job 盯它。
 
 ---
 
@@ -482,6 +487,23 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" \
 | `ssh_resize` | `id`, `cols`, `rows` | — | 告诉远端窗口大小变了 |
 | `ssh_close` | `id` | — | 关掉一个会话。幂等 |
 | `ssh_close_all` | — | — | 收掉所有会话（前端重载后清孤儿用） |
+| `agent_open` | `id`, `config`, `channel` | — | 起一个窗格。**见下面「智能体会话的十条命令」** |
+| `agent_write` | `id`, `bytes` | — | 往窗格发键盘输入（`bytes` 是 base64） |
+| `agent_resize` | `id`, `cols`, `rows` | — | 拖分隔条之后告诉里面的程序 |
+| `agent_close` | `id` | — | 关掉一个窗格**和它那棵进程树**。幂等 |
+| `agent_close_all` | — | — | 收掉所有窗格（前端重载后清孤儿用） |
+| `agent_take_events` | — | `[{ name, at }]` | 读走攒下的状态事件（读完就删） |
+| `agent_events_dir` | — | `string` | 事件目录的绝对路径 |
+| `agent_integration_status` | `target` | `IntegrationStatus` | 看钩子装了没有。**不改任何东西** |
+| `agent_integration_apply` | `target` | `IntegrationOutcome` | 装/更新钩子，幂等 |
+| `agent_integration_revert` | `target` | `IntegrationOutcome` | 精确撤掉我们加的那几条 |
+
+`target` 只有 `claude` / `codex` 两个值（见下面「例外之二」）。
+`IntegrationStatus` 是 `{ target, path, state, preview }`、
+`IntegrationOutcome` 是 `{ target, path, backupPath, preview }`，
+`state` 五个值 `missing` / `absent` / `installed` / `modified` / `unusable`
+（`missing` 和 `absent` **刻意不合并**：一个是「还没建过配置」，一个是
+「配置在但状态检测没开」，用户要做的动作不一样）。
 
 `path` 一律是**相对于工作区根目录**、**正斜杠分隔**的路径（Windows 上也是正斜杠）。
 
@@ -540,6 +562,57 @@ ssh_open(id, config, channel)   ← channel 是 tauri::ipc::Channel，单向往�
 的 `Drop` 是个空操作（源码里就一句 `debug!`），丢下它不会断开连接 ——
 远端 shell 和 PTY 会一直挂着，keepalive 还在每 30 秒发一次。
 
+### 智能体会话的十条命令
+
+形状和 SSH 那条**故意一样**（Channel 流式、字节 base64、`write` 要串行），
+因为要解决的问题是同一类。只有一处不同：这里的进程**在本机**，
+所以「关掉的时候不能留孤儿」成了这一层最重的一件事。
+
+```
+agent_open(id, config, channel)   ← config = { cwd, shell, command, cols, rows, env }
+        │
+        ├─ Rust：起一个 shell（不是起 claude）→ 把 command 当输入敲进去
+        │        读线程 → mpsc → 转发任务 → channel.send(Data{base64})
+        └─ 前端：onmessage → 解码 → xterm.write(bytes)
+```
+
+- **命令不在 argv 里。** 起的是一个**正常 shell**，`command` 是开好之后当输入
+  敲进去的（自动补一个 `\r`）。三个理由：Windows 上 npm 装的 CLI 是 `.cmd`，
+  `CreateProcess` 直接起不来、名字还要靠 `PATHEXT` 补；用户 profile 里的
+  PATH / 别名 / 版本管理器要生效；**agent 退出之后用户该剩一个能用的 shell**。
+- **`agent_open` 的返回值只有「起来了没有」。** 起不来（工作目录不存在、shell
+  找不到）走 `Err`，文案是「起不来：工作目录不存在：…」那种形状 ——
+  前端直接拿它当 `exited` 的 `detail` 显示。
+- **关窗格 = 杀整棵进程树。** `claude` 底下还有 node；`npm start` 底下还有 npm。
+  Unix 上杀**两个进程组**（tty 的前台组 + 会话首进程组 —— 只杀一个会留下另一半），
+  Windows 上用 Job Object。这件事有专门的测试盯着（起一个会 fork 的脚本，
+  断言孙进程也没了），因为「用户以为关掉了、其实还在跑」是最难发现的一类问题。
+- **应用退出时必须 `close_all`。** 别人点「关闭窗口」之后，那屏进程不会自己死 ——
+  它们还在调 API、还在改文件。它在 `lib.rs` 的 `RunEvent::Exit` 里，
+  Windows 上还有 Job Object 兜底（连 Devtoolkit 崩了都收尸）。
+- **钩子用 exec 形式**（`command` 是脚本绝对路径 + `args: ["waiting"]`），
+  两个平台都是 —— 不过 shell、不分词。shell 形式在 Windows 上会踩
+  「用 bash 还是 PowerShell 取决于装没装 Git Bash」这个变量。
+- **装的是四个事件**：`UserPromptSubmit`→working、`PermissionRequest`→waiting
+  （**主力**，权限弹窗一出现就触发）、`Notification`（matcher 只认 `idle_prompt`）
+  →waiting（兜底）、`Stop`→done。⚠️ `UserPromptSubmit` / `Stop` **不支持 matcher**，
+  给它们写上是死配置（不报错也不生效）。
+- **已知边界：被外部信号杀掉的进程，退出码会报成 `1`。** `portable-pty` 0.8.1
+  的 `ExitStatus` 把 `signal` 藏起来了（0.9.0 才公开，而 0.9 在 Windows 上会让
+  终端白屏 —— 见 `agents/Cargo.toml`），所以「被信号带走」和「真的退出码 1」
+  分不开。我们自己关掉的窗格不受影响（那条路报 `null`：是我们杀的，
+  退出码没有意义）。
+- **状态事件是「钩子写文件、我们读走删掉」**，不是钩子调我们的程序：
+  钩子是**同步阻塞** agent 的，而 Tauri 二进制启动要 200ms+。
+  约定是 `<状态>.<会话id>`（状态只有 `working` / `waiting` / `done`），
+  时间戳用文件的 **mtime**。目录里的杂物（编辑器残留、用户手扔的）一律静静跳过 ——
+  为它们弹一条错误条才是错的。
+- **`agent_take_events` 返回的是按时间升序的一整批**，前端要**逐条**喂给状态机。
+  压成「每个会话只留最新那条」会丢掉「它离开过等待又回来了」这个事实，
+  而那正是「确认过之后它又需要我」要用的东西。
+
+
+
 `FileNode` 的字段：
 
 ```ts
@@ -550,40 +623,6 @@ interface FileNode {
   children: FileNode[] | null     // 只有 dir 才有
 }
 ```
-
-### 智能体会话的命令
-
-```
-agent_open(id, config, channel)   ← 同 ssh_open：流式，字节走 base64
-agent_write(id, bytes)            ← 前端串行调用（同 ssh_write）
-agent_resize(id, cols, rows)
-agent_close(id)                   ← 连同**整棵子进程树**一起收掉
-agent_close_all()
-agent_take_events()               ← 取走攒下的状态事件，取走即删除
-agent_events_dir()                ← 事件目录路径（界面上要显示它）
-agent_integration_status(target)  ← target 只能是 "claude" / "codex"
-agent_integration_apply(target)
-agent_integration_revert(target)
-```
-
-两个和别的模块不一样的地方：
-
-- **`config.cwd` 是用户的项目目录**，不是 Devtoolkit 的工作区 —— 这个模块起的是
-  **用户本机的进程**，和「工作区是唯一的文件沙箱」是两件事。工作区的路径校验
-  在这里不适用，因为压根不经过它。
-- **`agent_integration_*` 只收一个枚举值，不收路径。** 要改的两个文件
-  （`~/.claude/settings.json`、`~/.codex/config.toml`）由 Rust 侧自己算出来。
-  路径只要有机会从 JS 传进来，这里就变成一个任意文件写入的口子 ——
-  这和「选文件让 Rust 自己弹对话框」是同一条规矩。
-
-**状态事件那条路**：agent 自己（通过我们装进它配置里的钩子）往事件目录里写一个文件，
-文件名是 `<状态>.<会话id>`，状态只有 `working` / `waiting` / `done` 三种，
-时间戳用文件的 mtime。前端每秒取一次，解析 → 状态机 → 界面。
-
-为什么是文件而不是「让钩子调我们的程序」：**Tauri 二进制启动要 200ms+，而 Claude Code
-的钩子是同步阻塞 agent 的** —— 每回合卡 200ms，用户会以为工具坏了。写一个文件是
-shell 一句重定向的事，启动开销个位数毫秒。顺带的好处是应用没开着时事件也不丢
-（下次启动读到，对不上号的会话丢掉）。
 
 ### 几个约定
 
@@ -620,7 +659,7 @@ shell 一句重定向的事，启动开销个位数毫秒。顺带的好处是�
 彻底堵死需要 `openat2(RESOLVE_BENEATH)` / `O_NOFOLLOW` 这类平台特定 API，
 对单用户本地桌面应用来说不值得。这是已知边界，不是遗漏。
 
-### 唯一的例外：`write_export`
+### 例外之一：`write_export`
 
 「另存为」要把文件写到工作区外面（用户自己选的桌面、文档目录），这条路径没法也不该
 套工作区校验。它单独放在 `devtoolkit-core/src/export.rs`，仍然拒绝空路径、相对路径、
@@ -643,6 +682,48 @@ fn export_as(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
 ```
 
 这样「只能写到用户当面选过的文件」就成了机制上的保证，而不是一句注释。
+
+### 例外之二：装状态钩子
+
+智能体会话模块要往**用户主目录**里写两个文件（`~/.claude/settings.json` 的 `hooks`、
+`~/.codex/config.toml` 的 `notify`），还要在应用数据目录里放一个包装脚本。
+这同样套不上工作区沙箱。
+
+和 `write_export` **不一样**的是，这一次把机制做硬了 —— 靠的是**参数表里没有路径**：
+
+```rust
+#[tauri::command]
+async fn agent_integration_apply(app: AppHandle, target: IntegrationTarget) -> ... {
+    //                         ↑ 只有 claude / codex 两个值，是个枚举，不是字符串
+    let paths = AgentPaths {
+        home: app.path().home_dir()?,        // ← 路径全程在 Rust 手里
+        data_dir: app.path().app_data_dir()?, //   前端一个字都插不进来
+    };
+    integration::apply(&paths, target)
+}
+```
+
+`IntegrationTarget` 只有 `claude` / `codex` 两个变体，`match` 之后各自拼到 `home`
+上。也就是说，**「去写哪个文件」这件事由 Rust 侧的表决定**，前端能表达的只是
+「我要 Claude 那个」。WebView 里就算能执行任意 JS，它能做到的最坏情况是
+「把钩子装到 Codex 上」，而不是「以本程序权限写任意文件」。
+反序列化也在边界上收紧：`"Claude"`（大小写不对）和 `"/etc/passwd"` 都直接失败，
+不会悄悄落到某个默认路径上（`agents/src/contract.rs` 有测试钉着）。
+
+读写这个文件本身还有三条纪律，都在 `agents/src/integration.rs` 里：
+
+- **改之前先备份**（原文件旁边一份带时间戳的 `.bak`），`apply` 把备份路径返回给前端；
+- **预览**：`status` 和 `apply` 都返回一段「改了什么」的可读文本，用户点「启用」
+  之前能看见；用户手改过我们那几条时会认出来（`state === 'modified'`），
+  不会假装「已装好」；
+- **撤销是精确摘除**，不是「从备份恢复」—— 用户很可能在启用之后又改过自己的配置，
+  拿一份旧备份整个盖回去会把他后来的改动一起抹掉。
+
+另外，Codex 那边有个 TOML 的坑值得单独记一笔：**根键必须写在任何 `[表]` 之前**。
+往文件尾追加一行 `notify = [...]` 会被当成最后那张表里的键，Codex 读的是根上的
+`notify` —— 结果是「写进去了、永远不生效、从文件上看不出来」。所以逻辑是
+「已有的 `notify` 行就替换，没有就插到根键区最前面」，测试用**真的 TOML 解析器**
+读一遍来验证（`tests/integration.rs` 的 `notify_必须在任何表之前`）。
 
 ### 第二个例外：往 Claude Code / Codex 的配置里装钩子
 

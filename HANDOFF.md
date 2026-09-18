@@ -104,9 +104,9 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 
 ```bash
 npm run typecheck    # 类型检查
-npm test             # 792 个纯逻辑单测（秒级）
-npm run test:e2e     # 147 个端到端测试（真实 Chromium）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 182 个 Rust 测试
+npm test             # 794 个纯逻辑单测（秒级）
+npm run test:e2e     # 149 个端到端测试（真实 Chromium）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 全部 crate（agents 那套是 79 条）
 ```
 
 ### ⚠️ 跑测试/编译之前必读
@@ -420,12 +420,35 @@ SSH 的标签栏图省事复用了 `rd-tabs`，结果**标签和那个 × 各占
   得把重定向放进子 shell：`( : > "$F" ) 2>/dev/null`。
   包装脚本现在还会先 `mkdir -p` —— 用户在自己的终端里跑 claude 时，
   钩子**必须**安静，这条有测试盯着（退出码 0 + 没有输出 + 没有文件）。
-- **Windows 上那条钩子命令不能用 shell 形式写。** `"C:\路径\hook.cmd" waiting`
-  这种写法只在 cmd 里成立：PowerShell 里带引号的路径必须加 `&` 调用运算符，
-  而 Git Bash 里根本跑不了 `.cmd`（而 Claude Code 默认走哪个 shell 取决于
-  **机器上有没有装 Git Bash**）。所以 Windows 上用 exec 形式
-  （`command` + `args`，参数逐个传、不经过任何 shell），Unix 上才用
-  `"<脚本>" <状态>` 那句。见 `integration.rs` 的 `claude_entry`。
+- **钩子命令一律用 exec 形式**（`command` + `args`），两个平台都是。
+  shell 形式（不写 `args`）那条路，`"C:\路径\hook.cmd" waiting` 只在 cmd 里成立：
+  PowerShell 里带引号的路径必须加 `&` 调用运算符，Git Bash 里根本跑不了 `.cmd`
+  —— 而 Claude Code 用哪个 shell 取决于**机器上有没有装 Git Bash**。
+  exec 形式直接 spawn 可执行文件、不过 shell、不分词，把这个变量整个消掉
+  （代价：Unix 上的 `.sh` 必须真的有 +x 和 shebang，`write_hook_script` 会补）。
+  见 `integration.rs` 的 `claude_entry`。
+- **⚠️ `portable-pty` 必须精确钉在 `=0.8.1`，升到 0.9 终端会白屏。**
+  两个版本只差 `CreatePseudoConsole` 的 flags 一位：0.9 多一个
+  `PSUEDOCONSOLE_INHERIT_CURSOR`，它会让 ConPTY 发 `ESC[6n` 问光标位置、
+  **不问到就不往下产出**（MS 文档里 "cause the calling application to hang"
+  说的就是这一类）。上游 wezterm#6783 从 2025-03 开到现在没修。
+  副作用要记着：0.8.1 的 `ExitStatus` **没有 `signal()`**（0.9 才加），
+  所以「被信号杀掉」这件事我们自己记（`PtySession` 的 `killed` 标志）。
+- **`TERM` 要我们自己注入**（`xterm-256color`，Windows 再补 `COLORTERM=truecolor`）：
+  桌面启动的进程环境里通常没有它，里的程序按「未知终端」处理 —— 配色没了、
+  TUI 降级，而且**不报错**，只是「看起来怪怪的」。
+- **Windows 上 PATH 会被 portable-pty 从注册表盖掉**（`cmdbuilder.rs` 的
+  `get_base_env`）。nvm/fnm/volta/scoop 往当前会话加的路径全丢，
+  表现是「在这个窗口里起不来，在我自己的终端里好好的」。spawn 前显式
+  `cmd.env("PATH", std::env::var_os("PATH"))` 抢回来。
+- **会话 id 要卡字符集**（`[A-Za-z0-9_-]{1,64}`）。它进到钩子脚本拼出来的文件名里
+  （`> "$DIR/waiting.$ID"`），含 `/`、`\`、`..` 的 id 能让脚本**写到事件目录外面**，
+  而且那条路**绕过 Rust 侧所有路径校验**。拦在注入环境变量之前。
+- **测试里绝不要喂真实路径**（`%APPDATA%`、`~/.claude`）：有一组用例把
+  `C:\Users\me\AppData\...` 当 data_dir 传了进去 —— 在 Linux 上那是个相对路径，
+  于是 crate 目录里多出一个叫这个名字的目录，不报错、没人发现；
+  同样的代码在 Windows 上会写进用户真实的 AppData。库那边现在有
+  `AgentPaths::ensure_absolute` 拦着。
 - **`claude doctor` 和 `codex doctor` 是现成的 schema 校验器。**
   两边都会读配置文件并把不合法的地方**逐条列出来**（`Invalid settings` /
   `could not be loaded`），而且都认 `HOME` / `CODEX_HOME` 这种临时目录 ——
