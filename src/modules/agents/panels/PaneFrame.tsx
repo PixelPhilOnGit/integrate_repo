@@ -91,7 +91,7 @@ export function PaneFrame({ session, workspaceName, focused, store }: Props): Re
         </button>
       </div>
 
-      <PaneTerminal sessionId={session.id} />
+      <PaneTerminal sessionId={session.id} focused={focused} />
     </div>
   );
 }

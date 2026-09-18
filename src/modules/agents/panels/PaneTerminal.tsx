@@ -22,9 +22,11 @@ import { agentHub } from '../core/terminalHub';
 
 interface Props {
   sessionId: string;
+  /** 键盘焦点在这一格上吗。是的话挂载时就把焦点给终端 */
+  focused: boolean;
 }
 
-export function PaneTerminal({ sessionId }: Props): ReactNode {
+export function PaneTerminal({ sessionId, focused }: Props): ReactNode {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,6 +40,18 @@ export function PaneTerminal({ sessionId }: Props): ReactNode {
       agentHub.detach(sessionId);
     };
   }, [sessionId]);
+
+  // ⚠️ 焦点单独一个 effect，**依赖只有「是不是聚焦的这一格」**。
+  //
+  // 混进上面那个 effect 的话，每次 attach 都会抢一次焦点 —— 而 attach 在
+  // 切模块回来、分屏、拖分隔条之后都会发生，那意味着用户刚点开集成向导、
+  // 或者正在侧栏里改名，焦点会被终端抢走。
+  //
+  // 只在「这一格成为聚焦的那一格」时给一次：新建会话、点侧栏跳过去、
+  // 方向键换格 —— 都是用户刚做的一个动作，此时把键盘交给终端正是他要的。
+  useEffect(() => {
+    if (focused) agentHub.focus(sessionId);
+  }, [focused, sessionId]);
 
   // testid 带上会话 id：屏幕外的存放点里还躺着一批终端，容器带着**同样的**
   // 前缀，不带 id 的话测试会选到好几个（SSH 那边踩过这个坑）

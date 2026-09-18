@@ -218,6 +218,24 @@ export class TerminalHub {
     this.scheduleFit(sessionId);
   }
 
+  /**
+   * 把键盘焦点给这个终端。
+   *
+   * # 为什么必须显式做（这是**只有真用起来才会撞到**的缺口）
+   *
+   * 终端的键盘输入走 xterm 内部那个隐藏的 textarea。用户点「新建会话」之后
+   * 直接开始打字是很自然的，而那时候 DOM 焦点还在**按钮**上 ——
+   * 打进去的字哪儿都不去，看起来像「键盘坏了」。
+   *
+   * 浏览器里的 e2e 一直没抓到这条：那些用例每次都显式 `textarea.focus()`
+   * （测试代码替真实用户做了这一步）。补上原生验证才发现的。
+   */
+  focus(sessionId: string): void {
+    const entry = this.entries.get(sessionId);
+    if (!entry || entry.disposed) return;
+    entry.term.focus();
+  }
+
   /** 挪回屏幕外。会话留着，画面也留着 */
   detach(sessionId: string): void {
     const entry = this.entries.get(sessionId);

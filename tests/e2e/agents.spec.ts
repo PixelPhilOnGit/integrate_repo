@@ -86,6 +86,21 @@ test('从零开始：加一个工作目录、开一个会话、终端里跑起�
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toBeVisible();
 });
 
+test('新建会话之后键盘就在终端里 —— 用户不用先点一下', async ({ page }) => {
+  // 这个缺口是**原生窗口验证**抓到的：终端的键盘输入走 xterm 那个隐藏的
+  // textarea，而「点新建会话 → 直接打字」的时候 DOM 焦点还在按钮上，
+  // 打进去的字哪儿都不去，看起来像键盘坏了。
+  //
+  // 之前抓不到是因为这一组里每个用例都显式 `textarea.focus()` ——
+  // **测试代码替真实用户做了那一步**，于是那一步永远没被验过。
+  const id = await newSession(page);
+
+  await page.keyboard.type('help');
+  await page.keyboard.press('Enter');
+
+  await expect.poll(() => termText(page, id)).toContain('ask');
+});
+
 test('终端是**真的**终端：行规程、退格、命令回显都在', async ({ page }) => {
   const id = await newSession(page);
   await expect.poll(() => termText(page, id)).toContain('假 agent');
