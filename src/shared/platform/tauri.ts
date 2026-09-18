@@ -120,9 +120,11 @@ export function createTauriPlatform(): Platform {
       const s = await prefs();
       const recent = await s.get<string[]>('recentWorkspaces');
       const last = await s.get<string | null>('lastWorkspace');
+      const theme = await s.get<string>('theme');
       return {
         recentWorkspaces: Array.isArray(recent) ? recent : [],
         lastWorkspace: typeof last === 'string' ? last : null,
+        theme: typeof theme === 'string' ? theme : EMPTY_PREFS.theme,
       };
     },
 
@@ -132,6 +134,7 @@ export function createTauriPlatform(): Platform {
       const next: Prefs = { ...EMPTY_PREFS, ...current, ...patch };
       await s.set('recentWorkspaces', next.recentWorkspaces);
       await s.set('lastWorkspace', next.lastWorkspace);
+      await s.set('theme', next.theme);
       await s.save();
     },
   };

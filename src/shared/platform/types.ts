@@ -21,9 +21,22 @@ export interface FileNode {
 export interface Prefs {
   recentWorkspaces: string[];
   lastWorkspace: string | null;
+  /**
+   * 外观：`'system'` / `'light'` / `'dark'`。
+   *
+   * 刻意是 `string` 而不是那几个字面量的联合 —— 那个类型属于外壳
+   * （`shell/theme.ts`），而平台层在上面，不该反过来认识外壳。
+   * 存进来的是**用户选的那一档**，解析在 `resolveTheme` 里做；
+   * 认不出来的值由 `parseThemeChoice` 兜住（旧版本、手改过的文件）。
+   */
+  theme: string;
 }
 
-export const EMPTY_PREFS: Prefs = { recentWorkspaces: [], lastWorkspace: null };
+export const EMPTY_PREFS: Prefs = {
+  recentWorkspaces: [],
+  lastWorkspace: null,
+  theme: 'system',
+};
 
 export interface Platform {
   readonly kind: 'tauri' | 'web';

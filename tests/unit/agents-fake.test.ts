@@ -49,7 +49,7 @@ async function harness(): Promise<Harness> {
   await store.init();
 
   const workspaceId = (await store.addWorkspace())!;
-  const sessionId = (await store.createSession(workspaceId, 'claude'))!;
+  await store.createSession(workspaceId, 'claude');
 
   return {
     store,

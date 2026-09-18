@@ -331,6 +331,9 @@ export function createWebPlatform(): Platform {
             ? parsed.recentWorkspaces.filter((x): x is string => typeof x === 'string')
             : [VIRTUAL_ROOT],
           lastWorkspace: typeof parsed.lastWorkspace === 'string' ? parsed.lastWorkspace : VIRTUAL_ROOT,
+          // 旧版本存的没有这个字段，给默认值就完事 —— 至于值认不认得出来，
+          // 是 `parseThemeChoice` 的事
+          theme: typeof parsed.theme === 'string' ? parsed.theme : EMPTY_PREFS.theme,
         };
       } catch {
         return fallback;

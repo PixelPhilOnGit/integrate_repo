@@ -16,19 +16,31 @@
   --toolbar-h: 46px;
   --status-h: 26px;
   font-synthesis: none;
+  /* 浏览器自己画的东西（滚动条、表单控件、默认背景）跟着走。
+     不设的话深色界面里会冒出几根刺眼的亮色滚动条 */
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14181f;
-    --panel: #1c222b;
-    --border: #2f3844;
-    --text: #e4e7eb;
-    --muted: #8d99a6;
-    --accent: #63b3ed;
-    --accent-soft: #23364a;
-    --danger: #f08a8a;
-  }
+/**
+ * 深色。
+ *
+ * ⚠️ **只认 `<html data-theme>` 这一个属性**，刻意不写 `@media (prefers-color-scheme)`：
+ * 外观有三档（跟随系统 / 浅色 / 深色），纯 CSS 表达不了「用户明确选了浅色但系统是深色」。
+ * 两套机制并存的话，深色这一套变量就得写两遍（媒体查询一份、属性选择器一份），
+ * 它们迟早在某次改配色时对不上。
+ *
+ * 所以由 `shell/theme.ts` 把选择解析成一个确定的值再写上来，CSS 只管照着画。
+ */
+:root[data-theme='dark'] {
+  --bg: #14181f;
+  --panel: #1c222b;
+  --border: #2f3844;
+  --text: #e4e7eb;
+  --muted: #8d99a6;
+  --accent: #63b3ed;
+  --accent-soft: #23364a;
+  --danger: #f08a8a;
+  color-scheme: dark;
 }
 
 * {
@@ -191,6 +203,19 @@ textarea:focus {
   padding: 6px 0;
   background: var(--panel);
   border-right: 1px solid var(--border);
+}
+
+/* 模块图标那一段。和下面那个外观按钮分开——它不在 tablist 里（见 ModuleRail） */
+.rd-rail-tabs {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 外观按钮推到底部（VS Code 也是把设置放在活动栏最下面） */
+.rd-theme-btn {
+  margin-top: auto;
 }
 
 .rd-module-btn {

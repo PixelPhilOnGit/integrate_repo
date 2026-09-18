@@ -146,7 +146,10 @@ function next(
     ...session,
     status,
     statusAt: at,
-    statusDetail: detail,
+    // ⚠️ 是 `text` 不是 `detail`：上面那三行把「没带说明」和「明确没有」统一成了
+    // 一个值，历史里记的也是它。这里写成 `detail` 的话，字段里会留下一个
+    // `undefined`（类型上不该出现），而且和同一时刻写进历史的那条对不上
+    statusDetail: text,
     exitCode: code,
     history,
     // **状态真的变了就清掉「我知道了」。** 一次确认只对**这一次**等待有效：

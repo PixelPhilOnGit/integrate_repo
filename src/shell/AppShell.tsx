@@ -35,6 +35,12 @@ export function AppShell(): ReactNode {
     prevId.current = mod.id;
   }, [mod]);
 
+  // 读回上次选的外观，并开始监听系统主题（只在「跟随系统」那一档才跟着变）。
+  // 放这儿而不是 main.tsx：外壳自己那点持久化的东西归外壳管
+  useEffect(() => {
+    void shellStore.initTheme();
+  }, []);
+
   useShellShortcuts();
 
   if (!mod) return <div className="rd-app">没有注册任何模块</div>;

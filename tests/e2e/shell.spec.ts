@@ -80,6 +80,37 @@ test('Ctrl+1..6 也能切换模块', async ({ page }) => {
   await expect(page.getByTestId('canvas-svg')).toBeVisible();
 });
 
+test('外观切换：三档都能选，而且真的换了颜色', async ({ page }) => {
+  const html = page.locator('html');
+  // Chromium 默认是浅色，所以起步应当是浅的
+  await expect(html).toHaveAttribute('data-theme', 'light');
+
+  const bodyBg = (): Promise<string> =>
+    page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const lightBg = await bodyBg();
+
+  await page.getByTestId('theme-toggle').click();
+  await page.getByTestId('menu-深色').click();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  const darkBg = await bodyBg();
+  // 属性变了还不够 —— 得确认颜色真的跟着变了（`[data-theme]` 选择器写错了的话，
+  // 属性在、界面还是白的）
+  expect(darkBg).not.toBe(lightBg);
+
+  await page.getByTestId('theme-toggle').click();
+  await page.getByTestId('menu-浅色').click();
+  await expect(html).toHaveAttribute('data-theme', 'light');
+  expect(await bodyBg()).toBe(lightBg);
+
+  // 选择存下来了（存的是**选择**本身，刷新之后要能读回来）
+  const stored = await page.evaluate(() => localStorage.getItem('devtoolkit.prefs.v1'));
+  expect(stored).toContain('"theme":"light"');
+
+  await page.getByTestId('theme-toggle').click();
+  await page.getByTestId('menu-跟随系统').click();
+  await expect(html).toHaveAttribute('data-theme', 'light'); // 这台机器是浅色系统
+});
+
 test('切走再切回，模块自己的状态不丢（架构关键）', async ({ page }) => {
   // 在顺序图里画一条消息
   await page.getByTestId('btn-add-sync').click();
