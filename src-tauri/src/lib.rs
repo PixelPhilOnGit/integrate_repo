@@ -13,6 +13,7 @@
 mod commands;
 mod redis_commands;
 mod sql_commands;
+mod ssh_commands;
 
 /// 供 `main.rs`（以及将来的移动端入口）调用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +26,10 @@ pub fn run() {
         // 活连接表。空表构造，不会碰 tokio 运行时，启动期是安全的。
         .manage(devtoolkit_redis::ConnectionRegistry::new())
         .manage(devtoolkit_sql::ConnectionRegistry::new())
+        // SSH 的会话表包了一层 Arc：转发任务要活到会话结束，还要回头把会话
+        // 从表里摘掉，所以它得拿到一份能搬进 tokio::spawn 的句柄。
+        // 另外两个模块不需要 —— 它们的命令都是「一次往返、拿到就返回」。
+        .manage(std::sync::Arc::new(devtoolkit_ssh::SshRegistry::new()))
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,
@@ -48,6 +53,11 @@ pub fn run() {
             sql_commands::sql_databases,
             sql_commands::sql_tables,
             sql_commands::sql_use_database,
+            ssh_commands::ssh_open,
+            ssh_commands::ssh_write,
+            ssh_commands::ssh_resize,
+            ssh_commands::ssh_close,
+            ssh_commands::ssh_close_all,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

@@ -13,7 +13,7 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
-exclude = ["core/**", "redis/**", "sql/**", "target/**"]
+exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
@@ -39,6 +39,9 @@ tauri-plugin-store = "2.4.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# 终端字节在 IPC 上走 base64（两个方向都是）。理由见 ssh_commands.rs
+base64 = "0.22"
+
 # 纯逻辑内核（路径安全校验 + 文件操作）。不依赖 tauri，
 # 所以 `cargo test -p devtoolkit-core` 可以在没有 WebKit/GTK 的机器上单独跑。
 devtoolkit-core = { path = "core" }
@@ -51,13 +54,19 @@ devtoolkit-redis = { path = "redis" }
 # 集成测试自己拉起真的 pg / mysqld 来打。
 devtoolkit-sql = { path = "sql" }
 
+# SSH 内核（连接 / 认证 / 主机密钥 / PTY 会话）。同样不依赖 tauri ——
+# 这是它能在无 WebKit 的机器上跑集成测试的原因，也是它**不能**直接拿
+# `tauri::ipc::Channel` 的原因：事件出口是一个 mpsc 流，
+# 由 `ssh_commands.rs` 在 Tauri 那一层适配成 Channel。
+devtoolkit-ssh = { path = "ssh" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql"]
+members = ["core", "redis", "sql", "ssh"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql"]
+default-members = [".", "core", "redis", "sql", "ssh"]
 resolver = "2"
 
 [profile.release]

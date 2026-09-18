@@ -1,0 +1,54 @@
+[package]
+name = "devtoolkit-ssh"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的 SSH 内核：连接、认证、主机密钥校验、PTY 会话（不依赖 Tauri，可脱离 WebKit 测试）"
+license = "MIT"
+
+[dependencies]
+# 0.54 而不是别的版本：它是当前的稳定线。
+#
+# 关于「纯 Rust」这个说法要更正一下：russh 自己确实是纯 Rust，但它的**默认
+# feature 会拉进 aws-lc-rs / aws-lc-sys**，那是 C 实现的加密库（靠 cc 编译）。
+# 所以它并不是「零 C 依赖」—— 好在 Tauri 本身就要 C 工具链，三平台打包
+# 没有因此多出任何系统依赖，只是不能再说成「纯 Rust 了」。
+#
+# 实测冷编译 1m21s（2 核、CARGO_BUILD_JOBS=2），机器上没有 cmake/nasm 也能编过。
+#
+# 默认 feature 里三样都要留着：
+#   aws-lc-rs —— 加密后端，别的不说，去掉它就没有可用的密钥交换了
+#   rsa       —— RSA 私钥很常见，去掉它等于私钥认证瘸一条腿
+#   flate2    —— 压缩，服务端开起来的时候用得上
+russh = "0.54"
+
+# 运行时由调用方提供（Tauri 那边已经有一个），这里只声明需要的能力。
+# net/io-util 是 russh 要的；sync 是我们的会话表和事件通道要的。
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+
+# 终端字节走 base64 过 IPC。
+# 不用 Vec<u8>：serde_json 会把它编成数字数组，每个字节三四个字符，比 base64
+# 还胖；也不直接传 String —— SSH 的数据边界会切断多字节 UTF-8 字符，
+# 提前按字符串解码会把中文变成一串 U+FFFD，而且丢的信息不可恢复。
+base64 = "0.22"
+
+[dev-dependencies]
+# 集成测试要用 #[tokio::test]；被测代码本身不建运行时。
+# macros/rt-multi-thread 是测试要的，net/io-util 是被测代码要的。
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json = "1"
+
+# 测试夹具用它**现场生成**主机密钥和客户端私钥，而不是往仓库里塞一份写死的。
+#
+# 写死的私钥有两个问题：一是仓库里躺着一份看着像凭据的东西（会被密钥扫描器
+# 报出来，也会让人犹豫它是不是真的）；二是「主机密钥变了」那组测试会互相污染 ——
+# 它们需要一个和上次**不同**的密钥，写死的密钥每次都是同一个，那个场景就没了。
+#
+# 0.8 而不是最新版：ssh-key 0.6 用的是 rand_core 0.6，版本对不上就传不进
+# `PrivateKey::random`。这个版本本来就在依赖树里（russh 拉进来的），
+# 所以没有新增任何包。
+rand = "0.8"
+
+# 断言终端输出要先从 base64 解回来。同版本，没有新增包。
+base64 = "0.22"
