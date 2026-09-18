@@ -6,7 +6,8 @@
 //! 合法输入 —— 防御要落在这一层。
 
 use std::fs;
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -14,23 +15,50 @@ use devtoolkit_core::write_export;
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// 一个用完就删的临时目录。
+///
+/// `Drop` 这一步是必须的：不加的话每跑一次 `cargo test` 就往 `/tmp` 里漏一批
+/// 导出产物，**而且没有上限** —— 攒到几百个目录只是时间问题。
+/// `devtoolkit-redis` / `devtoolkit-sql` / `devtoolkit-ssh` 三处夹具都是这个
+/// 形状（用完就删），当初只有这里漏了。
+///
+/// 实现 `Deref<Target = Path>` 是为了让 `dir.join(...)`、`&dir`、
+/// `dir.to_string_lossy()` 这些照旧能用，各个调用点一行都不用改。
+struct TempDir {
+    path: PathBuf,
+}
+
+impl Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
 /// 建一个本次测试独有的临时目录
-fn temp_dir(tag: &str) -> PathBuf {
+fn temp_dir(tag: &str) -> TempDir {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
+    let path = std::env::temp_dir().join(format!(
         "devtoolkit-export-{tag}-{}-{nanos}-{seq}",
         std::process::id()
     ));
-    fs::create_dir_all(&dir).expect("无法创建临时目录");
-    dir
+    fs::create_dir_all(&path).expect("无法创建临时目录");
+    TempDir { path }
 }
 
 /// 目录里以 `.` 开头的残留临时文件
-fn leftover_temp_files(dir: &PathBuf) -> Vec<String> {
+fn leftover_temp_files(dir: &Path) -> Vec<String> {
     fs::read_dir(dir)
         .expect("读目录失败")
         .filter_map(|e| e.ok())
