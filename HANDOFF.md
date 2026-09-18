@@ -106,7 +106,7 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 npm run typecheck    # 类型检查
 npm test             # 794 个纯逻辑单测（秒级）
 npm run test:e2e     # 149 个端到端测试（真实 Chromium）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 全部 crate（agents 那套是 79 条）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 266 条（agents 那套是 79 条）
 ```
 
 ### ⚠️ 跑测试/编译之前必读
