@@ -147,6 +147,17 @@ export function createWebPlatform(): Platform {
       return VIRTUAL_ROOT;
     },
 
+    /**
+     * 浏览器里没有真实的文件系统，所以给一个看起来合理的假路径。
+     *
+     * 为什么不返回 null（「用户取消了」）：那会让「浏览…」这个按钮在浏览器里
+     * 变成一个点了没反应的死按钮，而**浏览器版正是 Playwright 唯一能驱动的
+     * 版本** —— 一个点不动的按钮等于整条链路有一截永远测不到。
+     */
+    async pickFile(_title: string): Promise<string | null> {
+      return `${VIRTUAL_ROOT}/.ssh/id_ed25519`;
+    },
+
     async confirm(message: string, title?: string): Promise<boolean> {
       return window.confirm(title ? `${title}\n\n${message}` : message);
     },

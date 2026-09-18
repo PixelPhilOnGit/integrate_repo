@@ -32,6 +32,19 @@ export interface Platform {
   pickWorkspace(): Promise<string | null>;
 
   /**
+   * 弹文件选择框；用户取消返回 null。
+   *
+   * 和 `pickWorkspace` 放在一起，是因为「挑一个文件」和「挑一个目录」是同一种
+   * 能力，都不含任何模块知识。第一个用它的模块是 SSH（选私钥文件）——
+   * 但**接口本身不认识私钥**，将来别的模块要用直接拿去用。
+   *
+   * ⚠️ 浏览器实现**没有真实的文件系统**，所以它返回一个看起来合理的假路径
+   * 而不是 null。返回 null 会让这个按钮在浏览器里变成死的，而浏览器版正是
+   * e2e 唯一能驱动的那个版本 —— 一个点不动的按钮会让整条链路测不到。
+   */
+  pickFile(title: string): Promise<string | null>;
+
+  /**
    * 确认对话框。
    * 桌面端必须走原生对话框：webview 里的 window.confirm 在各平台表现不一致，
    * 有的会被宿主静默忽略，删除这种不可逆操作不能赌。

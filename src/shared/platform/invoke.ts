@@ -33,3 +33,25 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     throw new Error(typeof e === 'string' ? e : String(e));
   }
 }
+
+/**
+ * 建一个 IPC 通道，把收到的消息喂给 `onMessage`。
+ *
+ * 返回值直接当 `invoke(cmd, { channel })` 的参数用。类型在这里被擦成 `object`
+ * 是有意的：调用方那边已经有具体的消息类型了，这里只负责「把回调接上」。
+ *
+ * # 两条必须遵守的用法
+ *
+ * 1. **一次通信用一个新通道，绝不跨调用复用。** Rust 侧把通道丢掉时会往 JS
+ *    发一条 `{ end: true }`，JS 收到就**注销** `onmessage`。所以任何在发消息之前
+ *    就返回的调用（比如一次被拒绝的连接）都会把这个通道打死 —— 之后的消息会
+ *    石沉大海，终端一片空白而且**不报错**，非常难查。
+ * 2. 通道**只有单向**（Rust → 前端）。回话走普通的 `invoke`。
+ *
+ * 它和 `invoke` 放同一个文件，是为了共用上面那份 `@tauri-apps/api/core` 的
+ * 加载缓存 —— 分成两个文件就会各自动态 import 一次。
+ */
+export async function createChannel<T>(onMessage: (message: T) => void): Promise<object> {
+  const { Channel } = await core();
+  return new Channel<T>(onMessage) as object;
+}

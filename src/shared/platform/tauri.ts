@@ -43,6 +43,17 @@ export function createTauriPlatform(): Platform {
       return picked;
     },
 
+    async pickFile(title: string): Promise<string | null> {
+      const { open } = await dialog();
+      const picked = await open({
+        directory: false,
+        multiple: false,
+        title,
+      });
+      if (Array.isArray(picked)) return picked[0] ?? null;
+      return picked;
+    },
+
     async confirm(message: string, title?: string): Promise<boolean> {
       const { confirm } = await dialog();
       // ask 已废弃，用 message 的 YesNo 按钮组合
