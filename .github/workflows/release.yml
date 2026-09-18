@@ -40,12 +40,31 @@ jobs:
       - name: 安装 Redis（集成测试要用真实例）
         run: sudo apt-get update && sudo apt-get install -y redis-server
 
-      # 显式列出两个 package 而不是用 --workspace：
+      # 显式列出要跑的 package 而不是用 --workspace：
       # 后者会把 app crate 也拉进来，那就得先装 WebKit/GTK，
       # 这个 job「不装系统依赖、几秒跑完」的意义就没了。
       - name: 跑测试（路径安全 + 文件操作 + Redis）
         working-directory: src-tauri
         run: cargo test --package devtoolkit-core --package devtoolkit-redis --locked
+
+      # SSH：**只跑不需要 root 的那两组**。
+      #
+      #   session / registry —— 用 russh 自己的服务端在进程内起一个假服务器，
+      #                        真 TCP、真握手、真认证，零系统依赖
+      #   openssh            —— 打真 sshd，**要 root**（sshd 要切换用户身份），
+      #                        runner 上起不来
+      #
+      # 这里显式列出测试目标而不是整个 package，是因为 `cargo test -p devtoolkit-ssh`
+      # 会把 openssh 那组也拉进来，它会明确 panic 说「这组要 root」——
+      # 那不是失败，是它诚实地表示自己跑不了（这类测试刻意不静默跳过）。
+      #
+      # 所以打真 sshd 的那组属于**本机验证**，和 devtoolkit-sql 那组一样
+      # （那个也没进 CI，因为 runner 上没有 pg/mysql）。这一点写在 README 里。
+      - name: 跑测试（SSH：进程内假服务器，不需要 root）
+        working-directory: src-tauri
+        run: >-
+          cargo test --package devtoolkit-ssh --locked
+          --lib --test session --test registry
 
   publish-tauri:
     name: 打包 ${{ matrix.label }}

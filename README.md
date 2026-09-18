@@ -9,8 +9,8 @@
 | **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树，图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库 |
 | **Redis** | 可用。左侧「连接 → 库 → key」，主区看 key 列表和值；命令台是一个页签 |
 | **数据库**（MySQL / PostgreSQL） | 可用。连接配置里选引擎，侧栏「连接 → 库 / 表」，主区写 SQL 看结果表格 |
+| **SSH 终端** | 可用。多标签的真终端（xterm.js），密码 / 私钥认证，**首次连接要核对主机密钥指纹** |
 | MongoDB | 待做 |
-| SSH 终端 | 待做 |
 
 技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有系统操作（文件、
 网络连接），前端是 React + TypeScript + Vite 渲染的 WebView。
@@ -47,16 +47,20 @@ Devtoolkit/
 │       ├── diagram/         顺序图模块
 │       ├── redis/           Redis 模块（浏览式：库树 + key 列表 + 值）
 │       ├── sql/             数据库模块（MySQL + PostgreSQL）
+│       ├── ssh/             SSH 终端模块（多标签）
 │       └── devplaceholder/  占位模块（验证「加模块 = 一个目录 + 一行」）
 ├── src-tauri/               Rust 后端
 │   ├── src/
 │   │   ├── main.rs          程序入口
 │   │   ├── lib.rs           Tauri 应用组装：注册插件、挂载 command
 │   │   ├── commands.rs      工作区文件相关的 #[tauri::command] 薄封装
-│   │   └── redis_commands.rs Redis 相关的三个 command
+│   │   ├── redis_commands.rs Redis 相关的 command
+│   │   ├── sql_commands.rs  SQL 相关的 command
+│   │   └── ssh_commands.rs  SSH 相关的 command（唯一用了 IPC Channel 的一层）
 │   ├── core/                纯逻辑内核：路径安全边界 + 文件操作
 │   ├── redis/               Redis 内核：连接管理、命令执行、回复解析
 │   ├── sql/                 SQL 内核：MySQL / PostgreSQL 的连接与查询
+│   ├── ssh/                 SSH 内核：连接、认证、主机密钥校验、PTY 会话
 │   ├── capabilities/        权限配置
 │   ├── icons/               图标（logo.svg 是源文件）
 │   └── tauri.conf.json      窗口、打包配置
@@ -64,10 +68,12 @@ Devtoolkit/
 └── package.json
 ```
 
-`src-tauri/core` 和 `src-tauri/redis` 都被刻意拆成独立 crate：它们**不依赖 tauri**，
-所以路径安全那套逻辑和 Redis 协议那套逻辑，都不需要装 WebKit / GTK 就能单独跑测试。
-`devtoolkit-redis` 的集成测试还会**自己拉起一个真 `redis-server`**（随机端口、不落盘、
-`Drop` 时杀掉）—— 所以机器上要装了 `redis-server` 才会过，没装会明确报错并给安装命令。
+四个内核 crate（`core` / `redis` / `sql` / `ssh`）都被刻意拆成独立 crate：它们
+**不依赖 tauri**，所以那几套逻辑都不需要装 WebKit / GTK 就能单独跑测试。
+集成测试还会**自己拉起真的服务端**（随机端口、不落盘、`Drop` 时杀掉）：
+`devtoolkit-redis` 起 `redis-server`，`devtoolkit-sql` 起 pg / mysqld，
+`devtoolkit-ssh` 起一个**进程内的 russh 服务端**（零系统依赖），
+另有一组打真 `sshd` 的。没装对应的服务端时会**明确报错并给安装命令，不静默跳过**。
 
 ---
 
@@ -232,6 +238,12 @@ src/
     │   ├── services/   平台桥：tauri 走 invoke，web 走内存假实现
     │   ├── panels/     连接列表、命令台、连接表单
     │   └── state/      模块自己的 store
+    ├── ssh/
+    │   ├── core/       纯逻辑：档案校验、已知主机、尺寸兜底、假 shell、
+    │   │               **终端实例的持有者**（terminalHub）
+    │   ├── services/   平台桥：tauri 走 Command + IPC Channel，web 走内存假实现
+    │   ├── panels/     连接树、标签栏 + 终端、连接表单、首次信任弹窗
+    │   └── state/      模块自己的 store（只装元数据，**不装终端字节**）
     └── devplaceholder/ 占位模块
 ```
 
@@ -360,10 +372,20 @@ bulk string，天然免疫 RESP 注入；拼字符串的话 `SET k "a\r\nFLUSHAL
 
 | 层 | 命令 | 覆盖内容 |
 | --- | --- | --- |
-| 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出 |
-| 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动编辑器：滚动、拖拽、中文输入、导出下载、文件管理 |
-| Rust 后端 | `cd src-tauri && cargo test -p devtoolkit-core` | 路径逃逸攻击向量、文件操作、导出 |
-| 原生窗口 | 见下 | 真 Tauri 应用启动 + 读写落盘 |
+| 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出、各模块的假实现 |
+| 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动界面：滚动、拖拽、中文输入、导出下载、文件管理、连接与查询、**SSH 终端与首次信任** |
+| Rust 后端 | `cd src-tauri && cargo test` | 路径逃逸攻击向量、文件操作、导出；三个连接内核打真服务端 |
+| 原生窗口 | 见下 | 真 Tauri 应用启动 + 读写落盘 + **IPC Channel 那条流式路径** |
+
+数量（会随开发变动，看实际输出为准）：前端单测 ~620、e2e ~130、Rust ~180。
+
+**为什么 SSH 要额外做原生验证**：浏览器版走的是内存假实现，
+**完全不经过 `tauri::ipc::Channel`** —— 那条流式路径在前端测试里一次都没被跑过。
+所以终端必须在真窗口里连一次真 `sshd` 才算验过（见下面「在无显示器环境里跑原生窗口」）。
+
+**打真 `sshd` 的那组 Rust 测试要 root**（sshd 要切换用户身份），所以它**不在 CI 里**，
+和 `devtoolkit-sql` 那组一样属于本机验证。CI 只跑 SSH 那组进程内的假服务器测试
+（零系统依赖）。这一点在 workflow 的注释里也写了。
 
 两个值得一提的点：
 
@@ -413,6 +435,11 @@ xvfb-run -a --server-args="-screen 0 1440x900x24" \
 | `redis_connect` | `id`, `config` | `ServerInfo` | 建立连接。同 `id` 再连是**替换**，不是新建 |
 | `redis_disconnect` | `id` | — | 断开。幂等 |
 | `redis_exec` | `id`, `args` | `Reply` | 执行一条命令。`args[0]` 是命令名 |
+| `ssh_open` | `id`, `config`, `channel` | `OpenOutcome` | 开会话。**见下面「SSH 的五条命令」** |
+| `ssh_write` | `id`, `bytes` | — | 往会话发键盘输入（`bytes` 是 base64） |
+| `ssh_resize` | `id`, `cols`, `rows` | — | 告诉远端窗口大小变了 |
+| `ssh_close` | `id` | — | 关掉一个会话。幂等 |
+| `ssh_close_all` | — | — | 收掉所有会话（前端重载后清孤儿用） |
 
 `path` 一律是**相对于工作区根目录**、**正斜杠分隔**的路径（Windows 上也是正斜杠）。
 
@@ -436,6 +463,40 @@ bulk string，天然免疫 RESP 注入（否则 `SET k "a\r\nFLUSHALL"` 就能�
 
 `Reply` 的字段名是前后端契约，Rust 侧有单元测试逐个钉死（`redis/src/reply.rs`
 的 `json_contract`）。
+
+### SSH 的五条命令
+
+前四个连接类模块（含 SQL）都是「一次 invoke、一个结果」。SSH 是**第一个流式模块**，
+所以它多了一个别的模块没有的东西：**IPC Channel**。
+
+```
+ssh_open(id, config, channel)   ← channel 是 tauri::ipc::Channel，单向往前端推
+        │
+        ├─ Rust：读循环 → 合并 8ms/4KB → channel.send(Data{base64})
+        └─ 前端：new Channel() → onmessage → 解码 → xterm.write(bytes)
+```
+
+四条容易踩的：
+
+- **`ssh_open` 的返回值有三种 `kind`，主机密钥的两种拒绝走的是 `Ok` 不是 `Err`。**
+  前端要区分「这台机器没见过」「密钥变了」「认证失败」，而 `Err` 那条路上只有
+  一句字符串 —— `shared/platform/invoke.ts` 会把任何非字符串的 reject 变成
+  `String(e)`，结构化信息到不了。判据是 `kind === 'ready'`。
+- **一个 Channel 只能用一次。** Rust 侧丢掉 Channel 时会往 JS 发 `{end: true}`，
+  JS 收到就把回调注销。所以任何在发消息之前就返回的 `ssh_open`（首次信任必然
+  如此）都会把它打死 —— 前端**每次尝试都新建一个 Channel**。
+- **字节走 base64。** 不用 `Vec<u8>`（serde 会编成数字数组，每个字节三四个字符），
+  也不在前端拼字符串（SSH 的数据边界会切断多字节 UTF-8，中文会变 U+FFFD）。
+- **前端必须串行调用 `ssh_write`。** 每次是独立的 invoke，两次未 await 的调用
+  到达顺序不保证，打字会乱序成 `sl`。串行化在 `modules/ssh/services/tauri.ts` 里。
+
+`ssh_resize` 的尺寸在发出去之前会用 `modules/ssh/core/fit.ts` 的 `clampSize`
+夹一遍 —— 容器没布局时 `FitAddon` 会给出 `undefined` 或者个位数，直接发出去
+远端会真的按 2 列换行，而且之后因为尺寸「没变」再也不会重排。
+
+**`ssh_close` 必须显式调 `eof` + `close` + `disconnect`。** russh 的 `Handle`
+的 `Drop` 是个空操作（源码里就一句 `debug!`），丢下它不会断开连接 ——
+远端 shell 和 PTY 会一直挂着，keepalive 还在每 30 秒发一次。
 
 `FileNode` 的字段：
 
@@ -507,19 +568,44 @@ fn export_as(app: tauri::AppHandle, data: Vec<u8>) -> Result<(), String> {
 
 这样「只能写到用户当面选过的文件」就成了机制上的保证，而不是一句注释。
 
+### 主机密钥：TOFU，而且默认拒绝
+
+SSH 的信任全建立在「这台机器的公钥是它本人」上，而第一次连接时程序**没有任何依据**
+判断这一点。做法和 OpenSSH 一致：
+
+- **首次连接**弹窗把指纹摆出来，让用户去和服务器管理员核对。不点「信任」就连不上。
+- **指纹变了硬停** —— 把新旧并排列出来、拒绝连接，界面上**没有**「就这样继续」的按钮。
+  用户确认服务器确实重装过之后，去右键菜单「忘记主机密钥」再重连。
+  指纹变更恰恰是中间人的信号，把「继续」做成一键可达会削弱这道防线。
+- 记录按 **host + port** 存：同一台机器的 22 和 2222 是两个信任对象，
+  只按 host 存会让它们互相冒充。
+
+「静默接受任何主机密钥」这个状态在代码里**不存在**，不是靠约定避免的：
+russh 的 `check_server_key` 默认就返回 `false`（拒绝一切），
+只有「指纹对得上」或者「用户刚点过信任」两种情况才放行。
+
+信任状态（`known_hosts`）归**前端**持有并持久化，判定在 Rust 侧现场做 ——
+和「连接档案归前端、Rust 只存活连接」是同一条分工。
+
+> ⚠️ 这意味着 `known_hosts` 文件被改的话防护就失效了。但能改它的进程，
+> 同样能改下面那份明文存的密码 —— 威胁模型里没有新增什么。
+
 ### ⚠️ 凭据目前是明文存储
 
-Redis 连接的密码以**明文**落在本机配置文件里（桌面端是应用配置目录下的 `redis.json`，
-浏览器版是 localStorage）。这是明确知情的妥协，沿用工作区路径那套「先明文、标记待改」的做法。
+四个连接类模块（Redis / SQL / SSH）的密码都以**明文**落在本机配置文件里
+（桌面端是应用配置目录下的 `redis.json` / `sql.json` / `ssh.json`，浏览器版是 localStorage）。
+SSH 还多一个**私钥口令**，存在同一个文件的同一个键下面。这是明确知情的妥协，
+沿用工作区路径那套「先明文、标记待改」的做法。
 
-代价说清楚：**任何能读到那个文件的进程都能拿到你的 Redis 密码** —— 同机器上的其他程序、
-备份软件、误传的配置目录快照，都算。共用电脑上不要填生产库密码。
+代价说清楚：**任何能读到那些文件的进程都能拿到你的数据库和服务器密码** —— 同机器上的
+其他程序、备份软件、误传的配置目录快照，都算。共用电脑上不要填生产密码。
 
-读写收敛在一处：`src/modules/redis/services/credentials.ts`。换成系统钥匙串
-（Windows 凭据管理器 / macOS Keychain / Linux Secret Service）时，改动面就是那一个文件
-加上 `ConnectionProfile` 类型上的一个字段。那个文件的注释里写了迁移的三步。
+读写收敛在一处：**`src/shared/connections/profiles.ts`**（`TODO(security)` 就在那个文件的头部）。
+四个模块共用这一份，所以换成系统钥匙串（Windows 凭据管理器 / macOS Keychain /
+Linux Secret Service）时**一次覆盖全部四个**，而不是改四遍 —— 这是当初把这层抽出来的主要理由。
+那个文件的注释里写了迁移的三步。
 
-顺带一提，命令台的回显对 `AUTH` 做了脱敏（`core/redact.ts`）—— 那解决的是**另一个**问题：
+顺带一提，Redis 命令台的回显对 `AUTH` 做了脱敏（`core/redact.ts`）—— 那解决的是**另一个**问题：
 别让同一个密码再泄漏到界面日志里（日志会被截图、会被贴进 issue）。两件事都要做。
 
 ---
