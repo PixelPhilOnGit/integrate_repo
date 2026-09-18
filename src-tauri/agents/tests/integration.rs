@@ -413,13 +413,19 @@ fn 包装脚本有守卫也有状态白名单() {
         script.contains("DEVTOOLKIT_PANE_ID") && script.contains("DEVTOOLKIT_EVENT_DIR"),
         "脚本要检查那两个环境变量"
     );
-    assert!(script.contains("DEVTOOLKIT_EVENT_DIR") && script.contains("$state"), "写文件的形状");
+    // 状态变量的拼法**两个平台不同**（sh 是 `$state`，cmd 是 `%dtk_state%`），
+    // 和命令串一样按平台取 —— 写死 Unix 那套的话这条用例在 Windows 上必红
+    let state_var = common::cmd("$state", "%dtk_state%");
+    assert!(
+        script.contains("DEVTOOLKIT_EVENT_DIR") && script.contains(&state_var),
+        "写文件的形状"
+    );
     for state in ["working", "waiting", "done"] {
         assert!(script.contains(state), "少了状态 {state}");
     }
     // 「没有环境变量就安静退出」在两边都是**先**发生的（在任何写操作之前）
     let guard = script.find("DEVTOOLKIT_PANE_ID").unwrap();
-    let write = script.find("$state.").unwrap();
+    let write = script.find(&format!("{state_var}.")).unwrap();
     assert!(guard < write, "守卫必须在写文件之前");
 }
 
@@ -544,9 +550,14 @@ fn codex_用户改过_notify_时认得出() {
 
     let applied = apply(&home.paths, IntegrationTarget::Codex).expect("重新装上");
     assert!(applied.backup_path.is_some());
-    assert!(home.codex_text().contains(
-        home.paths.hook_script().display().to_string().as_str()
-    ));
+
+    // 断言的是**解析回来**的值，不是文件原文 —— Windows 上路径里的 `\` 在 basic
+    // string 里得写成 `\\`，拿 `display()` 去 contains 原文一定落空（Linux 的临时
+    // 目录没有反斜杠，所以本机碰巧能过）。而这里要保证的是「Codex 读出来就是我们
+    // 这个脚本」；万一将来转义写漏了，下面这行会先挂在「合法 TOML」上。
+    let expected = home.paths.hook_script().display().to_string();
+    let parsed: toml::Value = toml::from_str(&home.codex_text()).expect("合法 TOML");
+    assert_eq!(parsed["notify"][0].as_str(), Some(expected.as_str()));
 }
 
 /// 撤销：摘掉那一行，用户的其它配置原样。

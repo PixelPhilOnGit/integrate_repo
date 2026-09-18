@@ -104,10 +104,14 @@ jobs:
       # 真装了 Claude Code（它拿 `claude doctor` 当 schema 校验器），runner 上没有。
       # 那组属于**本机验证**，和 SSH 打真 sshd 的那组同一个待遇 —— 它也是
       # 明确失败并给安装命令，不静默跳过。
+      #
+      # `--no-fail-fast`：不加的话第一个目标一红，后面的目标**根本没跑** ——
+      # 「pty / registry 在 Windows 上到底过不过」就成了一个没人知道答案的问题，
+      # 只能一轮一轮试。这一组本来就有大量平台相关的东西，一次报全更省事。
       - name: 跑测试（PTY 进程树 / 事件目录 / 配置读写 / 会话表）
         working-directory: src-tauri
         run: >-
-          cargo test --package devtoolkit-agents --locked
+          cargo test --package devtoolkit-agents --locked --no-fail-fast
           --lib --test events --test integration --test pty --test registry
 
   publish-tauri:
