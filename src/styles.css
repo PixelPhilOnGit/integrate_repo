@@ -1370,3 +1370,291 @@ textarea:focus {
 .rd-db-row .rd-tree-caret {
   margin-right: 2px;
 }
+
+/* ------------------------------------------------------------- SSH 模块
+ *
+ * 只追加，不动上面任何已有规则 —— 那些是别的模块在用的。
+ *
+ * 这一节里有两类是别的模块没有的：
+ *   - **终端容器**（`.rd-ssh-term*` / `.rd-ssh-holder`）。终端实例由
+ *     `modules/ssh/core/terminalHub.ts` 直接 appendChild 进来，不经过 React，
+ *     所以这里写的是「它被塞进来的那些节点」长什么样。
+ *   - **模态层**（`.rd-modal*`）。TOFU 首次信任的弹窗是第一个真正需要盖住
+ *     整个界面的东西 —— 右键菜单（ContextMenu）只有几十像素大，
+ *     不是一回事。
+ */
+
+.rd-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* --- 主区：标签栏 + 终端 --- */
+
+/* 和 .rd-content / .rd-body 一样必须是「布局透明」的：
+   忘了 flex:1 / min-height:0 会让里面的终端把父容器撑破 */
+.rd-ssh-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.rd-ssh-tabs {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  /* 标签多了要能横向滚，但不该出现纵向滚动条 */
+  white-space: nowrap;
+}
+
+.rd-ssh-tab {
+  display: flex;
+  align-items: center;
+  flex: none;
+  border-right: 1px solid var(--border);
+  color: var(--muted);
+  max-width: 220px;
+}
+
+.rd-ssh-tab.is-active {
+  color: var(--text);
+  background: var(--accent-soft);
+  /* 底下那条横线把「当前这个」和「内容区」连起来（VS Code 那套视觉） */
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.rd-ssh-tab-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  padding: 6px 4px 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 0;
+  /* 显式写死：这一节**绝不能**蹭到 .rd-tabs button 的 flex:1，
+     否则标签和 × 会各占一半，点标签中间就把标签关掉了 */
+  flex: 0 1 auto;
+}
+
+.rd-ssh-tab-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-ssh-tab-end {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rd-ssh-tab-close {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 8px;
+  /* 同上：× 只占它自己那点宽度，绝不参与拉伸 */
+  flex: none;
+}
+
+.rd-ssh-tab-close:hover {
+  opacity: 1;
+}
+
+/*
+ * 终端的宿主。overflow:hidden 是必须的 —— xterm 量尺寸时会读这个盒子的
+ * clientHeight，不给死高度的话它会随着终端内容一起长高，于是每次都量到
+ * 一个更大的值，fit 就一路涨下去。
+ */
+.rd-ssh-term-host {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #1e1e1e;
+  padding: 4px 0 0 6px;
+}
+
+/* 终端容器：由 hub 创建并 appendChild 进来。跟着宿主铺满 */
+.rd-ssh-term {
+  width: 100%;
+  height: 100%;
+}
+
+/*
+ * 切走之后终端**不销毁**，挪到这里待命（见 terminalHub 头部那段）。
+ *
+ * ⚠️ 关键约束：**不能用 display:none**。那样 clientWidth/clientHeight 变成 0，
+ * xterm 量不到尺寸，`fit()` 会算出垃圾值（历史上踩过：远端按 2 列换行）。
+ * 所以用「移出视口但保持有尺寸」的写法：fixed 定位 + 固定宽高。
+ */
+.rd-ssh-holder {
+  position: fixed;
+  left: -20000px;
+  top: 0;
+  width: 900px;
+  height: 600px;
+  overflow: hidden;
+  /* 存起来的终端不该抢到鼠标事件 */
+  pointer-events: none;
+  /* 也不该出现在无障碍树里被读屏念出来 */
+  visibility: hidden;
+}
+
+.rd-ssh-empty {
+  position: absolute;
+  inset: 46px 0 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+}
+
+/* --- 侧栏里的会话行 --- */
+
+/* 复用 .rd-db-row 那套（缩进、hover），只是名字里多一个状态点 */
+.rd-ssh-session {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rd-ssh-session .rd-db-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-ssh-session .rd-db-count {
+  flex: none;
+  font-size: 11px;
+}
+
+/* --- 检查器 --- */
+
+/* 私钥路径输入框 + 「浏览…」并排。输入框要能缩，按钮不能 */
+.rd-ssh-pick {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.rd-ssh-pick input {
+  flex: 1;
+  min-width: 0;
+}
+
+.rd-ssh-pick button {
+  flex: none;
+}
+
+.rd-ssh-connect {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* 指纹要能被逐字符比对，所以用等宽 + 允许换行（长串会超出面板宽度） */
+.rd-ssh-fp-value,
+.rd-ssh-fp-line {
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.rd-ssh-fp {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 6px 0;
+  font-size: 11px;
+}
+
+.rd-ssh-fp dt {
+  color: var(--muted);
+}
+
+.rd-ssh-fp dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+/*
+ * 「指纹变了」的告警框。
+ * 用 danger 色描边而不是填充：它需要显眼，但不能像是「应用崩了」那种级别 ——
+ * 它是一次需要用户去核实的告警，不是一个已经发生的故障。
+ */
+.rd-ssh-warn {
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+
+.rd-ssh-warn strong {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* 嵌在句子里的按钮，长得像链接 —— 整句读下来是通顺的 */
+.rd-ssh-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* --- 模态层 --- */
+
+.rd-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 20, 25, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 要盖住错误条（z-index: 20）—— 首次信任的决定没做完之前，
+     别的提示都不该抢在它前面 */
+  z-index: 30;
+}
+
+.rd-modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  padding: 16px 18px;
+  width: min(460px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.rd-modal-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rd-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}

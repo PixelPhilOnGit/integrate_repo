@@ -12,12 +12,14 @@ import { diagramModule } from '../modules/diagram';
 import { devPlaceholderModule } from '../modules/devplaceholder';
 import { redisModule } from '../modules/redis';
 import { sqlModule } from '../modules/sql';
+import { sshModule } from '../modules/ssh';
 import type { Module } from './types';
 
 export const MODULES: readonly Module[] = [
   diagramModule,
   redisModule,
   sqlModule,
+  sshModule,
   devPlaceholderModule,
 ];
 
