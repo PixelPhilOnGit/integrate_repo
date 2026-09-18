@@ -1659,3 +1659,591 @@ textarea:focus {
   gap: 8px;
   margin-top: 14px;
 }
+
+/* --------------------------------------------------------- 智能体会话模块
+ *
+ * 只追加，不动上面任何已有规则 —— 那些是别的模块在用的。
+ * 用到的类一律 `rd-agent-` / `rd-module-badge` 开头，用之前先 grep 一遍定义
+ * （`.rd-tabs` / `.rd-dot` 撞过两次车了）。
+ *
+ * 这一节里有三处是别的模块没有的：
+ *   - **分屏**（`.rd-agent-split*`）。格子是嵌套的 flex，每一层都要
+ *     `min-width:0 / min-height:0`，少一个终端就会把父容器撑破
+ *   - **状态点**（`.rd-agent-dot*`）。全模块只有这一份定义 ——
+ *     侧栏、窗格标题、队列三处都用它，各写一遍迟早会对不上
+ *   - **角标**（`.rd-module-badge`）。挂在模块图标上，是唯一的跨模块提醒
+ */
+
+/* --- 状态点 --- */
+
+/* 「需要你」是唯一会动的东西：四个格子并排时，眼睛会先看到它在闪 */
+@keyframes rd-agent-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+.rd-agent-dot-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.rd-agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.rd-agent-dot.is-working {
+  background: var(--accent);
+}
+
+/* 琥珀色而不是红色：红色在这个应用里是「出错」，而「需要你」不是错误。
+   也不是蓝色 —— 蓝色已经是「当前模块 / 正在连接」了 */
+.rd-agent-dot.is-waiting {
+  background: #e08a1e;
+  animation: rd-agent-pulse 1.4s ease-in-out infinite;
+}
+
+.rd-agent-dot.is-done {
+  background: #3fa46a;
+}
+
+.rd-agent-dot.is-idle {
+  background: var(--muted);
+}
+
+/* 退出的画成空心圈：它是历史，不是现状 */
+.rd-agent-dot.is-exited {
+  background: transparent;
+  border: 1px solid var(--muted);
+}
+
+.rd-agent-dot-label {
+  font-size: 12px;
+}
+
+.rd-agent-waiting-text {
+  color: #e08a1e;
+}
+
+/* --- 图标栏上的角标 --- */
+
+/* 挂在 `.rd-module-btn`（它是 position:relative）的右上角 */
+.rd-module-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: #e08a1e;
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* --- 侧栏 --- */
+
+.rd-agent-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  flex: none;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.rd-agent-sidebar > .rd-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+/* 「需要你」队列。有事才出现，所以它自己不带边框 —— 出现时顶在侧栏最上面 */
+.rd-agent-queue {
+  flex: none;
+  border-bottom: 1px solid #e08a1e;
+  background: rgba(224, 138, 30, 0.08);
+  max-height: 40%;
+  overflow: auto;
+}
+
+.rd-agent-queue-head {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e08a1e;
+}
+
+.rd-agent-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-agent-queue-item:hover {
+  background: rgba(224, 138, 30, 0.16);
+}
+
+.rd-agent-queue-title {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-agent-queue-where {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.rd-agent-queue-age {
+  flex: none;
+  font-size: 11px;
+  color: #e08a1e;
+}
+
+/* --- 工作目录 --- */
+
+.rd-agent-ws-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 2px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rd-agent-caret {
+  width: 16px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.rd-agent-ws-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.rd-agent-ws-count {
+  flex: none;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.rd-agent-add {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.rd-agent-add:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-agent-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  padding: 1px 3px;
+}
+
+/* --- 会话行 --- */
+
+.rd-agent-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    'dot title mark'
+    'dot line age';
+  align-items: center;
+  gap: 0 6px;
+  padding: 3px 6px 3px 20px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-agent-row:hover {
+  background: var(--accent-soft);
+}
+
+.rd-agent-row.is-focused {
+  background: var(--accent-soft);
+}
+
+.rd-agent-row > .rd-agent-dot-wrap {
+  grid-area: dot;
+}
+
+.rd-agent-row-title {
+  grid-area: title;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-agent-on-screen {
+  grid-area: mark;
+  font-size: 10px;
+  color: var(--accent);
+}
+
+.rd-agent-row-line {
+  grid-area: line;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-agent-row-age {
+  grid-area: age;
+  font-size: 11px;
+}
+
+/* --- 主区：分屏 --- */
+
+.rd-agent-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.rd-agent-split-root {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 2px;
+  padding: 2px;
+}
+
+.rd-agent-split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 2px;
+}
+
+.rd-agent-split.is-row {
+  flex-direction: row;
+}
+
+.rd-agent-split.is-col {
+  flex-direction: column;
+}
+
+/* 每一格都是「布局透明」的：忘了 min-width/min-height 会让里面的终端把
+   父容器一路撑破（和 .rd-content / .rd-body 同一条规矩） */
+.rd-agent-cell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.rd-agent-divider {
+  flex: none;
+  background: var(--border);
+}
+
+.rd-agent-divider.is-row {
+  width: 3px;
+  cursor: col-resize;
+}
+
+.rd-agent-divider.is-col {
+  height: 3px;
+  cursor: row-resize;
+}
+
+.rd-agent-divider:hover,
+.rd-agent-divider.is-dragging {
+  background: var(--accent);
+}
+
+.rd-agent-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #1e1e1e;
+}
+
+.rd-agent-pane.is-focused {
+  border-color: var(--accent);
+}
+
+/* 「需要你」的那一格边框也变琥珀色：四个窗格并排时，边框比标题上的小圆点
+   更容易被余光扫到 */
+.rd-agent-pane.is-waiting {
+  border-color: #e08a1e;
+}
+
+.rd-agent-pane-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--panel);
+}
+
+.rd-agent-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 2px 4px 2px 6px;
+  font-size: 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.rd-agent-pane-title {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.rd-agent-pane-dir {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.rd-agent-pane-status {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  text-align: right;
+}
+
+.rd-agent-pane-btn {
+  flex: none;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.rd-agent-pane-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 终端宿主的补充：`.rd-term-host` 已经给了 flex:1 / overflow:hidden，
+   这里只补它没有的（内边距按窗格调小一点） */
+.rd-agent-term-host {
+  padding: 2px 0 0 4px;
+}
+
+/* --- 空态 --- */
+
+.rd-agent-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  flex: 1;
+  text-align: center;
+}
+
+.rd-agent-empty h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.rd-agent-empty p {
+  margin: 0;
+  font-size: 13px;
+  max-width: 460px;
+}
+
+.rd-agent-empty .rd-btn {
+  margin-top: 8px;
+}
+
+/* --- 检查器 --- */
+
+.rd-agent-section + .rd-agent-section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.rd-agent-section-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rd-agent-detail-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-agent-detail-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.rd-agent-detail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.rd-agent-detail dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rd-agent-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rd-agent-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.rd-agent-history-item {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+  overflow-wrap: anywhere;
+}
+
+.rd-agent-int-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.rd-agent-int-name {
+  flex: none;
+  width: 86px;
+}
+
+.rd-agent-int-state {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.rd-agent-int-state.is-installed {
+  color: #3fa46a;
+}
+
+.rd-agent-int-state.is-modified {
+  color: #e08a1e;
+}
+
+.rd-agent-int-state.is-unusable {
+  color: var(--danger);
+}
+
+.rd-agent-int-path {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  margin: 0 0 6px;
+}
+
+.rd-agent-preview {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow: auto;
+}

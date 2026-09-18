@@ -8,6 +8,7 @@
  * 静态列表让"有哪些模块"一眼可见，也不依赖 import 顺序这种隐式行为。
  */
 
+import { agentsModule } from '../modules/agents';
 import { diagramModule } from '../modules/diagram';
 import { devPlaceholderModule } from '../modules/devplaceholder';
 import { redisModule } from '../modules/redis';
@@ -20,6 +21,7 @@ export const MODULES: readonly Module[] = [
   redisModule,
   sqlModule,
   sshModule,
+  agentsModule,
   devPlaceholderModule,
 ];
 

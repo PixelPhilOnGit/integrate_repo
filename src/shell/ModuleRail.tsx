@@ -21,6 +21,8 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
     <div className="rd-module-rail" data-testid="module-rail" role="tablist" aria-label="模块">
       {MODULES.map((m, i) => {
         const active = m.id === shell.activeModule;
+        // 角标是模块自己的组件（外壳不认识它的内容），有才渲染
+        const Badge = m.badge;
         return (
           <button
             key={m.id}
@@ -34,6 +36,7 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
             onClick={() => shellStore.activate(m.id)}
           >
             {m.icon}
+            {Badge && <Badge />}
           </button>
         );
       })}

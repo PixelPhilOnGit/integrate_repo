@@ -57,6 +57,13 @@ class FakeClient implements AgentsClient {
   events: EventFile[] = [];
   failOpen: Error | null = null;
   failEvents: Error | null = null;
+  /**
+   * 写的时候**在返回之前**先吐点东西出来。
+   *
+   * 真进程就是这样：用户按下 Enter，它往往立刻就开始输出 —— 而输出里可能
+   * 带着终端通知序列。这个钩子用来把那个时序压出来。
+   */
+  onWrite: ((id: string) => void) | null = null;
 
   async open(request: PtyOpenRequest): Promise<void> {
     if (this.failOpen !== null) throw this.failOpen;
@@ -65,6 +72,7 @@ class FakeClient implements AgentsClient {
   }
   async write(id: string, data: Uint8Array): Promise<void> {
     this.written.push({ id, text: new TextDecoder().decode(data) });
+    this.onWrite?.(id);
   }
   async resize(id: string, cols: number, rows: number): Promise<void> {
     this.resized.push({ id, cols, rows });
@@ -321,7 +329,29 @@ describe('新建会话', () => {
     const ws = await withWorkspace(h);
     const id = (await h.store.createSession(ws, 'claude'))!;
 
-    expect(log).toEqual([`建终端:${id}`, `开进程:${id}`]);
+    const create = log.indexOf(`建终端:${id}`);
+    const open = log.indexOf(`开进程:${id}`);
+    expect(create).toBeGreaterThanOrEqual(0);
+    expect(create).toBeLessThan(open);
+  });
+
+  it('⚠️ 回归：会话进 state 之前，终端必须已经在 hub 里了', async () => {
+    // 会话一进 state，界面立刻把它那一格渲染出来，而那一格的 effect 会去 hub 里
+    // 找终端 —— 找不到时 `attach` 是**静默空操作**（它按「会话可能已经关了」处理），
+    // 于是终端永远留在屏幕外：侧栏、状态、退出码全对，只有画面是空的。
+    // 这个 bug 是 e2e 抓出来的：store 单测里 hub 是替身，空操作看不出来
+    const h = make();
+    const ws = await withWorkspace(h);
+
+    let logLenWhenVisible = -1;
+    h.store.subscribe(() => {
+      if (logLenWhenVisible === -1 && h.store.getSnapshot().sessions.length > 0) {
+        logLenWhenVisible = log.length;
+      }
+    });
+
+    const id = (await h.store.createSession(ws, 'claude'))!;
+    expect(log.slice(0, logLenWhenVisible)).toContain(`建终端:${id}`);
   });
 
   it('新会话立刻上屏，聚焦也在它身上', async () => {
@@ -603,6 +633,26 @@ describe('用户的键盘', () => {
     await vi.waitFor(() => {
       expect(h.store.getSnapshot().sessions[0]!.status).toBe('idle');
     });
+  });
+
+  it('⚠️ 回归：按键的信号要在写之前生效，不能被进程的回话反超', async () => {
+    // 真实时序：用户按下 Enter → 我们把这一下发给进程 → 进程**立刻**开始输出，
+    // 输出里带着终端通知序列「等待你的确认」。
+    //
+    // 曾经是先 `await` 写、再记「用户敲了键」，于是那条信号落在了进程回话
+    // **之后** —— 刚收到的「需要你」当场被改回「正在工作」，通知里那句话也没了。
+    // e2e 抓到的（单测当时漏了，因为假客户端的 write 不吐字节）
+    const h = make();
+    const ws = await withWorkspace(h);
+    const id = (await h.store.createSession(ws, 'claude'))!;
+
+    h.client.onWrite = (sessionId) => h.client.emit(sessionId, '\x1b]9;等待你的确认\x07');
+    h.client.emitInput(id, '\r');
+
+    await vi.waitFor(() => {
+      expect(h.store.getSnapshot().sessions[0]!.status).toBe('waiting');
+    });
+    expect(h.store.getSnapshot().sessions[0]!.statusDetail).toBe('等待你的确认');
   });
 
   it('普通 shell 窗格里敲键不会把它标成「正在工作」', async () => {

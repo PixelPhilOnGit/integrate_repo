@@ -158,6 +158,21 @@ describe('去抖', () => {
     expect(once.statusAt).toBe(5000);
   });
 
+  it('⚠️ 回归：一条**没带说明**的信号不会把已有的说明抹掉', () => {
+    // e2e 抓到的：终端通知序列先说了一句「等待你的确认」，紧接着 hook 那条
+    // 不带说明的事件也到了。状态一样，但说明被后到的那条抹成了空，
+    // 界面上只剩一个光秃秃的「需要你」—— 信息少的那条覆盖了信息多的那条
+    const s = run(
+      session(),
+      { kind: 'started' },
+      { kind: 'needs-attention', detail: '等待你的确认' },
+    );
+    const after = reduceSignal(s, { kind: 'needs-attention' }, 6000);
+
+    expect(after).toBe(s); // 什么都没变，连对象都是同一个
+    expect(after.statusDetail).toBe('等待你的确认');
+  });
+
   it('但说明**变了**就是新事实，要记一条', () => {
     const s = run(session(), { kind: 'started' }, { kind: 'needs-attention', detail: '等待授权：Bash' });
     const after = reduceSignal(s, { kind: 'needs-attention', detail: '已经闲了 60 秒' }, 5000);

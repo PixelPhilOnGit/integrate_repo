@@ -77,10 +77,10 @@ export function reduceSignal(
       return next(session, 'idle', at, null);
 
     case 'prompt-submitted':
-      return next(session, 'working', at, signal.detail ?? null);
+      return next(session, 'working', at, signal.detail);
 
     case 'turn-finished':
-      return next(session, 'done', at, signal.detail ?? null);
+      return next(session, 'done', at, signal.detail);
 
     case 'needs-attention':
       // ⚠️ 回归：**从 done 也要能回到 waiting**。
@@ -88,7 +88,7 @@ export function reduceSignal(
       // 又抛出一个问题（或者弹权限确认）。把 done 当成终态吞掉后续信号，
       // 表现就是「它明明在等我，状态点却一直显示已完成」，而这个模块的
       // 全部价值就在那个点上
-      return next(session, 'waiting', at, signal.detail ?? null);
+      return next(session, 'waiting', at, signal.detail);
 
     case 'user-typed':
       // 只在「它在等我」和「它干完了」两种状态下，用户敲键才意味着
@@ -113,20 +113,35 @@ export function reduceSignal(
  *
  * 状态没变、说明也没变时**返回原对象** —— 这就是去抖：同一个信号在一个回合里
  * 来好几次（Claude 的 hook 和 OSC 可能同时报同一件事）只会留下一条记录。
+ *
+ * # `detail` 的三种取值是有区别的
+ *
+ * - 字符串：这条信号带了说明
+ * - `null`：**明确地**没什么好说的
+ * - `undefined`：这条信号**没带**说明
+ *
+ * 第三种要单独对待：状态没变时它保留原来的说明。
+ * 不然会出现这样的事（e2e 抓到的）：终端通知序列先说了一句
+ * 「等待你的确认」，紧接着 hook 那条不带说明的事件也到了 ——
+ * 状态一样，但说明被后到的那条抹成了空，界面上就只剩一个光秃秃的「需要你」。
+ * **信息少的那条不该覆盖信息多的那条。**
  */
 function next(
   session: AgentSession,
   status: SessionStatus,
   at: number,
-  detail: string | null,
+  detail: string | null | undefined,
   exitCode?: number | null,
 ): AgentSession {
   const code = exitCode === undefined ? session.exitCode : exitCode;
-  if (session.status === status && session.statusDetail === detail && session.exitCode === code) {
+  const text =
+    detail === undefined && status === session.status ? session.statusDetail : (detail ?? null);
+
+  if (session.status === status && session.statusDetail === text && session.exitCode === code) {
     return session;
   }
 
-  const history = [change(status, at, detail), ...session.history].slice(0, HISTORY_LIMIT);
+  const history = [change(status, at, text), ...session.history].slice(0, HISTORY_LIMIT);
   return {
     ...session,
     status,

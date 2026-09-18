@@ -22,6 +22,7 @@
 import { newId } from '../../../shared/ids';
 import { platform } from '../../../shared/platform';
 import { createKeyValue } from '../../../shared/platform/kv';
+import { agentsServices } from '../services';
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
 import { agentHub } from '../core/terminalHub';
@@ -62,7 +63,13 @@ const INITIAL_ROWS = 24;
 /** 状态事件的轮询间隔。低频、但不是给人看的数字，所以随手取一个 */
 const POLL_MS = 1000;
 
-/** 各 agent 的默认启动命令。用户可以改（会话详情里） */
+/**
+ * 各 agent 的默认启动命令。
+ *
+ * v1 只有这三个预设。自定义命令的入口（`createSession` 的 `opts.command`）
+ * 和 `AgentKind` 里的 `custom` 是留好的位置，界面上还没暴露 ——
+ * 加的时候是一个输入框的事，不用改数据模型。
+ */
 const DEFAULT_COMMAND: Record<AgentKind, string> = {
   claude: 'claude',
   codex: 'codex',
@@ -185,6 +192,11 @@ export class AgentsStore {
     }
 
     this.patch({ ready: true, eventsDir });
+
+    // 顺便把两边的集成状态查一遍：检查器上那张卡片一开始就该是有内容的，
+    // 而不是「未知」——用户看到「未知」只会以为是坏的
+    await Promise.all([this.refreshIntegration('claude'), this.refreshIntegration('codex')]);
+
     this.startPolling();
   }
 
@@ -294,7 +306,9 @@ export class AgentsStore {
         for (const notice of scanner.feed(event.bytes)) {
           this.applySignal(
             sessionId,
-            { kind: 'needs-attention', detail: notice.text === '' ? null : notice.text },
+            // 通知里没带文字时**不传说明**（而不是传 null）：状态机那边
+            // 「没带」和「明确没有」是两回事，前者不该抹掉已有的说明
+            { kind: 'needs-attention', detail: notice.text === '' ? undefined : notice.text },
             Date.now(),
           );
         }
@@ -314,19 +328,27 @@ export class AgentsStore {
 
   /** 用户在窗格里敲了键 */
   private async onUserInput(sessionId: string, data: Uint8Array): Promise<void> {
-    // 1. 发给进程。失败就忽略：用户正在打字时对面退出是很正常的事
-    await this.services.client.write(sessionId, data).catch(() => undefined);
-
-    // 2. 用户的动作是**唯一**能推翻状态的依据（其余全靠猜，见 core/status.ts）。
+    // 1. **先记「用户敲了键」，再发给进程。** 顺序反了会出错：
+    //
+    //    进程收到这一下之后可能立刻回话（按 Enter 之后它往往马上就输出，
+    //    而输出里可能带着终端通知序列）。如果先 `await` 写、再记这条信号，
+    //    那条信号就落在了进程回话**之后** —— 于是刚收到的「需要你」当场被
+    //    改回「正在工作」，通知里那句话也被抹掉。
+    //    （这个 bug 是 e2e 抓到的，单测里因为假客户端的 write 不吐字节而漏掉了。）
+    //
+    //    用户的动作是**唯一**能推翻状态的依据（其余全靠猜，见 core/status.ts）。
     //    只要往这个窗格里敲了键，就当他已经在处理了 —— 包括用方向键选
     //    权限菜单里的选项
     this.applySignal(sessionId, { kind: 'user-typed' }, Date.now());
 
-    // 3. Ctrl+C 单独报一次：Claude Code 的 Stop hook 在用户打断时**不触发**，
+    // 2. Ctrl+C 单独报一次：Claude Code 的 Stop hook 在用户打断时**不触发**，
     //    不补这一下，状态会永远卡在「正在工作」
     if (data.includes(0x03)) {
       this.applySignal(sessionId, { kind: 'user-interrupted' }, Date.now());
     }
+
+    // 3. 最后才发给进程。失败就忽略：用户正在打字时对面退出是很正常的事
+    await this.services.client.write(sessionId, data).catch(() => undefined);
   }
 
   // ------------------------------------------------------------ 工作目录
@@ -431,6 +453,21 @@ export class AgentsStore {
       worktree: null,
     };
 
+    // ⚠️ **终端必须先建好，再让会话进 state。**
+    //
+    // 会话一进 state，React 立刻就把它那一格渲染出来，而那一格的 effect 会去
+    // hub 里找这个会话的终端 —— 找不到的话 `attach` 会**静默地什么都不做**
+    // （它按「会话可能已经被关掉了」处理），于是终端永远留在屏幕外：
+    // 侧栏状态、退出码、快照全都正常，只有画面是空的。
+    // （这一条是 e2e 抓出来的：store 的单测里 hub 是替身，attach 的空操作看不出来。）
+    try {
+      await agentHub.create(session.id, INITIAL_COLS, INITIAL_ROWS);
+    } catch (e) {
+      this.shell.reportError(e);
+      return null;
+    }
+    this.scanners.set(session.id, createOscScanner());
+
     this.patch({ sessions: [...this.state.sessions, session] });
     this.putOnScreen(session.id, opts.split ?? null);
 
@@ -451,11 +488,8 @@ export class AgentsStore {
     return session.id;
   }
 
+  /** 起进程。终端这时候已经在 hub 里了（见 `createSession` 里那段顺序说明） */
   private async spawn(session: AgentSession, workspace: AgentWorkspace): Promise<void> {
-    // ⚠️ 顺序要紧：终端必须**先建好**，因为 open 一返回事件就可能开始到达
-    await agentHub.create(session.id, INITIAL_COLS, INITIAL_ROWS);
-    this.scanners.set(session.id, createOscScanner());
-
     const eventsDir = this.state.eventsDir ?? '';
     await this.services.client.open({
       id: session.id,
@@ -504,16 +538,6 @@ export class AgentsStore {
     if (layout === null) return null;
     const first = firstPane(layout);
     return first;
-  }
-
-  renameSession(sessionId: string, title: string): void {
-    const trimmed = title.trim();
-    if (trimmed === '') return;
-    this.patch({
-      sessions: this.state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, title: trimmed } : s,
-      ),
-    });
   }
 
   /** 「我知道了」。队列里就看不到它了，直到它**再次**进入等待 */
@@ -617,8 +641,7 @@ export class AgentsStore {
   /**
    * 跳到最近一个「需要你」的会话（cmux 那个 `Cmd+Shift+U`）。
    *
-   * 不在屏幕上就把它摆到聚焦的那一块上，然后**标记为已知晓** ——
-   * 跳过去这个动作本身就是「我看到了」。
+   * 队列里等得最久的排最前面，所以「最近一个」指的是**你欠得最久的那个**。
    */
   jumpToAttention(): boolean {
     const head = attentionQueue(this.state.sessions)[0];
@@ -626,10 +649,19 @@ export class AgentsStore {
       this.shell.setStatus('没有在等你的会话');
       return false;
     }
-    if (!paneOf(this.state.layout, head.id)) this.putOnScreen(head.id, null);
-    else this.focusSession(head.id);
-    this.acknowledge(head.id);
+    this.jumpTo(head.id);
     return true;
+  }
+
+  /**
+   * 跳到某个会话：不在屏幕上就摆到聚焦的那一块，然后**标记为已知晓**——
+   * 跳过去这个动作本身就是「我看到了」。
+   */
+  jumpTo(sessionId: string): void {
+    if (this.sessionById(sessionId) === null) return;
+    if (!paneOf(this.state.layout, sessionId)) this.putOnScreen(sessionId, null);
+    else this.focusSession(sessionId);
+    this.acknowledge(sessionId);
   }
 
   // ------------------------------------------------------------ 集成
@@ -673,6 +705,9 @@ export class AgentsStore {
     return INTEGRATION_LABEL[status.state];
   }
 }
+
+/** 模块级单例。UI 从这里订阅，`index.tsx` 的 `onActivate` 负责注入外壳 */
+export const agentsStore = new AgentsStore(agentsServices);
 
 const INTEGRATION_LABEL: Record<IntegrationState, string> = {
   missing: '未启用',

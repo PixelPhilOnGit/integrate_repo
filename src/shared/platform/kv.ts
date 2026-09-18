@@ -9,8 +9,21 @@
  * 任何一方的结构变化都会波及另外两方。
  */
 
-import { isTauri } from '../platform/detect';
-import type { KeyValueStore } from './types';
+import { isTauri } from './detect';
+
+/**
+ * 一个极小的键值存储。
+ *
+ * 只做「取/存」，不做「列表/删除」—— 各模块存的都是**整个数组一起存的**东西
+ * （连接档案、工作目录列表），拆成细粒度的增删改反而会引入中间状态。
+ *
+ * 接口和实现放在同一个文件里：它没有第二个实现，也不该有 ——
+ * 平台差异已经被下面那两个实现吃掉了，上层看到的就该是这一份。
+ */
+export interface KeyValueStore {
+  get<T>(key: string): Promise<T | null>;
+  set(key: string, value: unknown): Promise<void>;
+}
 
 type StoreModule = typeof import('@tauri-apps/plugin-store');
 type PluginStore = Awaited<ReturnType<StoreModule['load']>>;
