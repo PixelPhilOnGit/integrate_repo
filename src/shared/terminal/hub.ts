@@ -32,6 +32,7 @@
  * 它描述的本来就是「被 hub 塞进来的那些节点」长什么样，和哪个模块无关。
  */
 
+import { createCoalescer, type Coalescer } from './coalesce';
 import { clampSize, hasLayout, sameSize, type TermSize } from './fit';
 
 type XtermModule = typeof import('@xterm/xterm');
@@ -81,6 +82,14 @@ export interface HubHooks {
   onResize: (sessionId: string, cols: number, rows: number) => void;
 }
 
+/**
+ * 尺寸变化的合并窗口。
+ *
+ * 100ms 是权衡出来的：人眼察觉不到「拖完手一停才对齐」，而重排次数从每秒
+ * 几十次降到十次以内。再长一点（200ms+）拖动时会明显觉得画面跟不上手。
+ */
+const RESIZE_COALESCE_MS = 100;
+
 export interface TerminalHubOptions {
   /**
    * 终端容器的 `data-testid` 前缀，结果是 `<前缀>-<会话 id>`。
@@ -105,6 +114,15 @@ export class TerminalHub {
    * 节点删掉，挂在里面的话切模块就跟着没了。
    */
   private holder: HTMLDivElement | null = null;
+
+  /**
+   * 每一路的尺寸变化都先合并再发。
+   *
+   * 拖动分隔条的时候尺寸每帧都在变，而**连续 resize 会让 ConPTY 损坏输出**
+   * （wezterm 作者的原话 + Windows Terminal #15935）。合并之后拖动期间几乎不发，
+   * 手一停发最终尺寸 —— 详见 `coalesce.ts`。
+   */
+  private resizers = new Map<string, Coalescer<TermSize>>();
 
   /**
    * 两个出口由 store 在构造时接上。
@@ -253,7 +271,19 @@ export class TerminalHub {
     if (sameSize(proposed, entry.size)) return;
 
     entry.size = proposed;
-    this.onResize(sessionId, proposed.cols, proposed.rows);
+    this.resizerFor(sessionId).push(proposed);
+  }
+
+  /** 每一路一个合并器，用的时候才建 */
+  private resizerFor(sessionId: string): Coalescer<TermSize> {
+    let c = this.resizers.get(sessionId);
+    if (c === undefined) {
+      c = createCoalescer(RESIZE_COALESCE_MS, (size) => {
+        this.onResize(sessionId, size.cols, size.rows);
+      });
+      this.resizers.set(sessionId, c);
+    }
+    return c;
   }
 
   /** 远端来的字节 */
@@ -284,6 +314,10 @@ export class TerminalHub {
 
     this.entries.delete(sessionId);
     entry.disposed = true;
+
+    // 挂着的那个尺寸别再发了：会话已经没了
+    this.resizers.get(sessionId)?.cancel();
+    this.resizers.delete(sessionId);
 
     if (entry.frame !== null) cancelAnimationFrame(entry.frame);
     entry.observer?.disconnect();

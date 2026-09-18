@@ -62,14 +62,28 @@
 
 | 来源 | 能给什么 | 说明 |
 |---|---|---|
-| Claude Code 的 hooks | 工作 / 需要你 / 完成 | 最准 |
-| Codex 的 `notify` | **只有「完成」** | 官方只支持回合结束一个事件 |
-| 终端通知序列（OSC 9 / 777） | 至少「完成」，可能「需要你」 | 零配置，Codex 默认走这条 |
-| 用户在窗格里的键盘 | 「需要你」→ 「正在工作」 | 用户的动作，不是猜测 |
+| Claude Code 的 hooks | 工作 / 需要你 / 完成 | 最准。**等授权要用 `PermissionRequest`**，见下 |
+| Codex 的 hooks | 同上 | 它有一套和 Claude 对齐的 hooks 引擎（源码里就叫 `ClaudeHooksEngine`） |
+| Codex 的 `notify` | **只有「完成」** | 只有 `agent-turn-complete` 一个事件，是退路 |
+| 终端通知序列（OSC 9 / 777） | 至少「完成」 | 零配置那条路。⚠️ 别写「Codex 默认会发」，没证实 |
+| 用户在窗格里的键盘 | 「需要你」→「正在工作」 | 用户的动作，不是猜测 |
 | 进程退出 | 终态 | pty 报的，比脚本可靠 |
 
-**Codex 的「需要你」在 v1 拿不到官方信号**（它没有 hook 机制），靠 OSC 兜底。
-拿不到就是拿不到，代码里没有编一个假的「等待中」出来。
+**要命的那条**：「等授权」不能用 `Notification`。官方文档写明它要等约 6 秒、
+而且**只在你看起来离开了终端时才发**；即时的信号是 **`PermissionRequest`**
+（权限弹窗一出现就触发），官方自己就让你改用后者。
+
+另外两条配置上的坑（都查过文档，不是猜的）：
+- **`UserPromptSubmit` / `Stop` 不支持 matcher**（官方表格原文 no matcher support），
+  给它们写 matcher 是死配置：不报错也不生效。
+- **hook 一律用 exec form**（handler 里写 `args`）：不写 `args` 是 shell form，
+  命令串要过 shell 分词，而 Windows 上默认 shell 是 bash（装了 Git Bash）否则
+  powershell —— 一条 `C:\路径\hook.cmd waiting` 交给 bash 会很难受。
+  写了 `args` 就直接 spawn、不过 shell、不做分词，`shell` 字段也被忽略，
+  正好把「用户装没装 Git Bash」这个变量消掉。
+
+**Codex 的 hooks 要用户去 `/hooks` 审阅一次**（信任按 hook 定义的**哈希**记账，
+我们改一次它就得重审一次 —— 所以生成的内容要稳定，别塞时间戳）。
 
 ---
 
@@ -87,8 +101,8 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 
 ```bash
 npm run typecheck    # 类型检查
-npm test             # 760 个纯逻辑单测（秒级）
-npm run test:e2e     # 146 个端到端测试（真实 Chromium）
+npm test             # 792 个纯逻辑单测（秒级）
+npm run test:e2e     # 147 个端到端测试（真实 Chromium）
 cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 182 个 Rust 测试
 ```
 
@@ -164,7 +178,7 @@ export const MODULES = [
 ];
 ```
 
-接口在 `src/shell/types.ts` 的 `Module`。**四个真实模块都是这么加上去的**。
+接口在 `src/shell/types.ts` 的 `Module`。**五个真实模块都是这么加上去的**。
 
 > ⚠️ 注册表顺序 = 图标栏顺序 = `Ctrl+1..6` 的顺序，**是面向用户的**。
 > 另外 `main.tsx` 的 `defaultExtension` 取 `MODULES[0]`，顺序图必须留在第一位。
@@ -245,8 +259,13 @@ export const MODULES = [
 
 ### OSC 扫描器是**旁观者**，一个字节都不吃
 
-终端通知序列（`OSC 9` / `OSC 777`）是零配置那一路 —— Codex 默认的
-`tui.notifications` 就走它。扫描器**必须只观察、不删字节**：OSC 这个命名空间里
+终端通知序列（`OSC 9` / `OSC 777`）是零配置那一路。⚠️ 别在文档里写「Codex 默认会发
+OSC」—— 那个说法（配置键 `tui.notifications`）**没证实**：Codex 0.149.0 的二进制里
+grep 不到，官方能核对的只有 `notify`。二手资料里到处都是，但别当事实。
+（Claude Code 那边是有文档的：hook 可以返回 `terminalSequence` 代为发射，
+白名单是 OSC 0/1/2/9/99/777 和裸 BEL，而且**在 Windows 上可用**。）
+
+扫描器**必须只观察、不删字节**：OSC 这个命名空间里
 还有设置窗口标题（0/2）、超链接（8）、终端能力上报，顺手把认出来的序列删掉会把
 它们一起弄坏，而且坏法很隐蔽（标题不更新了，没人会想到是通知扫描干的）。
 
@@ -478,7 +497,11 @@ tauri-plugin-store 用的是 `app_data_dir`）。那份 `*.json` 可以直接预
 - [ ] 装上集成钩子之后，新开一个 Claude Code：随便让它干一件事，
       侧栏状态点应该从「空闲」变成「正在工作」，干完变「已完成」
 - [ ] 让它问你要授权（比如让它执行一条命令），应该变「需要你」并进队列
-- [ ] Codex 那边**至少**「已完成」要能到（官方只有回合完成一个事件）
+- [ ] Codex 那边三态都要能到（它走 hooks，不是 `notify`），
+      首次要在它的 `/hooks` 里审阅信任一次
+- [ ] **hook 会不会闪出黑框**：有人报过 Windows 上 hook 进程会弹一下控制台窗口
+      （claude-code #64688）。如果闪，那是个真烦人的问题 —— 记下来，看能不能
+      在包装脚本那边缓解
 - [ ] 集成向导点「启用」之后再点「撤销」，`.claude/settings.json` 能还原
       （改之前会备份，备份文件就在旁边）
 
