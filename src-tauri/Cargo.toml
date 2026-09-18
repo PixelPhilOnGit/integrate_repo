@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Devtoolkit —— 开发者工作台：顺序图 / 数据库 / SSH"
 authors = ["Devtoolkit"]
 edition = "2021"

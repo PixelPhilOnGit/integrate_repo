@@ -1,14 +1,16 @@
 [package]
 name = "devtoolkit-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的纯逻辑内核：工作区路径安全校验与文件操作（不依赖 Tauri，可独立快速测试）"
 license = "MIT"
 
 [dependencies]
+
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 # 只用来断言 FileNode 的 JSON 字段名，前端 TS 类型是照着这个写的。
+
 serde_json = "1"
