@@ -280,6 +280,28 @@ test('集成向导：看得见要改哪个文件、能启用、能撤销', async
   await expect(page.getByTestId('agent-int-state-claude')).toHaveText('未启用');
 });
 
+test('配置读不了的时候：说清原因，而且不给「启用」按钮', async ({ page }) => {
+  // 这是「出事的时候用户唯一能看到的东西」：文件不是合法 JSON 时我们拒绝写入
+  // （不能把人家配置搞坏），但必须告诉他为什么。
+  // 浏览器假实现里专门留了个开关走这条路 —— 不留的话这段界面永远走不到，
+  // 也就是一段没被测过的死代码
+  await page.evaluate(() => {
+    (window as unknown as { __pretendIntegrationUnusable?: (v: boolean) => void })
+      .__pretendIntegrationUnusable?.(true);
+  });
+
+  await newSession(page);
+  await page.getByTestId('agent-int-open-claude').click();
+
+  await expect(page.getByTestId('agent-int-unusable')).toBeVisible();
+  await expect(page.getByTestId('agent-int-unusable')).toContainText('不是合法的 JSON');
+  await expect(page.getByTestId('agent-int-apply')).toHaveCount(0);
+  await expect(page.getByTestId('agent-int-revert')).toHaveCount(0);
+
+  await page.getByTestId('agent-int-close').click();
+  await expect(page.getByTestId('agent-int-state-claude')).toHaveText('配置文件读不了');
+});
+
 test('工作目录的会话数、展开收起、双击改名', async ({ page }) => {
   const id = await newSession(page);
   const wsHead = page.locator('[data-testid^="agent-ws-head-"]').first();

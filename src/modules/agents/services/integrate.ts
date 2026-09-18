@@ -54,20 +54,54 @@ const FAKE_PATH: Record<IntegrationTarget, string> = {
   codex: '[浏览器模式] ~/.codex/config.toml',
 };
 
+function unusablePreview(state: IntegrationState, target: IntegrationTarget): string {
+  if (state === 'unusable') {
+    return `${FAKE_PATH[target]} 不是合法的 JSON（第 3 行少了逗号），我们不打算猜它的结构。`;
+  }
+  return state === 'missing' || state === 'absent' ? PREVIEW[target] : '（已启用）';
+}
+
+/**
+ * 向导里显示给用户的「会改成什么样」。
+ *
+ * ⚠️ 这三行**要和 Rust 侧真正写下去的东西一字不差地对上**，否则用户是照着
+ * 一份假清单点「启用」的 —— 而这个弹窗存在的全部意义就是「别藏着掖着」。
+ * 真实现见 `devtoolkit-agents/src/integration.rs`。
+ */
 const PREVIEW: Record<IntegrationTarget, string> = {
   claude: [
-    'hooks.UserPromptSubmit → 调包装脚本（状态变「正在工作」）',
-    'hooks.Notification     → 调包装脚本（状态变「需要你」）',
-    'hooks.Stop             → 调包装脚本（状态变「已完成」）',
+    'hooks.UserPromptSubmit → 包装脚本 working（开始干活了）',
+    'hooks.PermissionRequest → 包装脚本 waiting（**在等你授权**，弹窗一出现就报）',
+    'hooks.Notification      → 包装脚本 waiting（兜底：闲了 60 秒）',
+    'hooks.Stop              → 包装脚本 done（这一回合干完了）',
   ].join('\n'),
-  codex: 'notify = ["<包装脚本>", "done"]   # 回合结束时跑一次',
+  codex: [
+    '[hooks] UserPromptSubmit / PermissionRequest / Stop → 同一个包装脚本',
+    '（Codex 的 notify 只有「回合完成」一个事件，拿不到「在等你授权」，所以走它的 hooks）',
+  ].join('\n'),
 };
+
+/**
+ * 浏览器里假装「配置文件读不了」。
+ *
+ * 真实现里这是个真实分支：用户的 `settings.json` 有语法错误、或者被别的工具
+ * 改成了不是 JSON 的东西。这时候我们**必须拒绝写入**（而不是把人家配置搞坏），
+ * 界面上要显示原因、并且不给「启用」按钮。
+ *
+ * 没有这个开关的话，那段界面在浏览器里永远走不到 —— 也就是**没被测过的死代码**，
+ * 而它恰恰是「出事的时候用户唯一能看到的东西」。
+ */
+let pretendUnusable = false;
+
+export function __setPretendUnusable(value: boolean): void {
+  pretendUnusable = value;
+}
 
 export function createWebIntegrationClient(): IntegrationClient {
   /**
    * 内存里的「配置文件」。
    *
-   * `null` 表示文件不存在（初始状态是 `missing`）—— 这样界面上的
+   * `exists` 为 false 表示文件不存在（初始状态是 `missing`）—— 这样界面上的
    * 「还没建过配置 → 启用 → 已启用 → 撤销 → 又没了」整条路都能在
    * 浏览器里被点一遍
    */
@@ -77,6 +111,7 @@ export function createWebIntegrationClient(): IntegrationClient {
   };
 
   const stateOf = (target: IntegrationTarget): IntegrationState => {
+    if (pretendUnusable) return 'unusable';
     const f = files[target];
     if (!f.exists) return 'missing';
     return f.installed ? 'installed' : 'absent';
@@ -89,11 +124,14 @@ export function createWebIntegrationClient(): IntegrationClient {
         target,
         path: FAKE_PATH[target],
         state,
-        preview: state === 'missing' || state === 'absent' ? PREVIEW[target] : '（已启用）',
+        preview: unusablePreview(state, target),
       };
     },
 
     async apply(target: IntegrationTarget): Promise<IntegrationOutcome> {
+      // 读不了就拒绝写 —— 和真实现同一条规矩（别把用户的配置搞坏）
+      if (pretendUnusable) throw new Error('配置文件不是合法的 JSON，没有动它');
+
       const backupPath = files[target].exists ? `${FAKE_PATH[target]}.bak` : null;
       files[target] = { exists: true, installed: true };
       return { target, path: FAKE_PATH[target], backupPath, preview: PREVIEW[target] };
@@ -106,4 +144,15 @@ export function createWebIntegrationClient(): IntegrationClient {
       return { target, path: FAKE_PATH[target], backupPath: null, preview: '（已撤销）' };
     },
   };
+}
+
+/**
+ * 给 Playwright 用的钩子（只在开发构建里挂）。
+ *
+ * 键名故意长得刺眼：它是**测试开关**，不是运行时配置 ——
+ * 生产产物里没有这个东西。
+ */
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  (window as unknown as { __pretendIntegrationUnusable?: (v: boolean) => void })
+    .__pretendIntegrationUnusable = __setPretendUnusable;
 }
