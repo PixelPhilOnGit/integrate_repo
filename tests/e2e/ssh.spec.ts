@@ -66,7 +66,7 @@ async function termText(page: Page): Promise<string> {
  * 整个没被验证过，而那正是终端最容易出错的一截。
  */
 async function type(page: Page, line: string): Promise<void> {
-  await page.locator('.rd-ssh-term textarea').first().focus();
+  await page.locator('[data-testid="ssh-term-host"] [data-testid^="ssh-term-"] textarea').focus();
   await page.keyboard.type(line);
   await page.keyboard.press('Enter');
 }
@@ -163,7 +163,8 @@ test('打错的命令报错但**不弹外壳错误条**', async ({ page }) => {
 test('退格和 Ctrl+C 都是真的行规程在起作用', async ({ page }) => {
   await connectAndTrust(page);
 
-  const textarea = page.locator('.rd-ssh-term textarea').first();
+  // 同 `type()`：必须限定在宿主里，屏幕外存放点里那些容器也带着同样的 testid
+  const textarea = page.locator('[data-testid="ssh-term-host"] [data-testid^="ssh-term-"] textarea');
   await textarea.focus();
   await page.keyboard.type('wrogn');
   await page.keyboard.press('Backspace');

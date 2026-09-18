@@ -217,12 +217,6 @@ export const DEFAULT_TERM = 'xterm-256color';
 /** SSH 默认端口 */
 export const DEFAULT_SSH_PORT = 22;
 
-/** PTY 尺寸的兜底边界，见 `core/fit.ts` */
-export const MIN_COLS = 20;
-export const MIN_ROWS = 5;
-export const MAX_COLS = 1000;
-export const MAX_ROWS = 500;
-
 /** 认证方式的中文名 */
 export const AUTH_LABEL: Record<SshAuthKind, string> = {
   password: '密码',

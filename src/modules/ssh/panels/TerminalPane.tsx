@@ -3,8 +3,9 @@
  *
  * # 这个组件**不创建终端**
  *
- * 终端实例归 `core/terminalHub.ts` 管，这里只做两件事：给 hub 一个宿主节点
- * （`<div ref>`），以及在切换标签时告诉 hub「挂这个 / 收起上一个」。
+ * 终端实例归 `core/terminalHub.ts`（真正干活的是 `shared/terminal/hub.ts`）管，
+ * 这里只做两件事：给 hub 一个宿主节点（`<div ref>`），
+ * 以及在切换标签时告诉 hub「挂这个 / 收起上一个」。
  *
  * 之所以不在这里 `new Terminal()`：切模块时 React 会把这个组件整个卸载，
  * 而终端**不能跟着销毁** —— 会话还在跑，画面也得留着。所以实例必须活在一个
@@ -62,7 +63,7 @@ export function TerminalPane({ state, store }: Props): ReactNode {
         进来的，宿主一旦被 React 摘掉，容器就跟着离开 DOM —— 虽然随后会被
         挪到存放点，但中间那一小段它没有布局，xterm 量出来的尺寸是垃圾
       */}
-      <div className="rd-ssh-term-host" ref={hostRef} data-testid="ssh-term-host" />
+      <div className="rd-term-host" ref={hostRef} data-testid="ssh-term-host" />
 
       {active === null && (
         <div className="rd-ssh-empty rd-empty">

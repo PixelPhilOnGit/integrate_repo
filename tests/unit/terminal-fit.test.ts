@@ -1,5 +1,7 @@
+// 终端尺寸的兜底逻辑。抽到 shared 之后两个模块共用（SSH / 智能体会话），
+// 所以这份测试也不属于任何单个模块。
 import { describe, expect, it } from 'vitest';
-import { clampSize, formatSize, hasLayout, sameSize } from '../../src/modules/ssh/core/fit';
+import { clampSize, formatSize, hasLayout, sameSize } from '../../src/shared/terminal/fit';
 
 describe('clampSize', () => {
   it('正常值原样通过', () => {

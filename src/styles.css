@@ -1376,9 +1376,10 @@ textarea:focus {
  * 只追加，不动上面任何已有规则 —— 那些是别的模块在用的。
  *
  * 这一节里有两类是别的模块没有的：
- *   - **终端容器**（`.rd-ssh-term*` / `.rd-ssh-holder`）。终端实例由
- *     `modules/ssh/core/terminalHub.ts` 直接 appendChild 进来，不经过 React，
- *     所以这里写的是「它被塞进来的那些节点」长什么样。
+ *   - **终端容器**（`.rd-term*`）。终端实例由 `shared/terminal/hub.ts` 直接
+ *     appendChild 进来，不经过 React，所以这里写的是「它被塞进来的那些节点」
+ *     长什么样。**这份样式是两个模块共用的**（SSH 和智能体会话），
+ *     所以类名不带模块前缀。
  *   - **模态层**（`.rd-modal*`）。TOFU 首次信任的弹窗是第一个真正需要盖住
  *     整个界面的东西 —— 右键菜单（ContextMenu）只有几十像素大，
  *     不是一回事。
@@ -1481,7 +1482,7 @@ textarea:focus {
  * clientHeight，不给死高度的话它会随着终端内容一起长高，于是每次都量到
  * 一个更大的值，fit 就一路涨下去。
  */
-.rd-ssh-term-host {
+.rd-term-host {
   flex: 1;
   min-height: 0;
   min-width: 0;
@@ -1491,7 +1492,7 @@ textarea:focus {
 }
 
 /* 终端容器：由 hub 创建并 appendChild 进来。跟着宿主铺满 */
-.rd-ssh-term {
+.rd-term {
   width: 100%;
   height: 100%;
 }
@@ -1503,7 +1504,7 @@ textarea:focus {
  * xterm 量不到尺寸，`fit()` 会算出垃圾值（历史上踩过：远端按 2 列换行）。
  * 所以用「移出视口但保持有尺寸」的写法：fixed 定位 + 固定宽高。
  */
-.rd-ssh-holder {
+.rd-term-holder {
   position: fixed;
   left: -20000px;
   top: 0;
