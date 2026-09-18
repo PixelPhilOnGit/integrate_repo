@@ -17,11 +17,10 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # 路径安全 / 文件操作 / Redis 那几套逻辑都是纯 Rust 的
-  # （devtoolkit-core 和 devtoolkit-redis 都不依赖 tauri），
+  # 这几套逻辑都是纯 Rust 的（core / redis / ssh 都不依赖 tauri），
   # 所以能在几秒内跑完，不用等 WebKit 装好，也不用等前端构建。
   test:
-    name: 单元测试（devtoolkit-core + devtoolkit-redis）
+    name: 单元测试（core + redis + ssh）
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
