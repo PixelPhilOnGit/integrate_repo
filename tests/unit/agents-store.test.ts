@@ -1019,6 +1019,36 @@ describe('启动参数（全局一份）', () => {
     expect(h.store.getSnapshot().launchArgs).toEqual({ claude: '--x', codex: '' });
   });
 
+  it('⚠️ 填了 Git Bash 路径就交给 claude 那个环境变量', async () => {
+    // 老版 claude 在 Windows 上必须要它；用户机器上的 Git 可能装在 PATH 之外
+    // （真机上就是：D:\software\git\install\Git），所以这个框是那条出路
+    const h = make();
+    const ws = await withWorkspace(h);
+    h.store.setGitBashPath('  D:\\software\\git\\install\\Git\\bin\\bash.exe  ');
+
+    await h.store.createSession(ws, 'claude');
+    expect(h.client.opened[0]!.env['CLAUDE_CODE_GIT_BASH_PATH']).toBe(
+      'D:\\software\\git\\install\\Git\\bin\\bash.exe',
+    );
+  });
+
+  it('留空就**不传**那个变量（让 Rust 自己找，而不是传个空串过去）', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    await h.store.createSession(ws, 'claude');
+    expect('CLAUDE_CODE_GIT_BASH_PATH' in h.client.opened[0]!.env).toBe(false);
+  });
+
+  it('路径存下来，下次启动读得回来', async () => {
+    localStorage.setItem(
+      'devtoolkit.agents.v1',
+      JSON.stringify({ git_bash: 'D:\\tools\\Git\\bin\\bash.exe' }),
+    );
+    const h = make();
+    await h.store.init();
+    expect(h.store.getSnapshot().gitBashPath).toBe('D:\\tools\\Git\\bin\\bash.exe');
+  });
+
   it('⚠️ 改参数不影响已经在跑的会话 —— 命令行在进程起来那一刻就定死了', async () => {
     const h = make();
     const ws = await withWorkspace(h);

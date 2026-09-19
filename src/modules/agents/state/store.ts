@@ -148,6 +148,15 @@ export interface AgentsState {
    * 「我明明设过」。
    */
   launchArgs: LaunchArgs;
+  /**
+   * Windows 上给 claude 用的 Git Bash 路径（`bin\bash.exe`）。
+   *
+   * **留空 = 让 Rust 那边自己找**（先问注册表、再从 PATH 里的 git.exe 上溯、
+   * 再看几个标准位置）。填了就是用户说了算 —— 他机器上的 Git 可能装在
+   * 任何地方（比如 `D:\software\git\install\Git`，压根不在 PATH 里），
+   * 那种情况下自动找可能扑空，而这个框是那条出路。
+   */
+  gitBashPath: string;
 }
 
 export class AgentsStore {
@@ -167,6 +176,7 @@ export class AgentsStore {
     integration: { claude: null, codex: null },
     integrating: false,
     launchArgs: NO_LAUNCH_ARGS,
+    gitBashPath: '',
   };
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
@@ -229,9 +239,11 @@ export class AgentsStore {
     const workspaces = await this.loadWorkspaces();
     // 启动参数也一起读：**新建会话时要用它拼命令**，晚读一步就可能漏掉
     const launchArgs = await this.loadLaunchArgs();
+    const gitBashPath = await this.loadGitBashPath();
     this.patch({
       workspaces,
       launchArgs,
+      gitBashPath,
       // 起来就显示第一个窗口：一个目录都没有的话就是空的
       activeWorkspaceId: workspaces[0]?.id ?? null,
     });
@@ -274,6 +286,25 @@ export class AgentsStore {
       out.push({ id, path, name: typeof name === 'string' && name !== '' ? name : path });
     }
     return out;
+  }
+
+  /** 读 Git Bash 路径（就一个字符串，读不出来就当没填） */
+  private async loadGitBashPath(): Promise<string> {
+    const raw = await this.kv.get<unknown>('git_bash');
+    return typeof raw === 'string' ? raw : '';
+  }
+
+  /**
+   * 改 Git Bash 路径。**只影响之后新建的会话** —— 已经在跑的进程改不了。
+   *
+   * 留空是**合法值**（= 让 Rust 自己找），所以这里不校验「必须存在」：
+   * 路径对不对由 Rust 那边开窗格时验证（它会看文件在不在），错了的表现是
+   * claude 报它自己那句错，用户回来改这个框就行。
+   */
+  setGitBashPath(path: string): void {
+    const trimmed = path.trim();
+    this.patch({ gitBashPath: trimmed });
+    void this.kv.set('git_bash', trimmed).catch(() => undefined);
   }
 
   /** 读启动参数。**按不可信输入处理**：手改过的、旧版本的都要能读 */
@@ -704,6 +735,11 @@ export class AgentsStore {
       env: {
         DEVTOOLKIT_PANE_ID: session.id,
         DEVTOOLKIT_EVENT_DIR: eventsDir,
+        // 填了才传：留空时**不要**传一个空串过去 —— Rust 那边「有值」和
+        // 「空值」是两件事（空的会被当成没设，但显式传空更容易让人误会）
+        ...(this.state.gitBashPath === ''
+          ? {}
+          : { CLAUDE_CODE_GIT_BASH_PATH: this.state.gitBashPath }),
       },
       onEvent: (event) => this.onPtyEvent(session.id, event),
     });

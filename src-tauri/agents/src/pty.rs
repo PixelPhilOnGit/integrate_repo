@@ -45,6 +45,8 @@
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -212,6 +214,153 @@ fn resolve_program(program: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------- Git Bash
+
+/// 找 Git Bash 给 claude 用（`CLAUDE_CODE_GIT_BASH_PATH`）。
+///
+/// # 为什么又把它加回来了（以及和上次有什么不同）
+///
+/// 上次加过一版，只从 PATH 里的 `git.exe` 上溯 —— 结果在真机上**什么都没找到**：
+/// 用户的 Git 装在 `D:\software\git\install\Git`（不在 PATH 里），所以上溯无从谈起，
+/// 而 Claude Code 又只认 `<Git>\bin\bash.exe`（`git-bash.exe` 是那个开窗口的
+/// 启动器，不是它要的东西）。用户的原话是「你应该要有让人配置 git bash 的配置，
+/// 或者你自己要能找」—— 这一版两条都做：
+///
+/// 1. **用户填的优先**（前端那个「Git Bash 路径」设置，走调用方 env 进来）；
+/// 2. 没填就自己找，而且**先问注册表** —— Git for Windows 的安装器会写
+///    `SOFTWARE\GitForWindows\InstallPath`，那正是「装了但不在 PATH 里」的答案；
+/// 3. 候选**逐个验证**（存在 + 文件名就是 `bash.exe`），一个都不成立就什么都不设
+///    （设一个 claude 不接受的路径，比不设糟得多：它会连启动都不肯）。
+///
+/// ⚠️ 上次翻车的另一半是我**猜**了一个路径塞过去。现在的规矩是：
+/// 只设**验证过**的路径，用户的设置永远优先，找不到就老实不设。
+#[cfg(windows)]
+fn git_bash_for_claude(cfg: &PtyConfig) -> Option<PathBuf> {
+    // 1. 用户填的（前端传进来的那个键）
+    if let Some(value) = cfg.env.get(GIT_BASH_ENV) {
+        if !value.trim().is_empty() {
+            return None; // 他给了，就一个字都不动（下面由调用方那轮 env 原样带下去）
+        }
+    }
+    // 父进程环境里已经有（用户自己设过系统变量）也一个字都不动
+    if std::env::var_os(GIT_BASH_ENV).is_some_and(|v| !v.to_string_lossy().trim().is_empty()) {
+        return None;
+    }
+    // 2. 自己找
+    find_git_bash()
+}
+
+#[cfg(windows)]
+const GIT_BASH_ENV: &str = "CLAUDE_CODE_GIT_BASH_PATH";
+
+/// 按可信度找一遍。找到第一个**验证通过**的就返回。
+#[cfg(windows)]
+fn find_git_bash() -> Option<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+
+    // ① 注册表：装了但不在 PATH 里的情况靠它（用户这台就是）
+    if let Some(install) = git_install_from_registry() {
+        roots.push(PathBuf::from(install));
+    }
+    // ② PATH 里的 git.exe 上溯（正常安装、而且加了 PATH 的情况）
+    if let Some(git) = resolve_program("git.exe") {
+        let mut current = Path::new(&git).parent();
+        for _ in 0..3 {
+            let Some(dir) = current else { break };
+            if dir.as_os_str().is_empty() || dir.parent().is_none() {
+                break;
+            }
+            roots.push(dir.to_path_buf());
+            current = dir.parent();
+        }
+    }
+    // ③ 几个标准位置（注册表读不到时的兜底）
+    for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+        if let Ok(base) = std::env::var(key) {
+            let mut dir = PathBuf::from(base);
+            if key == "LOCALAPPDATA" {
+                dir.push("Programs");
+            }
+            roots.push(dir.join("Git"));
+        }
+    }
+
+    // 每个根试两个位置：`bin\bash.exe` 是包装器，`usr\bin\bash.exe` 是本体 ——
+    // 有些安装（精简的）只有后者
+    for root in roots {
+        for candidate in [
+            root.join("bin").join("bash.exe"),
+            root.join("usr").join("bin").join("bash.exe"),
+        ] {
+            if is_usable_bash(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// 这个候选能不能交给 claude：**存在 + 文件名就是 bash.exe**。
+///
+/// 名字必须对：`git-bash.exe`（Git 根目录那个启动器）长得像但不是 ——
+/// 交给 claude 它会判定「不是 bash/sh 二进制」，然后退回自动探测，
+/// 等于白给（而且它已经以为我们给过答案了）。
+#[cfg(windows)]
+fn is_usable_bash(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    name == "bash.exe" && path.is_file()
+}
+
+/// 问注册表 Git 装在哪。
+///
+/// # 为什么走 `reg query` 而不是直接调注册表 API
+///
+/// 这段只能在 Windows 上跑，而手写 `RegQueryValueExW` 的 unsafe **没法在开发机
+/// （Linux）上验一遍** —— 缓冲区大小、类型判断、句柄释放，任何一处写错都不是
+/// 「拿不到然后走兜底」，而是**把应用带崩**。调 `reg` 最多是拿不到。
+///
+/// 结果缓存：一次会话里 Git 不会挪窝，而每个窗格都去起一次进程太浪费。
+/// ⚠️ 路径里有中文时 `reg` 的输出在中文 Windows 上是 GBK，会解成乱码 ——
+/// 那种情况下后面的 `is_file()` 验证会挡住它，退化成「找不到」（安全的一边）。
+#[cfg(windows)]
+fn git_install_from_registry() -> Option<String> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Option<String>> = OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            for hive in [r"HKLM\SOFTWARE\GitForWindows", r"HKCU\SOFTWARE\GitForWindows"] {
+                let Ok(out) = std::process::Command::new("reg")
+                    .args(["query", hive, "/v", "InstallPath"])
+                    .output()
+                else {
+                    continue;
+                };
+                if !out.status.success() {
+                    continue;
+                }
+                let text = String::from_utf8_lossy(&out.stdout);
+                // 形如：`    InstallPath    REG_SZ    D:\software\git\install\Git\`
+                for line in text.lines() {
+                    let mut parts = line.split_whitespace();
+                    if parts.next() != Some("InstallPath") {
+                        continue;
+                    }
+                    // REG_SZ 之后剩下的**整段**都是值（路径里有空格也吃得下）
+                    let rest = line.splitn(2, "REG_SZ").nth(1)?.trim();
+                    if !rest.is_empty() {
+                        return Some(rest.to_string());
+                    }
+                }
+            }
+            None
+        })
+        .clone()
 }
 
 /// 从 pane 里送出来的东西。**这个枚举就是 IPC 契约**（见 `contract` 测试）。
@@ -559,17 +708,19 @@ pub fn spawn(id: &str, cfg: &PtyConfig, generation: u64) -> Result<OpenedPty, Ag
         cmd.env("COLORTERM", "truecolor");
     }
 
-    // ⚠️ **这里刻意不碰 `CLAUDE_CODE_GIT_BASH_PATH`。**
-    //
-    // 曾经探测过 Git Bash 并替用户塞给 claude（想治好「requires git-bash」），
-    // 结果更糟：**猜出来的路径一旦不被 claude 接受，它连启动都不肯**
-    // （`unable to find CLAUDE_CODE_GIT_BASH_PATH path ...`）—— 用户从
-    // 「窗格里跑不起来」变成「claude 本身起不来」，而后者更难查。
-    //
-    // 现在的要求已经放宽成「Git for Windows **或** PowerShell」，新版 claude
-    // 自己有探测逻辑；用户设了这个变量我们也原样传下去（那是他的环境）。
-    // 猜路径这件事不该我们来干 —— 见 HANDOFF「踩过的坑」。
+    // Git Bash：老版 claude 在 Windows 上必须要它（要的是 `<Git>\bin\bash.exe`，
+    // 不是 Git 根目录那个开窗口的 `git-bash.exe`）。**只在两种情况下给**：
+    // 用户在前端填了路径（走下面那轮调用方 env），或者我们**验证过**某个候选
+    // 确实存在且文件名就是 bash.exe。都找不到就什么都不设 —— 见
+    // [`git_bash_for_claude`]，那里也写了上一版为什么会翻车。
+    #[cfg(windows)]
+    {
+        if let Some(bash) = git_bash_for_claude(cfg) {
+            cmd.env(GIT_BASH_ENV, &bash);
+        }
+    }
 
+    // 调用方传进来的环境变量（`DEVTOOLKIT_PANE_ID` / `DEVTOOLKIT_EVENT_DIR`）。
     // 调用方传进来的环境变量（`DEVTOOLKIT_PANE_ID` / `DEVTOOLKIT_EVENT_DIR`）。
     //
     // ⚠️ 这两个值**不是从前端来的**：`agent_commands.rs` 用会话 id 和它自己算出来的

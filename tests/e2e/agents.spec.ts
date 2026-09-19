@@ -572,3 +572,26 @@ test('侧栏搜索：按目录名过滤；搜会话名时那个窗口自动撑�
   await page.getByTestId('agents-ws-search-clear').click();
   await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
 });
+
+
+test('Git Bash 路径：填了就存下来，下次打开还在', async ({ page }) => {
+  // 老版 claude 在 Windows 上必须要 Git Bash，而用户的 Git 可能装在 PATH 之外
+  // （真机上就是：D:\software\git\install\Git）。这个框是那条出路。
+  await newSession(page);
+  const wsId = await firstWorkspaceId(page);
+
+  await page.getByTestId(`agent-new-session-${wsId}`).click();
+  await page.getByTestId('agent-new-args').click();
+  await page.getByTestId('agent-args-gitbash').fill('D:\\software\\git\\install\\Git\\bin\\bash.exe');
+  await page.getByTestId('agent-args-save').click();
+
+  // 回到数量那一页，再进来看看 —— 值该还在
+  await expect(page.getByTestId('agent-new-dialog')).toBeVisible();
+  await page.getByTestId('agent-new-args').click();
+  await expect(page.getByTestId('agent-args-gitbash')).toHaveValue(
+    'D:\\software\\git\\install\\Git\\bin\\bash.exe',
+  );
+
+  // 填了之后给一句「会原样交给 claude」的提示（路径对不对由 claude 说了算）
+  await expect(page.getByTestId('agent-args-gitbash-set')).toBeVisible();
+});

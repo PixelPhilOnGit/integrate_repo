@@ -20,6 +20,7 @@
  */
 
 import { useState, type ReactNode } from 'react';
+import { platform } from '../../../shared/platform';
 import {
   KIND_LABEL,
   MAX_SESSIONS_PER_KIND,
@@ -155,10 +156,27 @@ function LaunchArgsDialog({
 }): ReactNode {
   // 先放草稿再保存：打一半就想取消是最常见的事，直接写 store 就撤不回来了
   const [draft, setDraft] = useState<LaunchArgs>({ ...state.launchArgs });
+  const [draftGitBash, setDraftGitBash] = useState(state.gitBashPath);
 
   const save = (): void => {
     store.setLaunchArgs(draft);
+    store.setGitBashPath(draftGitBash);
     onClose();
+  };
+
+  /**
+   * 「浏览…」选 bash.exe。
+   *
+   * 选不了（浏览器版、或者用户取消）就当没点 —— 手填那条路一直在，
+   * 不用为它弹什么错误。
+   */
+  const browseGitBash = async (): Promise<void> => {
+    try {
+      const picked = await platform.pickFile('选择 bash.exe');
+      if (picked !== null) setDraftGitBash(picked);
+    } catch {
+      // 见上：不打断用户
+    }
   };
 
   return (
@@ -198,6 +216,46 @@ function LaunchArgsDialog({
         <p className="rd-hint rd-muted">
           只影响之后新建的会话。已经在跑的那些改不了 —— 命令行在进程起来之后就定死了。
         </p>
+
+        {/* Windows 上老版 claude 要的 Git Bash。单独一节，因为它不是「参数」，
+            而且**找不到时是它报错**（用户得知道这儿有个地方能填） */}
+        <h3 className="rd-modal-subtitle">Windows 上的 Git Bash</h3>
+        <p className="rd-hint">
+          老版 Claude Code 在 Windows 上一定要 Git Bash（新版可以用 PowerShell，
+          那就留空）。**留空 = 自动找**：先问注册表、再看 PATH 里的 git、最后看
+          几个标准位置。装在别处（比如 D 盘的某个目录）就填在这儿。
+        </p>
+        <p className="rd-hint rd-muted">
+          ⚠️ 要填到 <code className="rd-mono">bin\bash.exe</code> —— 不是 Git 根目录
+          那个 <code className="rd-mono">git-bash.exe</code>（那是开窗口的启动器，
+          claude 不认）。
+        </p>
+
+        <label className="rd-field">
+          <span>bash.exe 路径</span>
+          <span className="rd-agent-path-row">
+            <input
+              type="text"
+              data-testid="agent-args-gitbash"
+              placeholder="留空 = 自动找，例如 D:\software\git\install\Git\bin\bash.exe"
+              value={draftGitBash}
+              onChange={(e) => setDraftGitBash(e.target.value)}
+            />
+            <button
+              type="button"
+              data-testid="agent-args-gitbash-browse"
+              onClick={() => void browseGitBash()}
+            >
+              浏览…
+            </button>
+          </span>
+        </label>
+        {draftGitBash.trim() !== '' && (
+          <p className="rd-hint" data-testid="agent-args-gitbash-set">
+            会原样交给 claude（不验证存在）—— 路径不对的话它会报
+            <code className="rd-mono"> unable to find</code>，回来改这个框就行。
+          </p>
+        )}
 
         <div className="rd-modal-actions">
           <button type="button" data-testid="agent-args-cancel" onClick={onClose}>

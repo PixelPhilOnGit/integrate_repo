@@ -2649,3 +2649,22 @@ textarea:focus {
 .rd-task-times dt {
   color: var(--muted);
 }
+
+/* 对话框里的分节标题（「启动参数」里 Git Bash 那一节） */
+.rd-modal-subtitle {
+  margin: 14px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 一行「输入框 + 旁边一个按钮」（bash.exe 路径 + 浏览…） */
+.rd-agent-path-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.rd-agent-path-row > input {
+  flex: 1;
+  min-width: 0;
+}
