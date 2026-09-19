@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "devtoolkit-agents",
@@ -968,7 +968,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-agents"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -982,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-redis"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "redis",
  "serde",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-sql"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "futures-util",
  "mysql_async",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-ssh"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.8",
@@ -1024,7 +1024,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-tasks"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "rusqlite",
  "serde",

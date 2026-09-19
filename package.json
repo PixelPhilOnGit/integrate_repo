@@ -1,6 +1,6 @@
 {
   "name": "devtoolkit",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "开发者工作台：顺序图 / 数据库 / SSH，一个桌面应用里全干",
   "type": "module",
   "private": true,
