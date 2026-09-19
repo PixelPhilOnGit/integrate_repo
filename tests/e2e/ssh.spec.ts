@@ -485,3 +485,37 @@ test('连接和信任记录会留下来', async ({ page }) => {
   await expect(second.getByTestId('ssh-trust-dialog')).toBeHidden();
   await second.close();
 });
+
+// ------------------------------------------------------------------ 侧栏搜索
+
+test('侧栏搜索：按连接名过滤；搜会话名时把那条连接自动撑开', async ({ page }) => {
+  await connectAndTrust(page);
+  await page.getByTestId('ssh-field-name').fill('生产机');
+  // 第二条连另一台机器、换一个用户名 —— 会话标题是「用户名@主机」，
+  // 光靠 IP 区分不开：`root@10.1` 是 `root@127.0.0.1` 的**子序列**
+  // （模糊匹配本来就宽松），换个用户名才是一眼分得开的
+  await connectAndTrust(page, { host: '10.1.2.3', username: 'deploy' });
+
+  await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+
+  // 搜名字：只剩那一条
+  await page.getByTestId('ssh-conn-search').fill('生产');
+  await expect(page.locator('[data-conn-name]')).toHaveCount(1);
+  await expect(page.locator('[data-conn-name="生产机"]')).toBeVisible();
+
+  // 搜**会话名**：那条连接要留下，而且自动撑开、会话行看得见 ——
+  // 否则用户搜一个会话名会得到「没有匹配的」，而其实它在折叠的连接里
+  await page.getByTestId('ssh-conn-search').fill('deploy');
+  await expect(page.locator('[data-conn-name="生产机"]')).toHaveCount(0);
+  // 限定在侧栏里：主区标签栏也挂着同样的 data-session-title（不限定会选中两个）
+  await expect(
+    page.locator('[data-testid="ssh-conn-list"] [data-session-title="deploy@10.1.2.3"]'),
+  ).toBeVisible();
+
+  await page.getByTestId('ssh-conn-search').fill('zzzz');
+  await expect(page.getByTestId('ssh-conn-nomatch')).toBeVisible();
+
+  // 清空：两条都回来（顺序还是原来的）
+  await page.getByTestId('ssh-conn-search-clear').click();
+  await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+});

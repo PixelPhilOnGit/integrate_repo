@@ -8,7 +8,9 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
+import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { fuzzyFilter } from '../../../shared/search';
 import type { ConnectionProfile, DbInfo } from '../core/types';
 import type { RedisState, RedisStore } from '../state/store';
 
@@ -26,6 +28,24 @@ interface OpenMenu {
 
 export function ConnectionTree({ state, store }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const [query, setQuery] = useState('');
+
+  /**
+   * 只按**连接行自己的文本**（名字 + 地址）过滤。
+   *
+   * 不往「库」那一层钻：库列表要连上之后才加载，而没加载的东西搜不出来 ——
+   * 那种「有时候搜得到、有时候搜不到」的行为比不搜更让人困惑。
+   * key 的过滤本来就在主区那个列表里（它有自己的输入框）。
+   *
+   * 这里用 `fuzzyFilter`（**按相关度排序**）而不是「保序过滤」：连接是一张
+   * 平铺的列表，几十上百条时把最像的排到最上面才是有用的。树形的侧栏
+   * （SSH / 智能体会话 / 文件树）反过来 —— 那里的顺序就是树的形状，不能动。
+   *
+   * ⚠️ 只过滤**显示**：`state.profiles` 一个字不动，连接状态、选中、展开
+   * 全都不受影响。
+   */
+  const visible = fuzzyFilter(state.profiles, query, (p) => [p.name, addressOf(p)]);
+  const searching = query.trim() !== '';
 
   return (
     <div className="rd-panel rd-conn-list" data-testid="conn-list">
@@ -40,11 +60,22 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         </button>
       </div>
 
+      {state.profiles.length > 0 && (
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          testId="redis-conn-search"
+          placeholder="搜连接名或地址"
+        />
+      )}
+
       {state.profiles.length === 0 ? (
         <div className="rd-empty">还没有连接，点「新建」加一个</div>
+      ) : searching && visible.length === 0 ? (
+        <NoMatch testId="redis-conn-nomatch" />
       ) : (
         <div className="rd-panel-body">
-          {state.profiles.map((profile) => (
+          {visible.map((profile) => (
             <ConnectionBranch
               key={profile.id}
               profile={profile}

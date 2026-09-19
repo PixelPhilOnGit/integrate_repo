@@ -14,7 +14,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { platform } from '../../../shared/platform';
 import type { FileNode } from '../../../shared/platform/types';
 import { basename, dirname } from '../../../shared/platform/path';
+import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { filterTree } from '../core/treeFilter';
 import type { AppStore } from '../state/store';
 import type { AppState } from '../types';
 
@@ -80,8 +82,19 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [menu, setMenu] = useState<{ x: number; y: number; node: FileNode | null } | null>(null);
+  const [query, setQuery] = useState('');
 
   const selected = state.treeSelection;
+
+  /**
+   * 搜索过滤：算出「显示哪些、撑开哪些」，**不动树本身**。
+   *
+   * ⚠️ 撑开是**临时的**（叠加在下面 `isOpen` 那一步），`expanded` 这个 Set
+   * 一个字都不动 —— 一改的话，清空搜索之后用户手动折起来的目录会自己开着，
+   * 树的形状就回不去了。
+   */
+  const filtered = filterTree(state.tree, query);
+  const searching = query.trim() !== '';
 
   /**
    * 当前文件变化时，把它所在的目录链全部展开。
@@ -170,8 +183,13 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
   };
 
   const renderNodes = (nodes: readonly FileNode[], depth: number): ReactNode =>
-    nodes.map((node) => {
-      const isOpen = expanded.has(node.path);
+    nodes
+      // 搜索时不显示的分支整个不渲染（`filtered.visible` 是空集 = 没在搜）
+      .filter((node) => !searching || filtered.visible.has(node.path))
+      .map((node) => {
+      // 搜索期间：含着命中的目录要撑开，否则命中的子孙看不见。
+      // 叠加在点击状态之上，不改那个 Set
+      const isOpen = searching ? filtered.expand.has(node.path) || expanded.has(node.path) : expanded.has(node.path);
       const isSelected = selected === node.path;
       const isCurrent = state.currentPath === node.path;
       const rowClass = [
@@ -309,6 +327,15 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
         </div>
       )}
 
+      {state.workspaceRoot !== '' && state.tree.length > 0 && (
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          testId="tree-search"
+          placeholder="搜文件名或路径"
+        />
+      )}
+
       <div
         className="rd-tree-body"
         data-testid="tree-body"
@@ -320,6 +347,8 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
       >
         {state.tree.length === 0 && state.workspaceRoot ? (
           <div className="rd-empty">这个目录里还没有图，点上面的「新建图」开始</div>
+        ) : searching && filtered.visible.size === 0 ? (
+          <NoMatch testId="tree-nomatch" />
         ) : (
           renderNodes(state.tree, 0)
         )}

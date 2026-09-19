@@ -374,3 +374,28 @@ test('连上之后看得到 key，用命令台写进去的立刻能读到', asyn
   await page.getByTestId('key-新写进去的').click();
   await expect(page.getByTestId('value-body')).toContainText('值');
 });
+
+test('侧栏搜索：按名字过滤连接，清空之后原样回来', async ({ page }) => {
+  await connectNew(page);
+  // 改个名，好和下面新建的那条区分开
+  await page.getByTestId('conn-name').fill('生产库');
+  await page.getByTestId('btn-new-connection').click();
+
+  await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+
+  await page.getByTestId('redis-conn-search').fill('生产');
+  await expect(page.locator('[data-conn-name]')).toHaveCount(1);
+  await expect(page.locator('[data-conn-name="生产库"]')).toBeVisible();
+
+  // 搜不到时说一句，别让侧栏空着像坏了
+  await page.getByTestId('redis-conn-search').fill('zzzz');
+  await expect(page.getByTestId('redis-conn-nomatch')).toBeVisible();
+
+  // 清空：两条都回来，而且**连上的那条还连着**（过滤只动显示，不动连接）
+  await page.getByTestId('redis-conn-search-clear').click();
+  await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+  await expect(page.locator('[data-conn-name="生产库"]')).toHaveAttribute(
+    'data-status',
+    'connected',
+  );
+});

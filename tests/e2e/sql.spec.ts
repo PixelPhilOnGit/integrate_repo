@@ -285,3 +285,24 @@ test('切到别的模块再切回来，连接和查询结果都还在', async ({
   await run(page, 'SELECT * FROM 订单');
   await expect(page.getByTestId('sql-result')).toContainText('199.00');
 });
+
+test('侧栏搜索：按名字/引擎过滤，清空之后原样回来', async ({ page }) => {
+  await newConnection(page, 'PostgreSQL');
+  await newConnection(page, 'MySQL');
+  await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+
+  // 搜引擎名就该只剩那一条（地址串里带着引擎名，用户按这个找很自然）
+  await page.getByTestId('sql-conn-search').fill('mysql');
+  await expect(page.locator('[data-conn-name]')).toHaveCount(1);
+  await expect(page.locator('[data-conn-name="新建 MySQL 连接"]')).toBeVisible();
+
+  // 大小写不敏感：没人会老老实实按着 Shift 搜
+  await page.getByTestId('sql-conn-search').fill('MYSQL');
+  await expect(page.locator('[data-conn-name]')).toHaveCount(1);
+
+  await page.getByTestId('sql-conn-search').fill('zzzz');
+  await expect(page.getByTestId('sql-conn-nomatch')).toBeVisible();
+
+  await page.getByTestId('sql-conn-search-clear').click();
+  await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+});

@@ -11,7 +11,9 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
+import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { fuzzyBest } from '../../../shared/search';
 import { addressOf } from '../core/profile';
 import type { SshProfile, SshSession } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
@@ -29,6 +31,22 @@ interface OpenMenu {
 
 export function ConnectionTree({ state, store }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const [query, setQuery] = useState('');
+
+  const q = query.trim();
+  const searching = q !== '';
+
+  // 匹配的是**连接自己**（名字/地址）或者**它下面的会话**（标题）。
+  // 会话命中时那条连接也要留下 —— 否则用户搜一个会话名会得到「没有匹配的」。
+  //
+  // ⚠️ 保序（`filter` 而不是按分排序）：这里是一棵树，顺序就是用户摆出来的
+  // 形状；边打字边重排会让人找不到刚才那一条。平铺的列表（Redis / SQL 的连接）
+  // 才按相关度排。
+  const visible = state.profiles.filter((profile) => {
+    if (!searching) return true;
+    if (fuzzyBest(q, [profile.name, addressOf(profile)]) !== null) return true;
+    return store.sessionsOf(profile.id).some((s) => fuzzyBest(q, [s.title]) !== null);
+  });
 
   return (
     <div className="rd-panel rd-conn-list" data-testid="ssh-conn-list">
@@ -43,17 +61,30 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         </button>
       </div>
 
+      {/* 一个连接都没有的时候不放搜索框：搜不到任何东西的框是噪音 */}
+      {state.profiles.length > 0 && (
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          testId="ssh-conn-search"
+          placeholder="搜连接或会话"
+        />
+      )}
+
       {state.profiles.length === 0 ? (
         <div className="rd-empty">还没有连接，点「新建」加一个</div>
+      ) : visible.length === 0 ? (
+        <NoMatch testId="ssh-conn-nomatch" />
       ) : (
         <div className="rd-panel-body">
-          {state.profiles.map((profile) => (
+          {visible.map((profile) => (
             <ConnectionBranch
               key={profile.id}
               profile={profile}
               state={state}
               store={store}
               onMenu={setMenu}
+              query={q}
             />
           ))}
         </div>
@@ -71,17 +102,31 @@ function ConnectionBranch({
   state,
   store,
   onMenu,
+  query,
 }: {
   profile: SshProfile;
   state: SshState;
   store: SshStore;
   onMenu: (menu: OpenMenu) => void;
+  /** 当前搜索词（空串 = 没在搜）。用来决定「要不要临时撑开」 */
+  query: string;
 }): ReactNode {
   // ⚠️ 状态是**从会话列表推出来的**，不另存一份 —— 见 store 里 `statusOf` 的注释
   const status = store.statusOf(profile.id);
-  const expanded = state.expanded[profile.id] === true;
-  const sessions = store.sessionsOf(profile.id);
+  const allSessions = store.sessionsOf(profile.id);
   const known = store.hostKeyFor(profile);
+
+  /**
+   * 搜索期间只显示命中的会话，并且**临时撑开**这条连接。
+   *
+   * ⚠️ 撑开是**临时叠加**在点击状态之上的，`store.expanded` 一个字都不动 ——
+   * 否则清空搜索之后，用户手动折起来的那些连接会自己开着，树的形状回不去。
+   */
+  const searching = query.trim() !== '';
+  const sessions = searching
+    ? allSessions.filter((s) => fuzzyBest(query.trim(), [s.title]) !== null)
+    : allSessions;
+  const expanded = searching && sessions.length > 0 ? true : state.expanded[profile.id] === true;
 
   const openMenu = (x: number, y: number): void => {
     const items: MenuItem[] = [
@@ -95,11 +140,11 @@ function ConnectionBranch({
       },
     ];
 
-    if (sessions.length > 0) {
+    if (allSessions.length > 0) {
       items.push({
-        label: `关闭全部会话（${sessions.length}）`,
+        label: `关闭全部会话（${allSessions.length}）`,
         onSelect: () => {
-          for (const session of sessions) {
+          for (const session of allSessions) {
             void store.closeSession(session.id);
           }
         },

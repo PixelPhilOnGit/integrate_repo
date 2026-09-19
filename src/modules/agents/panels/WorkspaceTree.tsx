@@ -22,7 +22,9 @@
  */
 
 import { useState, type ReactNode } from 'react';
+import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { fuzzyBest } from '../../../shared/search';
 import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
 import type { AgentSession, AgentWorkspace, SessionStatus } from '../core/types';
@@ -49,6 +51,24 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   const [renaming, setRenaming] = useState<string | null>(null);
   /** 「新建会话」对话框是给哪个工作目录开的。null = 没开着 */
   const [newFor, setNewFor] = useState<AgentWorkspace | null>(null);
+  const [query, setQuery] = useState('');
+
+  const q = query.trim();
+  const searching = q !== '';
+
+  /**
+   * 匹配**窗口自己**（目录名 / 路径）或者它下面的会话（标题）。
+   *
+   * ⚠️ 保序（`filter` 而不是按分排序）：这儿是一棵树，顺序是用户摆出来的形状；
+   * 平铺的连接列表（Redis / SQL）才按相关度排。
+   */
+  const visible = state.workspaces.filter((workspace) => {
+    if (!searching) return true;
+    if (fuzzyBest(q, [workspace.name, workspace.path]) !== null) return true;
+    return state.sessions.some(
+      (s) => s.workspaceId === workspace.id && fuzzyBest(q, [s.title]) !== null,
+    );
+  });
 
   return (
     <>
@@ -66,23 +86,41 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
           </button>
         </div>
 
+        {state.workspaces.length > 0 && (
+          <SearchBox
+            value={query}
+            onChange={setQuery}
+            testId="agents-ws-search"
+            placeholder="搜目录或会话"
+          />
+        )}
+
         <div className="rd-panel-body">
           {state.workspaces.length === 0 ? (
             <div className="rd-empty">还没有工作目录，点「添加」选一个项目文件夹</div>
+          ) : visible.length === 0 ? (
+            <NoMatch testId="agents-ws-nomatch" />
           ) : (
-            state.workspaces.map((workspace) => {
-              const sessions = state.sessions.filter((s) => s.workspaceId === workspace.id);
+            visible.map((workspace) => {
+              const allSessions = state.sessions.filter((s) => s.workspaceId === workspace.id);
               // ⚠️ **默认收起**：一个目录就是一个窗口，侧栏一眼看到的该是「有几个
               // 窗口」而不是「有几个会话」—— 后者展开再看。会话级的状态（在等你、
               // 已完成）在收起时由父行那个汇总圆点和顶部的「需要你」队列负责
-              const expanded = state.expanded[workspace.id] === true;
+              //
+              // 搜索期间：只显示命中的会话，并**临时撑开**（叠加在点击状态之上，
+              // `state.expanded` 一个字不动 —— 否则清空搜索之后树回不到原样）
+              const sessions = searching
+                ? allSessions.filter((s) => fuzzyBest(q, [s.title]) !== null)
+                : allSessions;
+              const expanded =
+                searching && sessions.length > 0 ? true : state.expanded[workspace.id] === true;
               const active = state.activeWorkspaceId === workspace.id;
 
               return (
                 <div className="rd-agent-ws" key={workspace.id} data-testid={`agent-ws-${workspace.id}`}>
                   <WorkspaceHead
                     workspace={workspace}
-                    sessions={sessions}
+                    sessions={allSessions}
                     expanded={expanded}
                     active={active}
                     renaming={renaming === workspace.id}
@@ -97,7 +135,7 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
                       setMenu({
                         x,
                         y,
-                        items: workspaceMenu(store, workspace, sessions, () => setNewFor(workspace)),
+                        items: workspaceMenu(store, workspace, allSessions, () => setNewFor(workspace)),
                       })
                     }
                     onNewSession={() => setNewFor(workspace)}

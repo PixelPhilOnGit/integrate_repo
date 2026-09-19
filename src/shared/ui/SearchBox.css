@@ -1,0 +1,71 @@
+/*
+ * 搜索框的样式。
+ *
+ * ⚠️ **单独一个文件，而不是塞进 `src/styles.css`**：那份是全局大表，
+ * 而这一段只服务 `SearchBox` 一个组件。放一起的话，改搜索框就得在一万行里
+ * 翻，而且和别的模块同时改动会互相踩。Vite 会跟着组件一起打包它。
+ *
+ * 颜色一律用既有变量（`--border` / `--text` / `--muted` / `--accent-soft`），
+ * 主题切换（跟随系统 / 浅色 / 深色）自动生效，不用在这儿再写一套暗色。
+ */
+
+.rd-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  /* 和侧栏其它行对齐：左右各留一点，别贴着边 */
+  padding: 4px 6px 2px;
+}
+
+.rd-search-input {
+  width: 100%;
+  /* 右边给清空按钮留位置，不然长文本会钻到它底下 */
+  padding: 4px 22px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.rd-search-input::placeholder {
+  color: var(--muted);
+}
+
+.rd-search-input:focus {
+  outline: none;
+  border-color: var(--accent, var(--border));
+  background: var(--accent-soft, var(--panel));
+}
+
+/*
+ * 清空按钮压在输入框右端。
+ *
+ * ⚠️ `z-index` 是必要的：输入框在 DOM 里排在前面、又带边框，
+ * 没有它的时候在某些 WebView 里点得到的是输入框（然后光标跑进去），
+ * 表现就是「那个叉点不动」。
+ */
+.rd-search-clear {
+  position: absolute;
+  right: 10px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.rd-search-clear:hover {
+  background: var(--border);
+  color: var(--text);
+}

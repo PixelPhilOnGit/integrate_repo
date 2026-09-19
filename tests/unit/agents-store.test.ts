@@ -532,12 +532,16 @@ describe('状态事件（外部程序报进来的那一路）', () => {
   it('事件文件把会话推进「需要你」，并进入队列', async () => {
     const h = make();
     const id = await session(h);
-    h.client.events.push({ name: `waiting.${id}`, at: stamp(5) });
+
+    // ⚠️ 时间戳**只求一次**再断言。写成 `at: stamp(5)` + `toBe(stamp(5))` 的话
+    // 两次求值之间隔了哪怕 1 毫秒，这条就会随机假红（真发生过：本地跑三次红一次）
+    const at = stamp(5);
+    h.client.events.push({ name: `waiting.${id}`, at });
     await h.store.drainEvents();
 
     const s = h.store.getSnapshot().sessions[0]!;
     expect(s.status).toBe('waiting');
-    expect(h.store.getSnapshot().lastEventAt).toBe(stamp(5));
+    expect(h.store.getSnapshot().lastEventAt).toBe(at);
   });
 
   it('⚠️ 认不出这个会话就丢掉 —— 这是防伪造那一道', async () => {

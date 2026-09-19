@@ -238,8 +238,11 @@ test('分屏：切一刀、拖分隔条、收掉一格', async ({ page }) => {
   await page.mouse.move(box.x - 120, box.y + box.height / 2, { steps: 8 });
   await page.mouse.up();
 
-  const after = (await page.getByTestId(`agent-pane-${left}`).boundingBox())!.width;
-  expect(after).toBeLessThan(before);
+  // ⚠️ 用轮询而不是读一次：拖拽在**全量并行**跑的时候会被节流，布局晚一两帧
+  // 才落定（单跑必过、全量里偶发红，2026-09-19 撞到过一次）
+  await expect
+    .poll(async () => (await page.getByTestId(`agent-pane-${left}`).boundingBox())!.width)
+    .toBeLessThan(before);
 
   // 收掉右边那一格：只剩一格，而且**进程没被杀**（侧栏里还看得见）
   await page.keyboard.press('Control+Shift+KeyW');
@@ -519,4 +522,53 @@ test('一个工作目录就是一个窗口：各看各的分屏，父窗口一�
   // beta 那个会话没被连累
   await page.getByTestId('agent-ws-head-ws_beta').click();
   await expect(page.locator('.rd-agent-pane')).toHaveCount(1);
+});
+
+// ------------------------------------------------------------------ 侧栏搜索
+
+test('侧栏搜索：按目录名过滤；搜会话名时那个窗口自动撑开', async ({ page }) => {
+  // 预置两个窗口（浏览器里那个假「选文件夹」永远给同一个路径，加不出第二个）
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'devtoolkit.agents.v1',
+      JSON.stringify({
+        workspaces: [
+          { id: 'ws_alpha', path: 'D:\\work\\alpha', name: 'alpha' },
+          { id: 'ws_beta', path: 'D:\\work\\beta', name: 'beta' },
+        ],
+      }),
+    );
+  });
+  await page.reload();
+  await page.getByTestId('module-agents').click();
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
+
+  // 搜目录名：只剩那一个窗口
+  await page.getByTestId('agents-ws-search').fill('beta');
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
+  await expect(page.getByTestId('agent-ws-head-ws_beta')).toBeVisible();
+
+  await page.getByTestId('agents-ws-search-clear').click();
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
+
+  // 在 alpha 里开一个会话（标题是 `claude #1`）
+  await page.getByTestId('agent-new-session-ws_alpha').click();
+  await page.getByTestId('agent-new-confirm').click();
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(1);
+
+  // 搜**会话名**：会话行默认是收起的，所以这里同时验「那条窗口自动撑开」——
+  // 撑不开的话用户搜到一个会话却看不见它
+  await page.getByTestId('agents-ws-search').fill('claude #1');
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
+  await expect(page.getByTestId('agent-ws-head-ws_alpha')).toBeVisible();
+  await expect(
+    page.locator('[data-testid="agent-workspaces"] [data-session-title="claude #1"]'),
+  ).toBeVisible();
+
+  await page.getByTestId('agents-ws-search').fill('zzzz');
+  await expect(page.getByTestId('agents-ws-nomatch')).toBeVisible();
+
+  // 清空之后两条都回来
+  await page.getByTestId('agents-ws-search-clear').click();
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
 });

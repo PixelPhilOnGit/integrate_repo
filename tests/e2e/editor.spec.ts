@@ -1188,3 +1188,33 @@ test('画布上右键空白处可以加参与者和注释', async ({ page }) => 
   await page.getByTestId('menu-添加参与者').click();
   await expect(page.locator('[data-participant-id]')).toHaveCount(3);
 });
+
+// ------------------------------------------------------------------ 文件树搜索
+
+test('文件树搜索：按名字/路径过滤，祖先跟着留下并撑开', async ({ page }) => {
+  // 假工作区里有两份图：根下的「示例」，和「归档/旧版」
+  await expect(page.getByTestId('tree-file-示例.seq.json')).toBeVisible();
+  await expect(page.getByTestId('tree-dir-归档')).toBeVisible();
+  // 没搜的时候归档是**收起**的（默认），里面那个文件看不见
+  await expect(page.getByTestId('tree-file-归档/旧版.seq.json')).toHaveCount(0);
+
+  // 搜「旧版」：命中的文件要露出来，**而且是自动撑开的**（祖先一起留下）——
+  // 不然用户搜到一个文件却看不见它，界面等于没反应
+  await page.getByTestId('tree-search').fill('旧版');
+  await expect(page.getByTestId('tree-file-归档/旧版.seq.json')).toBeVisible();
+  await expect(page.getByTestId('tree-dir-归档')).toBeVisible(); // 祖先
+  await expect(page.getByTestId('tree-file-示例.seq.json')).toHaveCount(0); // 不匹配的不显示
+
+  // 清空之后全部回来，而且**树回到原来的形状**（归档仍然是收起的）
+  await page.getByTestId('tree-search-clear').click();
+  await expect(page.getByTestId('tree-file-示例.seq.json')).toBeVisible();
+  await expect(page.getByTestId('tree-file-归档/旧版.seq.json')).toHaveCount(0);
+
+  // 搜不到时说一句「没有匹配的」，别让侧栏空着像坏了
+  await page.getByTestId('tree-search').fill('zzzz');
+  await expect(page.getByTestId('tree-nomatch')).toBeVisible();
+
+  // Esc 清空（搜索框的常规手势）
+  await page.getByTestId('tree-search').press('Escape');
+  await expect(page.getByTestId('tree-file-示例.seq.json')).toBeVisible();
+});

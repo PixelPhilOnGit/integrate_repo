@@ -14,7 +14,9 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
+import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { fuzzyFilter } from '../../../shared/search';
 import { KIND_LABEL, type SqlKind, type SqlProfile } from '../core/types';
 import type { SqlState, SqlStore } from '../state/store';
 
@@ -32,8 +34,24 @@ interface OpenMenu {
 
 export function ConnectionTree({ state, store }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const [query, setQuery] = useState('');
 
   const closeMenu = (): void => setMenu(null);
+
+  /**
+   * 只按**连接行自己的文本**（名字 + 地址串，里面带着引擎名和 host:port）过滤。
+   *
+   * 不往底下两层钻：库和表要连上之后才加载，而没加载的东西搜不出来 ——
+   * 「有时候搜得到、有时候搜不到」比搜不到更让人困惑。表名的搜索本来就在
+   * 主区那个列表里。
+   *
+   * 和 Redis 一样按相关度排序（平铺的连接列表），树形的侧栏才保序。
+   */
+  const visible = fuzzyFilter(state.profiles, query, (p) => [
+    p.name,
+    `${KIND_LABEL[p.kind]} ${p.host}:${p.port}`,
+  ]);
+  const searching = query.trim() !== '';
 
   /** 「新建」→ 先选引擎。两种引擎的默认端口/用户名差很多，让用户先选省得改 */
   const openNewMenu = (x: number, y: number): void => {
@@ -64,11 +82,22 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         </button>
       </div>
 
+      {state.profiles.length > 0 && (
+        <SearchBox
+          value={query}
+          onChange={setQuery}
+          testId="sql-conn-search"
+          placeholder="搜连接名、引擎或地址"
+        />
+      )}
+
       {state.profiles.length === 0 ? (
         <div className="rd-empty">还没有连接，点「新建」加一个</div>
+      ) : searching && visible.length === 0 ? (
+        <NoMatch testId="sql-conn-nomatch" />
       ) : (
         <div className="rd-panel-body">
-          {state.profiles.map((profile) => (
+          {visible.map((profile) => (
             <ConnectionBranch
               key={profile.id}
               profile={profile}
