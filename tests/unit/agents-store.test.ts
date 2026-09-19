@@ -42,6 +42,8 @@ import type {
   PtyOpenRequest,
 } from '../../src/modules/agents/services/types';
 import { AgentsStore } from '../../src/modules/agents/state/store';
+import { panesOf, rectsOf } from '../../src/modules/agents/core/layout';
+import { MAX_SESSIONS_PER_KIND } from '../../src/modules/agents/core/types';
 import type { ShellApi } from '../../src/shell/types';
 import { __resetIdsForTest } from '../../src/shared/ids';
 
@@ -842,5 +844,145 @@ describe('集成向导', () => {
     expect(await label('installed')).toBe('已启用');
     expect(await label('modified')).toBe('已启用（被改过）');
     expect(await label('unusable')).toBe('配置文件读不了');
+  });
+});
+
+describe('启动参数（全局一份）', () => {
+  it('没设过就是默认命令', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    await h.store.createSession(ws, 'claude');
+    expect(h.client.opened[0]!.command).toBe('claude');
+  });
+
+  it('设过之后新建的会话把参数接在命令后面', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    h.store.setLaunchArgs({ claude: '--dangerously-skip-permissions', codex: '' });
+
+    await h.store.createSession(ws, 'claude');
+    expect(h.client.opened[0]!.command).toBe('claude --dangerously-skip-permissions');
+  });
+
+  it('参数只给 claude / codex 用：普通终端还是只起一个 shell', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    h.store.setLaunchArgs({ claude: '--x', codex: '--y' });
+
+    await h.store.createSession(ws, 'shell');
+    // 空命令 = 「只起一个 shell」，这条判断别处依赖着（`command === ''`）
+    expect(h.client.opened[0]!.command).toBe('');
+  });
+
+  it('两头的空白去掉；只剩空白等于没设', async () => {
+    const h = make();
+    await withWorkspace(h);
+    h.store.setLaunchArgs({ claude: '  --x  ', codex: '   ' });
+    expect(h.store.getSnapshot().launchArgs).toEqual({ claude: '--x', codex: '' });
+  });
+
+  it('⚠️ 改参数不影响已经在跑的会话 —— 命令行在进程起来那一刻就定死了', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    const id = (await h.store.createSession(ws, 'claude'))!;
+
+    h.store.setLaunchArgs({ claude: '--later', codex: '' });
+
+    const session = h.store.getSnapshot().sessions.find((s) => s.id === id)!;
+    expect(session.command).toBe('claude');
+  });
+
+  it('存下来的参数下次启动读得回来', async () => {
+    localStorage.setItem(
+      'devtoolkit.agents.v1',
+      JSON.stringify({ launch_args: { claude: '--dangerously-skip-permissions', codex: '' } }),
+    );
+    const h = make();
+    await h.store.init();
+    expect(h.store.getSnapshot().launchArgs.claude).toBe('--dangerously-skip-permissions');
+  });
+
+  it('存的文件被手改坏了也不炸（按不可信输入处理）', async () => {
+    localStorage.setItem('devtoolkit.agents.v1', JSON.stringify({ launch_args: 42 }));
+    const h = make();
+    await h.store.init();
+    expect(h.store.getSnapshot().launchArgs).toEqual({ claude: '', codex: '' });
+  });
+});
+
+describe('一次新建一批（createMany）', () => {
+  it('按数量建出来，顺序就是对话框里那个顺序', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    const n = await h.store.createMany(ws, [
+      { kind: 'claude', count: 2 },
+      { kind: 'codex', count: 1 },
+      { kind: 'shell', count: 1 },
+    ]);
+
+    expect(n).toBe(4);
+    expect(h.store.getSnapshot().sessions.map((s) => s.kind)).toEqual([
+      'claude',
+      'claude',
+      'codex',
+      'shell',
+    ]);
+  });
+
+  it('全部铺在屏幕上，铺的顺序和建的顺序一致', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    await h.store.createMany(ws, [{ kind: 'claude', count: 4 }]);
+
+    const snap = h.store.getSnapshot();
+    const ids = snap.sessions.map((s) => s.id);
+    expect(panesOf(snap.layout!)).toEqual(ids);
+    // 4 个 → 2×2
+    expect(rectsOf(snap.layout!)[ids[0]!]!.w).toBeCloseTo(0.5, 9);
+  });
+
+  it('⚠️ 中途只动一次布局 —— 一格格地摆屏用户会看到抖动', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    // 先摆一个把布局建起来（第一个会话上屏是「替换聚焦格」，也算一次变化）
+    await h.store.createSession(ws, 'shell');
+
+    let changes = 0;
+    let last = h.store.getSnapshot().layout;
+    h.store.subscribe(() => {
+      const now = h.store.getSnapshot().layout;
+      if (now !== last) {
+        changes += 1;
+        last = now;
+      }
+    });
+
+    await h.store.createMany(ws, [{ kind: 'claude', count: 3 }]);
+    expect(changes).toBe(1);
+  });
+
+  it('全是 0 就什么都不做', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    expect(await h.store.createMany(ws, [{ kind: 'claude', count: 0 }])).toBe(0);
+    expect(h.store.getSnapshot().sessions).toHaveLength(0);
+  });
+
+  it('每类夹在上限内（手改过的数据不该开出几十个进程）', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    const n = await h.store.createMany(ws, [{ kind: 'claude', count: 999 }]);
+    expect(n).toBe(MAX_SESSIONS_PER_KIND);
+  });
+
+  it('启动参数带在整批的命令上', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    h.store.setLaunchArgs({ claude: '--dangerously-skip-permissions', codex: '' });
+
+    await h.store.createMany(ws, [{ kind: 'claude', count: 2 }]);
+    for (const req of h.client.opened) {
+      expect(req.command).toBe('claude --dangerously-skip-permissions');
+    }
   });
 });

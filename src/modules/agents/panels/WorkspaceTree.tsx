@@ -20,6 +20,7 @@ import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
 import type { AgentSession, AgentWorkspace, SessionStatus } from '../core/types';
 import type { AgentsState, AgentsStore } from '../state/store';
+import { NewSessionDialog } from './NewSessionDialog';
 import { StatusDot } from './StatusDot';
 
 interface Props {
@@ -38,6 +39,8 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** 「新建会话」对话框是给哪个工作目录开的。null = 没开着 */
+  const [newFor, setNewFor] = useState<AgentWorkspace | null>(null);
 
   return (
     <>
@@ -78,10 +81,10 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
                       setRenaming(null);
                       if (name !== null) store.renameWorkspace(workspace.id, name);
                     }}
-                    onMenu={(x, y) => setMenu({ x, y, items: workspaceMenu(store, workspace) })}
-                    onNewSession={(kind) =>
-                      void store.createSession(workspace.id, kind)
+                    onMenu={(x, y) =>
+                      setMenu({ x, y, items: workspaceMenu(store, workspace, () => setNewFor(workspace)) })
                     }
+                    onNewSession={() => setNewFor(workspace)}
                   />
 
                   {expanded &&
@@ -106,6 +109,15 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
       )}
+
+      {newFor !== null && (
+        <NewSessionDialog
+          state={state}
+          store={store}
+          workspace={newFor}
+          onClose={() => setNewFor(null)}
+        />
+      )}
     </>
   );
 }
@@ -129,7 +141,8 @@ function WorkspaceHead({
   onStartRename: () => void;
   onFinishRename: (name: string | null) => void;
   onMenu: (x: number, y: number) => void;
-  onNewSession: (kind: 'claude' | 'codex' | 'shell') => void;
+  /** 打开「新建会话」对话框。**不再直接建** —— 数量由用户在对话框里定 */
+  onNewSession: () => void;
 }): ReactNode {
   const rollup = rollupStatus(sessions);
 
@@ -171,10 +184,10 @@ function WorkspaceHead({
       <button
         type="button"
         className="rd-agent-add"
-        title="在这个目录里新开一个会话"
+        title="在这个目录里新开会话"
         aria-label="新开会话"
         data-testid={`agent-new-session-${workspace.id}`}
-        onClick={() => onNewSession('claude')}
+        onClick={onNewSession}
       >
         ＋
       </button>
@@ -284,9 +297,20 @@ function isOnScreen(state: AgentsState, sessionId: string): boolean {
   return walk(layout);
 }
 
-function workspaceMenu(store: AgentsStore, workspace: AgentWorkspace): MenuItem[] {
+function workspaceMenu(
+  store: AgentsStore,
+  workspace: AgentWorkspace,
+  onNewSession: () => void,
+): MenuItem[] {
   return [
-    { label: '新开 Claude Code', onSelect: () => void store.createSession(workspace.id, 'claude') },
+    // 「新建会话…」在最上面：一次可以开好几个，是默认的那条路；
+    // 下面三条是「就来一个」的快捷方式，熟手用起来还是它们快
+    { label: '新建会话…', onSelect: onNewSession },
+    {
+      label: '新开 Claude Code',
+      separatorBefore: true,
+      onSelect: () => void store.createSession(workspace.id, 'claude'),
+    },
     { label: '新开 Codex', onSelect: () => void store.createSession(workspace.id, 'codex') },
     { label: '新开终端', onSelect: () => void store.createSession(workspace.id, 'shell') },
     {

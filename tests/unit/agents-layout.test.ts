@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import {
   clampRatio,
   closePane,
+  gridColsFor,
+  gridLayout,
   hasPane,
   leafPane,
   MAX_RATIO,
@@ -18,6 +20,7 @@ import {
   parseLayout,
   rectsOf,
   replacePane,
+  replaceWith,
   setRatio,
   splitPane,
   type PaneLayout,
@@ -340,5 +343,103 @@ describe('parseLayout', () => {
       deep = { kind: 'split', dir: 'row', ratio: 0.5, a: deep, b: leafPane(`B${i}`) };
     }
     expect(parseLayout(deep)).toBeNull();
+  });
+});
+
+describe('gridLayout（一次新建一批会话时铺的网格）', () => {
+  it('空列表没有网格', () => {
+    expect(gridLayout([], 2)).toBeNull();
+  });
+
+  it('一个会话就是一格', () => {
+    expect(gridLayout(['A'], 3)).toEqual(leafPane('A'));
+  });
+
+  it('顺序就是传进来的顺序（左到右、上到下）', () => {
+    expect(panesOf(gridLayout(['A', 'B', 'C', 'D'], 2)!)).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('2×2 四块一样大', () => {
+    const rects = rectsOf(gridLayout(['A', 'B', 'C', 'D'], 2)!);
+    for (const id of ['A', 'B', 'C', 'D']) {
+      expect(rects[id]!.w).toBeCloseTo(0.5, 9);
+      expect(rects[id]!.h).toBeCloseTo(0.5, 9);
+    }
+    expect(rects['A']!.x).toBeCloseTo(0, 9);
+    expect(rects['B']!.x).toBeCloseTo(0.5, 9);
+    expect(rects['C']!.y).toBeCloseTo(0.5, 9);
+  });
+
+  it('一行三块是等分的 —— 不是越分越小', () => {
+    // ⚠️ 这条是这块最容易写错的地方：二分递归写出来是 1/2、1/4、1/4，
+    // 界面上第三格会窄得没法用
+    const rects = rectsOf(gridLayout(['A', 'B', 'C'], 3)!);
+    expect(rects['A']!.w).toBeCloseTo(1 / 3, 9);
+    expect(rects['B']!.w).toBeCloseTo(1 / 3, 9);
+    expect(rects['C']!.w).toBeCloseTo(1 / 3, 9);
+  });
+
+  it('列数超过数量时退化成一行', () => {
+    const rects = rectsOf(gridLayout(['A', 'B'], 9)!);
+    expect(rects['A']!.y).toBeCloseTo(0, 9);
+    expect(rects['B']!.y).toBeCloseTo(0, 9);
+    expect(rects['A']!.w).toBeCloseTo(0.5, 9);
+  });
+
+  it('列数是 0 或负数时当成一列（不抛、也不留空格子）', () => {
+    expect(panesOf(gridLayout(['A', 'B'], 0)!)).toEqual(['A', 'B']);
+    expect(panesOf(gridLayout(['A', 'B'], -3)!)).toEqual(['A', 'B']);
+  });
+
+  it('最后一行不满时那几块更宽 —— 已知的取舍，不是 bug', () => {
+    // 叶子必须挂一个会话，造不出「空的格子」，所以 5 个 3 列是
+    // 「上面三块各 1/3 + 下面两块各 1/2」，行高仍然是等分的
+    const rects = rectsOf(gridLayout(['A', 'B', 'C', 'D', 'E'], 3)!);
+    expect(rects['A']!.w).toBeCloseTo(1 / 3, 9);
+    expect(rects['D']!.w).toBeCloseTo(0.5, 9);
+    expect(rects['A']!.h).toBeCloseTo(0.5, 9);
+    expect(rects['D']!.h).toBeCloseTo(0.5, 9);
+  });
+
+  it('网格同样守 rectsOf 的三条不变量（不重叠、都在 [0,1]、面积和为 1）', () => {
+    for (const n of [1, 2, 3, 5, 7]) {
+      const ids = Array.from({ length: n }, (_, i) => `P${i}`);
+      const rects = rectsOf(gridLayout(ids, gridColsFor(n))!);
+
+      let area = 0;
+      for (const id of ids) {
+        const r = rects[id]!;
+        expect(r.x).toBeGreaterThanOrEqual(0);
+        expect(r.y).toBeGreaterThanOrEqual(0);
+        expect(r.x + r.w).toBeLessThanOrEqual(1 + 1e-9);
+        expect(r.y + r.h).toBeLessThanOrEqual(1 + 1e-9);
+        area += r.w * r.h;
+      }
+      expect(area).toBeCloseTo(1, 9);
+    }
+  });
+});
+
+describe('gridColsFor', () => {
+  it('挑一个「看着像网格」的列数', () => {
+    expect(gridColsFor(1)).toBe(1);
+    expect(gridColsFor(2)).toBe(2);
+    expect(gridColsFor(3)).toBe(2);
+    expect(gridColsFor(4)).toBe(2);
+    expect(gridColsFor(6)).toBe(3);
+    expect(gridColsFor(9)).toBe(3);
+  });
+});
+
+describe('replaceWith', () => {
+  it('把一格整棵换掉（不是换成另一个会话，是换成一片）', () => {
+    const root = splitPane(leafPane('A'), 'A', 'row', 'B', false);
+    const next = replaceWith(root, 'B', gridLayout(['X', 'Y'], 2)!);
+    expect(panesOf(next)).toEqual(['A', 'X', 'Y']);
+  });
+
+  it('找不到目标就原样返回（界面上的按钮可能来自上一帧）', () => {
+    const root = leafPane('A');
+    expect(replaceWith(root, 'Z', gridLayout(['X'], 1)!)).toBe(root);
   });
 });

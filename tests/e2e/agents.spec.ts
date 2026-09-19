@@ -354,3 +354,75 @@ test('切到别的模块再回来，会话和画面都还在', async ({ page }) 
     'working',
   );
 });
+
+// ------------------------------------------------------------ 新建会话对话框
+
+/** 侧栏第一个工作目录的 id */
+async function firstWorkspaceId(page: Page): Promise<string> {
+  const testid =
+    (await page.locator('[data-testid^="agent-ws-head-"]').first().getAttribute('data-testid')) ??
+    '';
+  return testid.replace('agent-ws-head-', '');
+}
+
+test('新建会话：填几个就开几个，一次铺成网格', async ({ page }) => {
+  await newSession(page); // 先把工作目录建出来（顺带开着一个 claude）
+  const wsId = await firstWorkspaceId(page);
+
+  await page.getByTestId(`agent-new-session-${wsId}`).click();
+  await expect(page.getByTestId('agent-new-dialog')).toBeVisible();
+
+  // 默认就是一个 claude（侧栏那个「＋」以前点一下就是开一个），
+  // 再补两个 claude、一个终端
+  await page.getByTestId('agent-new-count-claude').fill('3');
+  await page.getByTestId('agent-new-count-shell').fill('1');
+  await expect(page.getByTestId('agent-new-summary')).toContainText('一共 4 个');
+
+  await page.getByTestId('agent-new-confirm').click();
+  await expect(page.getByTestId('agent-new-dialog')).toHaveCount(0);
+
+  // 4 个新建的把原来那一格撑成 2×2（2 列 × 2 行）
+  await expect(page.locator('[data-testid="agent-split-root"] .rd-agent-pane')).toHaveCount(4);
+  // 侧栏里加上原来那个一共 5 个会话
+  // ⚠️ 前缀要限定在侧栏里：检查器里那块详情的 testid 是 `agent-session-detail`，
+  // 按前缀选会把它也算进来（这条曾经写成 6 而不是 5）
+  await expect(
+    page.locator('[data-testid="agent-workspaces"] [data-testid^="agent-session-"]'),
+  ).toHaveCount(5);
+});
+
+test('新建会话：一个都不填时按钮是灰的（不会开出空的一批）', async ({ page }) => {
+  await newSession(page);
+  const wsId = await firstWorkspaceId(page);
+
+  await page.getByTestId(`agent-new-session-${wsId}`).click();
+  await page.getByTestId('agent-new-count-claude').fill('0');
+
+  await expect(page.getByTestId('agent-new-confirm')).toBeDisabled();
+  await expect(page.getByTestId('agent-new-summary')).toContainText('还没填数量');
+});
+
+test('启动参数：设一次，之后新建的命令都带上', async ({ page }) => {
+  await newSession(page);
+  const wsId = await firstWorkspaceId(page);
+
+  await page.getByTestId(`agent-new-session-${wsId}`).click();
+  await page.getByTestId('agent-new-args').click();
+  await expect(page.getByTestId('agent-args-dialog')).toBeVisible();
+
+  await page.getByTestId('agent-args-claude').fill('--dangerously-skip-permissions');
+  await page.getByTestId('agent-args-save').click();
+
+  // 保存之后回到「填数量」那一页，而不是把两个对话框一起关掉
+  await expect(page.getByTestId('agent-new-dialog')).toBeVisible();
+  await page.getByTestId('agent-new-confirm').click();
+
+  // 新会话的终端里能看到**带参数的那条命令**（假 agent 会把命令回显出来）
+  const fresh = await focusedId(page);
+  await expect.poll(() => termText(page, fresh)).toContain('claude --dangerously-skip-permissions');
+
+  // 再打开一次：存过的值还在（走的是持久化那条路）
+  await page.getByTestId(`agent-new-session-${wsId}`).click();
+  await page.getByTestId('agent-new-args').click();
+  await expect(page.getByTestId('agent-args-claude')).toHaveValue('--dangerously-skip-permissions');
+});

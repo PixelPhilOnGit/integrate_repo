@@ -20,7 +20,7 @@ jobs:
   # 这几套逻辑都是纯 Rust 的（core / redis / ssh 都不依赖 tauri），
   # 所以能在几秒内跑完，不用等 WebKit 装好，也不用等前端构建。
   test:
-    name: 单元测试（core + redis + ssh）
+    name: 单元测试（core + redis + ssh + agents 纯逻辑）
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +64,17 @@ jobs:
         run: >-
           cargo test --package devtoolkit-ssh --locked
           --lib --test session --test registry
+
+      # 智能体会话内核里**和平台无关**的那部分（`--lib`）：IPC 契约的字段名、
+      # 事件目录怎么拼、以及 Git Bash 探测的规则（候选清单怎么排、什么时候不该
+      # 覆盖用户设的值）。
+      #
+      # 重头戏（起进程、进程树回收、ConPTY）在下面那个 Windows job 里 ——
+      # 但上面那些是纯逻辑，在这里跑很便宜，而且**本机就能复现**。
+      # 顺带把整个 crate 在 Linux 上编译检查一遍。
+      - name: 跑测试（智能体会话：纯逻辑那部分）
+        working-directory: src-tauri
+        run: cargo test --package devtoolkit-agents --locked --lib
 
   # 智能体会话那个内核单独一个 job，跑在 **Windows** 上。
   #

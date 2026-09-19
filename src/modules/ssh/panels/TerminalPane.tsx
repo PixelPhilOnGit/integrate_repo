@@ -16,6 +16,7 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { terminalHub } from '../core/terminalHub';
 import type { SshSession } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
+import { BlockGutter } from './BlockGutter';
 
 interface Props {
   state: SshState;
@@ -59,11 +60,19 @@ export function TerminalPane({ state, store }: Props): ReactNode {
       </div>
 
       {/*
-        宿主节点**始终存在**，不用条件渲染。终端容器是 hub 直接 appendChild
-        进来的，宿主一旦被 React 摘掉，容器就跟着离开 DOM —— 虽然随后会被
-        挪到存放点，但中间那一小段它没有布局，xterm 量出来的尺寸是垃圾
+        色条和终端**并排**（不是叠在一起）：终端自己缩进去，色条就压不到文字。
+        没有会话时不画 —— 那一条空栏看着像界面坏了
       */}
-      <div className="rd-term-host" ref={hostRef} data-testid="ssh-term-host" />
+      <div className="rd-ssh-term-row">
+        {sessionId !== null && <BlockGutter sessionId={sessionId} store={store} />}
+
+        {/*
+          宿主节点**始终存在**，不用条件渲染。终端容器是 hub 直接 appendChild
+          进来的，宿主一旦被 React 摘掉，容器就跟着离开 DOM —— 虽然随后会被
+          挪到存放点，但中间那一小段它没有布局，xterm 量出来的尺寸是垃圾
+        */}
+        <div className="rd-term-host" ref={hostRef} data-testid="ssh-term-host" />
+      </div>
 
       {active === null && (
         <div className="rd-ssh-empty rd-empty">

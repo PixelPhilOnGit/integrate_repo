@@ -43,8 +43,9 @@
 //!   `CREATE_BREAKAWAY_FROM_JOB`）。
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::io::{ErrorKind, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
@@ -211,6 +212,215 @@ fn resolve_program(program: &str) -> Option<String> {
             }
         }
     }
+    None
+}
+
+// ---------------------------------------------------------------- Git Bash
+
+/// Claude Code 在 Windows 上自己认的那个环境变量名。**逐字钉死** —— 拼错一个字符
+/// 就是「什么都没发生」，而且是静默的（它会退回自己的自动探测，再报一句找不到）。
+const GIT_BASH_ENV: &str = "CLAUDE_CODE_GIT_BASH_PATH";
+
+/// 环境变量拿不到时退到这两个字面量。和 Claude Code 自己写死的那两条**逐字一样**：
+/// 我们的清单不该比它的短。
+const PROGRAM_FILES: &str = r"C:\Program Files";
+const PROGRAM_FILES_X86: &str = r"C:\Program Files (x86)";
+
+/// 探测要用的环境快照。
+///
+/// 拆成结构体不是为了好看，是为了**能在 Linux 上测**：真正去摸文件的
+/// [`find_git_bash`] 只能编译在 Windows 上（它要用 [`resolve_program`]），
+/// 但「清单怎么排、什么时候不该覆盖用户的值」是纯逻辑，和平台无关。
+/// `#[cfg(any(windows, test))]` 里的 `test` 就是为这个 —— 生产构建在 Linux 上
+/// 看不到这些项（不留 dead_code 噪音），`cargo test` 时才编进来给单测用。
+#[cfg(any(windows, test))]
+#[derive(Debug, Default, Clone)]
+struct GitBashEnv {
+    /// PATH 里解析到的 `git.exe`（没装就是 `None`）
+    git_exe: Option<PathBuf>,
+    program_files: Option<String>,
+    program_files_x86: Option<String>,
+    local_app_data: Option<String>,
+}
+
+/// 一个候选的 bash.exe，以及**它在清单里的理由**。
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BashCandidate {
+    path: PathBuf,
+    /// 只在日志里用得上，但出事时「这个路径为什么会被信」是唯一有用的信息 ——
+    /// 所以跟着路径一起走，而不是等要打日志时再回头猜。
+    source: &'static str,
+}
+
+/// 候选清单，按可信度排序（靠前的先被采纳）。**只认 `<Git>\bin\bash.exe` 这一种形状。**
+#[cfg(any(windows, test))]
+fn git_bash_candidates(env: &GitBashEnv) -> Vec<BashCandidate> {
+    let mut out = Vec::new();
+
+    if let Some(git) = &env.git_exe {
+        for root in git_root_candidates(git) {
+            out.push(BashCandidate {
+                path: root.join("bin").join("bash.exe"),
+                source: "PATH 里的 git.exe 上溯",
+            });
+        }
+    }
+
+    for (dir, source) in [
+        (
+            env.program_files.as_deref().unwrap_or(PROGRAM_FILES),
+            "%ProgramFiles%",
+        ),
+        (
+            env.program_files_x86.as_deref().unwrap_or(PROGRAM_FILES_X86),
+            "%ProgramFiles(x86)%",
+        ),
+    ] {
+        out.push(BashCandidate {
+            path: Path::new(dir).join("Git").join("bin").join("bash.exe"),
+            source,
+        });
+    }
+
+    // 这一条覆盖「只为我安装」（非管理员）。拿不到 `%LOCALAPPDATA%` 就不猜默认值 ——
+    // 那个目录是跟着用户走的，猜错不如不猜。
+    if let Some(local) = &env.local_app_data {
+        out.push(BashCandidate {
+            path: Path::new(local)
+                .join("Programs")
+                .join("Git")
+                .join("bin")
+                .join("bash.exe"),
+            source: "%LOCALAPPDATA%（只为我安装）",
+        });
+    }
+
+    out
+}
+
+/// 从 `git.exe` 往上找 Git 安装根，**由近及远**。
+///
+/// # 为什么要上溯，而不是「上跳一级」
+///
+/// Git for Windows 把 `git.exe` 放在好几个地方，PATH 上常见的至少两种：
+/// `<Git>\cmd\git.exe`（安装器默认加进 PATH 的那个）和 `<Git>\mingw64\bin\git.exe`。
+/// 前者一级到根，后者要两级。所以逐层试、每层都判存在，而不是写死跳几级 ——
+/// 这样连 scoop/choco 的 `shims\git.exe` 也会自然落选（它上面几层都没有
+/// `bin\bash.exe`），不需要为它们写特例。
+///
+/// 顺序在正常安装上**不影响结果**：同一台机器上最多只有一条真的存在（`is_file`
+/// 才是裁决者）。写成由近及远只是为了"离 `git.exe` 越近的解释越简单"。
+///
+/// ⚠️ **走到文件系统根就停**（`/`、`C:\`）。它自己 `parent()` 是 `None`，把它们
+/// 收进来会产出 `C:\bin\bash.exe` 这种荒唐候选 —— 而且它会排在最前面把正确那条
+/// 挤下去。（单测里钉了这条。）
+#[cfg(any(windows, test))]
+fn git_root_candidates(git_exe: &Path) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let mut current = git_exe.parent();
+    while let Some(dir) = current {
+        // 空的 parent（`Path::new("git.exe")` 这种相对路径）会让 `join` 拼出
+        // `bin\bash.exe` 这样的**相对**路径 —— 拿去判存在是纯碰运气，不要
+        if dir.as_os_str().is_empty() {
+            break;
+        }
+        // 文件系统根不是 Git 根
+        if dir.parent().is_none() {
+            break;
+        }
+        roots.push(dir.to_path_buf());
+        if roots.len() == 3 {
+            break;
+        }
+        current = dir.parent();
+    }
+    roots
+}
+
+/// 这个值算不算「用户设过」。
+///
+/// 空串和纯空白**当作没设**：Claude Code 那边是 JS 的真值判断
+/// （`if (process.env.CLAUDE_CODE_GIT_BASH_PATH)`），空值等于没设 —— 尊重一个
+/// 空值只会白白浪费一次能把这台机器修好的探测。
+///
+/// 刻意**不校验**用户给的路径存不存在、是不是真的 bash：那是 Claude Code 的活
+/// （它自己会说「is not a bash/sh binary」并退回自动探测）。在这儿再判一遍，
+/// 只是多一个能把用户配置否掉的地方。
+fn user_set(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|v| !v.to_string_lossy().trim().is_empty())
+}
+
+/// 到底注不注入、注入什么。**纯决策**：三个入参都是已经拿到手的值，
+/// 不读全局环境、不碰文件系统，所以能拿字面量直接测。
+/// 三个入参分别是：调用方在 `cfg.env` 里给的、本进程环境里的（会被子进程原样
+/// 继承）、我们探测到的。前两个只要有一个算「用户设过」就整个不注入。
+fn git_bash_to_inject(
+    caller: Option<&str>,
+    inherited: Option<&OsStr>,
+    probed: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if user_set(caller.map(OsStr::new)) || user_set(inherited) {
+        return None;
+    }
+    probed
+}
+
+/// 给子进程准备 `CLAUDE_CODE_GIT_BASH_PATH`。找不到就 `None`（**不是错误**）。
+fn git_bash_env(cfg: &PtyConfig) -> Option<PathBuf> {
+    let caller = cfg.env.get(GIT_BASH_ENV).map(String::as_str);
+    // `var_os` 拿到的就是「会被子进程继承」的那一份：portable-pty 的 base env
+    // 是从 `vars_os()` 起步的，所以这里判过之后我们什么都不做 == 原样传下去
+    let inherited = std::env::var_os(GIT_BASH_ENV);
+    git_bash_to_inject(caller, inherited.as_deref(), probed_git_bash())
+}
+
+/// 在 PATH 和几个标准位置里找 Git Bash。
+///
+/// ⚠️ **绝不去 PATH 里找裸 `bash.exe`。** `C:\Windows\System32\bash.exe` 是 WSL 的，
+/// 而 System32 永远在 PATH 上 —— 找到它就等于把 WSL 的 bash 交出去，Claude Code
+/// 会判定「不是 bash/sh 二进制」再退回自动探测，**比找不到还糟**（它以为我们给了
+/// 答案）。所以入口只有一个：先找到 `git.exe`，再从它推。
+#[cfg(windows)]
+fn find_git_bash() -> Option<BashCandidate> {
+    let env = GitBashEnv {
+        git_exe: resolve_program("git.exe").map(PathBuf::from),
+        program_files: std::env::var("ProgramFiles").ok(),
+        program_files_x86: std::env::var("ProgramFiles(x86)").ok(),
+        local_app_data: std::env::var("LOCALAPPDATA").ok(),
+    };
+    git_bash_candidates(&env)
+        .into_iter()
+        .find(|c| c.path.is_file())
+}
+
+/// 探测并把结果说出来。**不会失败**，所以 `spawn` 不新增任何 `Err` 路径。
+#[cfg(windows)]
+fn probed_git_bash() -> Option<PathBuf> {
+    let found = find_git_bash();
+    // 只在调试构建里出声：release 的 Tauri 是 GUI 子系统，Windows 上**根本没有
+    // 控制台**，那时候打进 stdout/err 是没人看得见的噪音。这个 crate 也没有
+    // tracing 依赖（先例是 `events.rs` 里的 eprintln），不为一行日志加一个。
+    // 真机上想知道它认了哪个，窗格里 `echo $env:CLAUDE_CODE_GIT_BASH_PATH` 更直接。
+    if cfg!(debug_assertions) {
+        match &found {
+            Some(c) => eprintln!(
+                "[devtoolkit] Git Bash 用 {}（来自 {}）",
+                c.path.display(),
+                c.source
+            ),
+            None => eprintln!("[devtoolkit] 没找到 Git Bash：窗格里的 claude 可能用不了它的 bash"),
+        }
+    }
+    found.map(|c| c.path)
+}
+
+/// Unix 上不需要这个变量（Claude Code 直接用系统 bash）。
+///
+/// 有这个定义是为了让 [`spawn`] 里那段**不用 `#[cfg]`**：Linux 上照样把整条路径
+/// 类型检查一遍，读代码的人也只看到一份统一的 `spawn`。
+#[cfg(not(windows))]
+fn probed_git_bash() -> Option<PathBuf> {
     None
 }
 
@@ -541,6 +751,34 @@ pub fn spawn(id: &str, cfg: &PtyConfig, generation: u64) -> Result<OpenedPty, Ag
         cmd.env("COLORTERM", "truecolor");
     }
 
+    // Git Bash：Claude Code 在 Windows 上要靠它执行 bash（它的 Bash 工具）。
+    //
+    // ⚠️ **这是给窗格里那个 `claude` 用的，和窗格自己的 shell 是两件事。**
+    // `default_shell` 决定用户面前的提示符（PowerShell），这个变量决定 claude
+    // 自己去 fork 哪个 bash —— 所以 `default_shell` 一个字都不用动。
+    //
+    // 为什么非找不可：Git for Windows 的安装器默认只把 `<Git>\cmd` 加进 PATH，
+    // 而 `bash.exe` 在 `<Git>\bin`（要额外勾「Use Git and optional Unix tools」
+    // 才会进 PATH）。于是「Git 装了、`git` 也能用、`bash.exe` 却不在 PATH 里」
+    // 是常态；应用又是从桌面启动的（拿到的是登录时那份 PATH），两条一叠加，
+    // 窗格里的 claude 就会报「requires git-bash」。
+    //
+    // 找不到就什么都不做 —— 这台机器没装 Git 是正常情况，**不能让 spawn 失败**，
+    // 窗格照常开（claude 自己会打一句比我们写得更准的提示）。
+    //
+    // 位置有两层理由：
+    // 1. 在调用方那份 env **之前** —— `CommandBuilder::env` 是覆盖语义，前端给的
+    //    值比我们猜的具体，得留一个让它盖住我们的机会（大小写变体也顺带覆盖了：
+    //    crate 内部把 key 统一转小写，后写的赢）；
+    // 2. 在下面那道 PATH **之前** —— 那道写着「放在最后，谁也别想再盖掉它」，
+    //    往它后面插东西就把那句话变成假的。
+    //    （探测读的是**本进程**的 PATH，不是 `cmd` 里那份，所以和那道原本无关。）
+    if let Some(bash) = git_bash_env(cfg) {
+        // 直接给 `&PathBuf`（`AsRef<OsStr>`），**不过 `display().to_string()`**：
+        // 没必要为一条要交给子进程的路径做一次有损的 UTF-8 往返
+        cmd.env(GIT_BASH_ENV, &bash);
+    }
+
     // 调用方传进来的环境变量（`DEVTOOLKIT_PANE_ID` / `DEVTOOLKIT_EVENT_DIR`）。
     //
     // ⚠️ 这两个值**不是从前端来的**：`agent_commands.rs` 用会话 id 和它自己算出来的
@@ -787,4 +1025,205 @@ fn maybe_send_exit(shared: &Shared, tx: &tokio::sync::mpsc::Sender<PtyEvent>) {
         return;
     }
     let _ = tx.blocking_send(PtyEvent::Exit { code });
+}
+
+/// Git Bash 那一套的**纯逻辑**测试。
+///
+/// 全部跨平台：探测规则（清单怎么排、什么时候不覆盖）和平台无关，所以这些断言
+/// 在 Linux 和 Windows 上跑的是同一份。真正摸文件的那一步（[`find_git_bash`]）
+/// 只在 Windows 上编译，它的验证在 `tests/pty.rs` 里 —— 那条也不依赖 runner
+/// 装没装 Git。
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 断言路径的**形状**而不是原串：Linux 上 `PathBuf` 不认 `\` 是分隔符，
+    /// `join` 会混进 `/`，原串比对会假红。形状一样就够了 —— 盘符本来也不该被
+    /// 写死（用户完全可能装在 D 盘）。
+    fn shape(p: &Path) -> String {
+        p.to_string_lossy().replace('\\', "/")
+    }
+
+    fn shapes(candidates: &[BashCandidate]) -> Vec<String> {
+        candidates.iter().map(|c| shape(&c.path)).collect()
+    }
+
+    fn env_with_git(git_exe: &str) -> GitBashEnv {
+        GitBashEnv {
+            git_exe: Some(PathBuf::from(git_exe)),
+            ..GitBashEnv::default()
+        }
+    }
+
+    // ------------------------------------------------------------ 注入决策
+
+    #[test]
+    fn 探到_git_bash_就塞进去() {
+        let probed = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+        assert_eq!(
+            git_bash_to_inject(None, None, Some(probed.clone())),
+            Some(probed)
+        );
+    }
+
+    #[test]
+    fn 调用方给了_git_bash_就不覆盖() {
+        let probed = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+        assert_eq!(
+            git_bash_to_inject(Some(r"D:\tool\bash.exe"), None, Some(probed)),
+            None
+        );
+    }
+
+    #[test]
+    fn 环境里给了_git_bash_就不覆盖() {
+        let probed = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+        assert_eq!(
+            git_bash_to_inject(None, Some(OsStr::new(r"D:\tool\bash.exe")), Some(probed)),
+            None
+        );
+    }
+
+    #[test]
+    fn 空的_git_bash_变量等于没设() {
+        let probed = PathBuf::from(r"C:\Program Files\Git\bin\bash.exe");
+        for empty in ["", "   ", "\t"] {
+            assert_eq!(
+                git_bash_to_inject(Some(empty), None, Some(probed.clone())),
+                Some(probed.clone()),
+                "调用方给的是空白，应当继续探测：{empty:?}"
+            );
+            assert_eq!(
+                git_bash_to_inject(None, Some(OsStr::new(empty)), Some(probed.clone())),
+                Some(probed.clone()),
+                "环境里是空白，应当继续探测：{empty:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn 没探到就什么都不塞() {
+        // 没装 Git 的机器是正常情况，不是错误
+        assert_eq!(git_bash_to_inject(None, None, None), None);
+    }
+
+    #[test]
+    fn 环境变量名逐字钉死() {
+        // 拼错一个字符就是静默失效：Claude Code 认不出，退回自己的自动探测
+        assert_eq!(GIT_BASH_ENV, "CLAUDE_CODE_GIT_BASH_PATH");
+    }
+
+    // -------------------------------------------------------------- 候选清单
+
+    #[test]
+    fn 候选顺序是_git_exe_优先_标准目录在后() {
+        let mut env = env_with_git("/git/cmd/git.exe");
+        env.program_files = Some("/pf".to_string());
+        env.program_files_x86 = Some("/pf86".to_string());
+        env.local_app_data = Some("/lad".to_string());
+
+        let candidates = git_bash_candidates(&env);
+        let paths = shapes(&candidates);
+
+        // git.exe 推出来的必须排在标准目录前面：它覆盖的是标准位置之外的自定义安装
+        assert_eq!(paths[0], "/git/cmd/bin/bash.exe");
+        assert!(paths.contains(&"/git/bin/bash.exe".to_string()));
+        // 而上溯**不能**走到文件系统根：`/bin/bash.exe` 是那个 bug 的指纹
+        assert!(!paths.contains(&"/bin/bash.exe".to_string()));
+
+        let last_git = candidates
+            .iter()
+            .rposition(|c| c.source.contains("git.exe"))
+            .expect("应当有 git.exe 推出来的候选");
+        let first_standard = candidates
+            .iter()
+            .position(|c| c.source == "%ProgramFiles%")
+            .expect("应当有 %ProgramFiles% 那条");
+        assert!(
+            last_git < first_standard,
+            "标准目录不该插在 git.exe 推出来的候选前面"
+        );
+
+        // 环境变量给的目录要真的被用上
+        assert!(paths.contains(&"/pf/Git/bin/bash.exe".to_string()));
+        assert!(paths.contains(&"/pf86/Git/bin/bash.exe".to_string()));
+        assert!(paths.contains(&"/lad/Programs/Git/bin/bash.exe".to_string()));
+    }
+
+    #[test]
+    fn 从_cmd_里的_git_exe_上溯到_git_根的_bin_bash_exe() {
+        // 安装器默认加进 PATH 的就是这个布局：<Git>\cmd\git.exe
+        let candidates = git_bash_candidates(&env_with_git("/Git/cmd/git.exe"));
+        assert!(
+            shapes(&candidates).contains(&"/Git/bin/bash.exe".to_string()),
+            "上溯一层要能找到 Git 根：{:?}",
+            shapes(&candidates)
+        );
+    }
+
+    #[test]
+    fn git_exe_在_mingw64_里时多上溯一层() {
+        // <Git>\mingw64\bin\git.exe 也是 PATH 上常见的布局
+        let candidates = git_bash_candidates(&env_with_git("/Git/mingw64/bin/git.exe"));
+        assert!(
+            shapes(&candidates).contains(&"/Git/bin/bash.exe".to_string()),
+            "上溯两层要能找到 Git 根：{:?}",
+            shapes(&candidates)
+        );
+    }
+
+    #[test]
+    fn 孤零零一个_git_exe_推不出候选() {
+        // `Path::new("git.exe").parent()` 是空路径，join 会拼出相对路径
+        // `bin/bash.exe` —— 拿那种东西去判存在是碰运气
+        let candidates = git_bash_candidates(&env_with_git("git.exe"));
+        assert!(
+            !candidates.iter().any(|c| c.source.contains("git.exe")),
+            "相对路径不该产出候选：{:?}",
+            shapes(&candidates)
+        );
+    }
+
+    #[test]
+    fn 标准目录拿不到环境变量时退到字面量() {
+        let paths = shapes(&git_bash_candidates(&GitBashEnv::default()));
+        assert!(paths.contains(&"C:/Program Files/Git/bin/bash.exe".to_string()));
+        assert!(paths.contains(&"C:/Program Files (x86)/Git/bin/bash.exe".to_string()));
+    }
+
+    #[test]
+    fn 没有_local_app_data_就不猜那条路径() {
+        // 那个目录跟着用户走，猜错不如不猜
+        let candidates = git_bash_candidates(&GitBashEnv::default());
+        assert!(!candidates.iter().any(|c| c.source.contains("LOCALAPPDATA")));
+    }
+
+    #[test]
+    fn 永远不去_system32_里捡_wsl_的_bash() {
+        // ⚠️ 这条是回归钉子：C:\Windows\System32\bash.exe 是 WSL 的，而 System32
+        // 永远在 PATH 上。一旦有人把「PATH 里找 bash.exe」加回来，Claude Code 会
+        // 拿到一个它判定为「不是 bash/sh 二进制」的路径 —— 然后退回自动探测，
+        // 比我们什么都不给还糟。
+        let mut env = env_with_git("/Git/cmd/git.exe");
+        env.program_files = Some("/pf".to_string());
+        env.program_files_x86 = Some("/pf86".to_string());
+        env.local_app_data = Some("/lad".to_string());
+
+        let candidates = git_bash_candidates(&env);
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| shape(&c.path).contains("System32")),
+            "清单里出现了 System32：{:?}",
+            shapes(&candidates)
+        );
+        // 而且每一条都得是 <某处>\bin\bash.exe 这个形状
+        for c in &candidates {
+            assert!(
+                c.path.parent().is_some_and(|d| d.ends_with("bin")),
+                "形状不对（应当落在 bin 目录里）：{}",
+                shape(&c.path)
+            );
+        }
+    }
 }

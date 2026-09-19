@@ -29,10 +29,13 @@ import { agentHub } from '../core/terminalHub';
 import { parseEventName, signalOf } from '../core/events';
 import {
   closePane,
+  gridColsFor,
+  gridLayout,
   leafPane,
   neighborOf,
   rectsOf,
   replacePane,
+  replaceWith,
   setRatio,
   splitPane,
   type Direction,
@@ -42,7 +45,15 @@ import {
 } from '../core/layout';
 import { createOscScanner, type OscScanner } from '../core/osc';
 import { attentionQueue, reduceSignal, type AgentSignal } from '../core/status';
-import type { AgentKind, AgentSession, AgentWorkspace } from '../core/types';
+import {
+  MAX_SESSIONS_PER_KIND,
+  NO_LAUNCH_ARGS,
+  type AgentKind,
+  type AgentSession,
+  type AgentWorkspace,
+  type LaunchArgs,
+  type SessionRequest,
+} from '../core/types';
 import type {
   AgentsServices,
   IntegrationOutcome,
@@ -108,6 +119,14 @@ export interface AgentsState {
   integration: Record<IntegrationTarget, IntegrationStatus | null>;
   /** 集成操作进行中（按钮要禁用，避免连点写两次） */
   integrating: boolean;
+  /**
+   * agent 的启动参数，**全局一份**（见 `LaunchArgs` 的说明）。
+   *
+   * 存在 state 里而不是每次现读：新建会话时要同步取（`commandFor`），
+   * 而「参数改了但新会话没带上」这种偏差是静默的 —— 用户只会觉得
+   * 「我明明设过」。
+   */
+  launchArgs: LaunchArgs;
 }
 
 export class AgentsStore {
@@ -124,6 +143,7 @@ export class AgentsStore {
     eventsError: null,
     integration: { claude: null, codex: null },
     integrating: false,
+    launchArgs: NO_LAUNCH_ARGS,
   };
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
@@ -184,7 +204,9 @@ export class AgentsStore {
   private async doInit(): Promise<void> {
     // 先读工作目录：会话要按它分组显示
     const workspaces = await this.loadWorkspaces();
-    this.patch({ workspaces });
+    // 启动参数也一起读：**新建会话时要用它拼命令**，晚读一步就可能漏掉
+    const launchArgs = await this.loadLaunchArgs();
+    this.patch({ workspaces, launchArgs });
 
     // 再收孤儿。**和读盘的顺序不能反**：先读盘的话，中间这段时间从界面上
     // 看是一切正常的，但后台还挂着上一次的会话
@@ -224,6 +246,43 @@ export class AgentsStore {
       out.push({ id, path, name: typeof name === 'string' && name !== '' ? name : path });
     }
     return out;
+  }
+
+  /** 读启动参数。**按不可信输入处理**：手改过的、旧版本的都要能读 */
+  private async loadLaunchArgs(): Promise<LaunchArgs> {
+    const raw = await this.kv.get<unknown>('launch_args');
+    if (typeof raw !== 'object' || raw === null) return NO_LAUNCH_ARGS;
+
+    const obj = raw as Record<string, unknown>;
+    const pick = (key: keyof LaunchArgs): string => {
+      const value = obj[key];
+      return typeof value === 'string' ? value : '';
+    };
+    return { claude: pick('claude'), codex: pick('codex') };
+  }
+
+  /**
+   * 改启动参数。**只影响之后新建的会话** —— 已经在跑的进程改不了它的命令行
+   * （那是操作系统的事，不是我们的），所以界面上要写清楚这一点。
+   */
+  setLaunchArgs(next: LaunchArgs): void {
+    const cleaned: LaunchArgs = { claude: next.claude.trim(), codex: next.codex.trim() };
+    this.patch({ launchArgs: cleaned });
+    void this.kv.set('launch_args', cleaned).catch(() => undefined);
+  }
+
+  /**
+   * 某个类型的会话该起什么命令：默认命令 + 该类型的启动参数。
+   *
+   * 拼接是**空格加原样追加**（见 `LaunchArgs` 的说明）。普通终端和自定义类型
+   * 直接返回默认值 —— 前者本来就只起一个 shell，拼出来仍是空串，
+   * 「`command === ''` = 只起 shell」那条判断不会被破坏。
+   */
+  commandFor(kind: AgentKind): string {
+    const base = DEFAULT_COMMAND[kind];
+    if (kind !== 'claude' && kind !== 'codex') return base;
+    const args = this.state.launchArgs[kind].trim();
+    return args === '' ? base : `${base} ${args}`;
   }
 
   /**
@@ -448,7 +507,11 @@ export class AgentsStore {
   async createSession(
     workspaceId: string,
     kind: AgentKind,
-    opts: { command?: string; split?: SplitDir } = {},
+    /**
+     * `place: false` = **建好但先别上屏**，由调用方决定怎么摆。
+     * 只有 [`createMany`] 用它：一批会话要一次摆成网格，中间不能一格格地抖。
+     */
+    opts: { command?: string; split?: SplitDir; place?: boolean } = {},
   ): Promise<string | null> {
     // ⚠️ 必须先初始化：**事件目录的路径在 init 里才拿到**，而它会作为
     // `DEVTOOLKIT_EVENT_DIR` 注入到进程里。少了它，这个会话的状态检测
@@ -464,7 +527,7 @@ export class AgentsStore {
       workspaceId,
       title: this.nextTitle(workspaceId, kind),
       kind,
-      command: opts.command ?? DEFAULT_COMMAND[kind],
+      command: opts.command ?? this.commandFor(kind),
       status: 'starting',
       statusAt: Date.now(),
       statusDetail: null,
@@ -490,7 +553,9 @@ export class AgentsStore {
     this.scanners.set(session.id, createOscScanner());
 
     this.patch({ sessions: [...this.state.sessions, session] });
-    this.putOnScreen(session.id, opts.split ?? null);
+    if (opts.place !== false) {
+      this.putOnScreen(session.id, opts.split ?? null);
+    }
 
     try {
       await this.spawn(session, workspace);
@@ -507,6 +572,39 @@ export class AgentsStore {
       );
     }
     return session.id;
+  }
+
+  /**
+   * 一次新建一批会话并摆成网格（对话框里「2 个 claude + 1 个终端」那种）。
+   *
+   * # 为什么先全建好、最后才一次上屏
+   *
+   * 一个个 `createSession` 直接上屏的话，每建一个都会动一次布局：第一个替换掉
+   * 当前那一格，第二个再从它旁边分出去……中间那几帧是**看得见的抖动**，焦点还
+   * 在乱跳。所以让 `createSession` 先别上屏（`place: false`），建完统一摆。
+   *
+   * 某一格起不来不会拖垮整批：`createSession` 里会把失败的那个留成「已退出」
+   * 的会话（侧栏能看到原因），成功的那几个照常摆出来。
+   */
+  async createMany(workspaceId: string, wants: readonly SessionRequest[]): Promise<number> {
+    const kinds: AgentKind[] = [];
+    for (const want of wants) {
+      // 夹一道：界面上每类最多 9 个，但这里是公开入口 —— 手改过的持久化数据、
+      // 将来别的调用方都可能塞更大的数进来
+      const count = Math.max(0, Math.min(Math.floor(want.count), MAX_SESSIONS_PER_KIND));
+      for (let i = 0; i < count; i += 1) kinds.push(want.kind);
+    }
+    if (kinds.length === 0) return 0;
+
+    const created: string[] = [];
+    for (const kind of kinds) {
+      const id = await this.createSession(workspaceId, kind, { place: false });
+      if (id !== null) created.push(id);
+    }
+    if (created.length === 0) return 0;
+
+    this.putGridOnScreen(created, gridColsFor(created.length));
+    return created.length;
   }
 
   /** 起进程。终端这时候已经在 hub 里了（见 `createSession` 里那段顺序说明） */
@@ -614,6 +712,34 @@ export class AgentsStore {
       layout: splitPane(layout, focusedId, split, sessionId, false),
       focusedId: sessionId,
       selectedId: sessionId,
+    });
+  }
+
+  /**
+   * 把一组会话一次摆成网格，**替换当前聚焦的那一块**。
+   *
+   * 和 [`putOnScreen`] 的分工：那个一次摆一个（新建一个、从旁边分一个），
+   * 这个一次摆一片。用「替换」而不是「追加」是因为一次建一批的语义就是
+   * 「这一格拿来放它们」—— 屏幕上别处用户摆好的东西不该被动。
+   */
+  putGridOnScreen(sessionIds: readonly string[], cols: number): void {
+    const grid = gridLayout(sessionIds, cols);
+    const first = sessionIds[0];
+    if (grid === null || first === undefined) return;
+
+    const { layout, focusedId } = this.state;
+    if (layout === null || focusedId === null) {
+      this.patch({ layout: grid, focusedId: first, selectedId: first });
+      return;
+    }
+
+    // 聚焦的那块可能已经不在布局里了（见 `putOnScreen` 里同样的兜底）——
+    // 那就落到第一块上，别让「上屏」变成一次静默的空操作
+    const target = paneOf(layout, focusedId) ? focusedId : firstPane(layout);
+    this.patch({
+      layout: replaceWith(layout, target, grid),
+      focusedId: first,
+      selectedId: first,
     });
   }
 

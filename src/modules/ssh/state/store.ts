@@ -21,6 +21,17 @@ import { nextAvailableName } from '../../../shared/connections/profiles';
 import { newId } from '../../../shared/ids';
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
+import type { TermMetrics } from '../../../shared/terminal/hub';
+import {
+  cleanTyped,
+  createBlockTracker,
+  splitInput,
+  stripEscapes,
+  type BlockTracker,
+  type CommandBlock,
+} from '../core/blocks';
+import { collapsedLine } from '../core/blocksView';
+import { createByteLog, type ByteLog } from '../core/byteLog';
 import { findKnownHost, forgetKnownHost, rememberKnownHost } from '../core/knownHosts';
 import {
   hasErrors,
@@ -51,6 +62,18 @@ import type { SshServices } from '../services/types';
 const INITIAL_COLS = 80;
 const INITIAL_ROWS = 24;
 
+/** 没有折叠时的空集合。省掉每次调用都新建一个（色条每帧都要问一次） */
+const EMPTY_IDS: ReadonlySet<number> = new Set();
+
+/**
+ * 折叠前要求「输出停多久」。
+ *
+ * 250ms 是「人已经看不出在动」的量级：比它长会让折叠感觉迟钝，比它短则可能
+ * 撞上一条正在慢慢吐输出的命令 —— 那样重放出来的内容和行号立刻就对不上，
+ * 而且是**静默地**对不上。
+ */
+const REDRAW_QUIET_MS = 250;
+
 export interface SshState {
   ready: boolean;
   profiles: SshProfile[];
@@ -80,6 +103,30 @@ export function idleRuntime(): SshRuntime {
 
 export class SshStore {
   private listeners = new Set<() => void>();
+  /**
+   * 每个会话一份「命令块」的记录。
+   *
+   * ⚠️ **不进 state**：它每秒都在变（输出一字节就更新一次时间戳），进了 state
+   * 就等于让侧栏和标签栏跟着远端刷屏 —— 和字节流不进 store 是同一条理由。
+   * 界面那边按 hub 的视口事件直接来读（见 `panels/TerminalPane.tsx`）。
+   */
+  private blocks = new Map<string, BlockTracker>();
+  /**
+   * 每个会话一份原始字节日志。**只给折叠用**（重放要它），平时没人读。
+   *
+   * 它有上限（见 `byteLog`）：超了就不再攒并置起标记，折叠按钮据此关掉 ——
+   * 宁可不能折，也不要折到一半内容对不上。
+   */
+  private logs = new Map<string, ByteLog>();
+  /** 哪些块被折起来了（按会话） */
+  private folded = new Map<string, Set<number>>();
+  /**
+   * 这一轮里用户敲进去的**原始按键**，回车时清掉。
+   *
+   * 只在一种情况下用得上：回车那一刻终端缓冲区里**还没有回显**（链路慢、
+   * 或者远端根本没回显）。那时候它是唯一的退路 —— 见 `readCommand`。
+   */
+  private typed = new Map<string, string>();
   private state: SshState = {
     ready: false,
     profiles: [],
@@ -100,6 +147,9 @@ export class SshStore {
     // hub 的两个出口接在这里。做成可写字段而不是构造参数，是为了避开
     // store ↔ hub 的循环依赖（hub 不认识 store，store 认识 hub）
     terminalHub.onInput = (sessionId, data) => {
+      // ⚠️ 顺序要紧：**先记账再发**。发出去之后远端可能马上就回输出，
+      // 而那些输出要用到刚记下的起点
+      this.recordInput(sessionId, data);
       void this.writeTo(sessionId, data);
     };
     terminalHub.onResize = (sessionId, cols, rows) => {
@@ -337,6 +387,10 @@ export class SshStore {
     // 决议之前就到达，那时候还没有终端接得住它 —— 就得再写一套「先攒着」
     // 的缓冲，而那套缓冲本身又是一个竞态来源。
     await terminalHub.create(sessionId, INITIAL_COLS, INITIAL_ROWS);
+    // 命令块的记录跟着终端一起生、一起灭：它读的缓冲区就是刚建好的这一个
+    this.blocks.set(sessionId, createBlockTracker());
+    this.logs.set(sessionId, createByteLog());
+    this.folded.delete(sessionId);
 
     const session: SshSession = {
       id: sessionId,
@@ -548,9 +602,15 @@ export class SshStore {
   /** 会话流里来的事件。只有「远端自己结束」才会走到这里（用户关的走 closeSession） */
   private onEvent(sessionId: string, event: SshEvent): void {
     switch (event.kind) {
-      case 'data':
+      case 'data': {
+        const at = Date.now();
+        // 先记两笔再喂给终端：块的「最后一字节输出」说的就是此刻，
+        // 而字节日志是折叠要用的原料
+        this.blocks.get(sessionId)?.output(at);
+        this.logs.get(sessionId)?.append(event.bytes, at);
         terminalHub.feed(sessionId, event.bytes);
         break;
+      }
 
       case 'exit': {
         const session = this.sessionById(sessionId);
@@ -595,6 +655,202 @@ export class SshStore {
     }
   }
 
+  // ------------------------------------------------------------ 命令块
+
+  /** 某个会话现在的命令块（新的在后）。没有就是空数组 */
+  blocksOf(sessionId: string): readonly CommandBlock[] {
+    return this.blocks.get(sessionId)?.blocks() ?? [];
+  }
+
+  /**
+   * 一条命令 + 它的输出 —— 色条上点一下复制的东西。
+   *
+   * 从**终端缓冲区**里读，而不是从某份存下来的字节重建：用户看见的是什么，
+   * 复制出去的就是什么。起点用块的 `col`（≈ 提示符的终点），所以提示符不会被
+   * 复制进去；终点是下一条命令那一行（不含），所以两块之间不会重叠。
+   */
+  blockText(sessionId: string, blockId: number): string {
+    const tracker = this.blocks.get(sessionId);
+    const metrics = terminalHub.metrics(sessionId);
+    if (tracker === undefined || metrics === null) return '';
+
+    const blocks = tracker.blocks();
+    const index = blocks.findIndex((b) => b.id === blockId);
+    const block = blocks[index];
+    if (block === undefined) return '';
+
+    const endLine = blocks[index + 1]?.line ?? metrics.lines;
+    const body = (
+      terminalHub.textBetween(
+        sessionId,
+        { line: block.line, col: block.col },
+        { line: endLine, col: 0 },
+      ) ?? ''
+    ).trimEnd();
+
+    // 读不出东西（回显还没回来）时至少把命令本身交出去
+    return body.trim() === '' ? block.command : body;
+  }
+
+  /** 哪些块被折起来了。色条据此换个样子（折起来的要看得出来） */
+  foldedBlocks(sessionId: string): ReadonlySet<number> {
+    return this.folded.get(sessionId) ?? EMPTY_IDS;
+  }
+
+  /** 折叠现在能不能用（日志没溢出、没有全屏程序、输出停了） */
+  canFold(sessionId: string): boolean {
+    const log = this.logs.get(sessionId);
+    return log !== undefined && !log.overflowed() && this.quietEnough(sessionId, log);
+  }
+
+  /**
+   * 折叠 / 展开一块。返回有没有真的动过。
+   *
+   * # 它做的事就是「重放一遍」
+   *
+   * xterm 的缓冲区删不掉中间几行，所以折叠只能是：把开头那段 + 每一块的字节
+   * 按顺序重放一遍，折起来的那块换成一行摘要（见 `core/byteLog.ts` 头部）。
+   *
+   * # 三道闸，缺一个都不干
+   *
+   * 1. **日志溢出了不干** —— 没有完整字节就重放不出原样，宁可不能折
+   * 2. **输出没停不干** —— 重放到一半又插进来几行，内容和行号就全对不上了
+   * 3. **全屏程序在跑不干**（`redraw` 里还有一道）—— 那画面不是「一段段输出」
+   *
+   * 三种情况都只是「这次没动」，不报错：用户双击一下没反应，看起来就像
+   * 「还不能折」，而不是弹一条看不懂的错误。
+   */
+  toggleBlockFold(sessionId: string, blockId: number): boolean {
+    const log = this.logs.get(sessionId);
+    const tracker = this.blocks.get(sessionId);
+    const metrics = terminalHub.metrics(sessionId);
+    if (log === undefined || tracker === undefined || metrics === null) return false;
+    if (log.overflowed() || !this.quietEnough(sessionId, log)) return false;
+
+    const blocks = tracker.blocks();
+    const index = blocks.findIndex((b) => b.id === blockId);
+    const block = blocks[index];
+    if (block === undefined) return false;
+
+    const set = new Set(this.folded.get(sessionId) ?? []);
+    const collapse = !set.has(blockId);
+
+    // 这一块现在占几行（到下一块的起点；最后一块到缓冲区末尾）
+    const endLine = blocks[index + 1]?.line ?? metrics.lines;
+    const lines = Math.max(1, endLine - block.line);
+    const delta = (collapse ? 1 : lines) - lines;
+
+    const plan: Array<{ bytes: Uint8Array } | { text: string }> = [
+      { bytes: log.preamble() },
+    ];
+    for (const b of blocks) {
+      const folded = b.id === blockId ? collapse : set.has(b.id);
+      plan.push(folded ? { text: `${collapsedLine(b)}\r\n` } : { bytes: log.block(b.id) });
+    }
+
+    if (!terminalHub.redraw(sessionId, plan)) return false;
+
+    if (collapse) set.add(blockId);
+    else set.delete(blockId);
+    this.folded.set(sessionId, set);
+
+    // 行号重算：这一块之后的所有块整体挪 delta 行（前面那些没动）
+    if (delta !== 0) {
+      const moved = new Map<number, number>();
+      for (let i = index + 1; i < blocks.length; i += 1) {
+        const later = blocks[i];
+        if (later !== undefined) moved.set(later.id, later.line + delta);
+      }
+      tracker.remap(moved);
+    }
+    return true;
+  }
+
+  /**
+   * 现在适合重放吗：**输出已经停了**，而且没有全屏程序。
+   *
+   * 250ms 这个数是「人已经看不出在动」的量级：比它长会让折叠感觉迟钝，
+   * 比它短则可能撞上一条正在慢慢吐输出的命令（那样重放出来的内容和行号
+   * 立刻就对不上了，而且是静默地不对）。
+   */
+  private quietEnough(sessionId: string, log: ByteLog): boolean {
+    const metrics = terminalHub.metrics(sessionId);
+    if (metrics === null || metrics.alt) return false;
+    const last = log.lastOutputAt();
+    return last === null || Date.now() - last >= REDRAW_QUIET_MS;
+  }
+
+  /**
+   * 把用户敲的键记进命令块模型里。
+   *
+   * ⚠️ **只记账，不拦**：字节照旧发出去（见 `writeTo`）。块边界是从同一条流上
+   * 「旁听」出来的 —— 和智能体会话那边用 OSC 扫描器听状态是同一个路子，
+   * 用户按的每一个键都变得更有用，而终端的行为一点没变。
+   */
+  private recordInput(sessionId: string, data: Uint8Array): void {
+    const tracker = this.blocks.get(sessionId);
+    if (tracker === undefined) return;
+
+    const metrics = terminalHub.metrics(sessionId);
+    // ① 量不到（会话刚建、还没挂上）就算了：宁可漏一块，也不要记一个假位置
+    // ② 全屏程序里（vim、htop、top）敲的键不是命令。alt 屏幕里那画面本来也
+    //    不是「一段段输出」，切出来的块没有意义
+    if (metrics === null || metrics.alt) return;
+
+    const text = new TextDecoder().decode(data);
+    const now = Date.now();
+
+    // Ctrl+C 作废这一轮：shell 会在新的一行重新打提示符，起点不能还记着上一行
+    if (text.includes('\x03')) {
+      tracker.cancel();
+      this.typed.delete(sessionId);
+      return;
+    }
+
+    const { text: typed, submit } = splitInput(stripEscapes(text));
+
+    if (!submit) {
+      tracker.begin(metrics.cursorLine, metrics.cursorCol, now);
+      this.typed.set(sessionId, (this.typed.get(sessionId) ?? '') + typed);
+      return;
+    }
+
+    const pending = this.typed.get(sessionId) ?? '';
+    this.typed.delete(sessionId);
+    const command = this.readCommand(sessionId, metrics, typed + pending);
+
+    const created = tracker.submit(command, metrics.cursorLine, metrics.cursorCol, now);
+    // 立了块就把日志分段（空命令返回 null，那种情况字节继续留在上一段里，
+    // 而上一段的末尾正是「下一条命令那一行」—— 两边对得上）
+    if (created !== null) this.logs.get(sessionId)?.startBlock(created.id);
+  }
+
+  /**
+   * 读命令原文：**从用户敲第一个键的位置读到光标**。
+   *
+   * 为什么不从按键还原：行编辑在远端 —— Tab 补全、↑ 历史、Ctrl+R 搜索，
+   * 我们这边只看得见一串控制序列。而从缓冲区读，拿到的就是屏幕上**真实的**
+   * 那一行（补全过的、从历史里取出来的都在里面）。
+   *
+   * 退路：回显还没回来（链路慢）或者远端压根不回显时，缓冲区里那一行是空的，
+   * 那就回到用户敲的原始按键上 —— 不完美（退格、Tab 补不出来），但比一个
+   * 空命令好，而且**只有这种情况下才用**。
+   */
+  private readCommand(sessionId: string, metrics: TermMetrics, typed: string): string {
+    const tracker = this.blocks.get(sessionId);
+    const from = tracker?.start() ?? null;
+    if (from !== null) {
+      const text = terminalHub.textBetween(
+        sessionId,
+        from,
+        { line: metrics.cursorLine, col: metrics.cursorCol },
+      );
+      const command = (text ?? '').trim();
+      if (command !== '') return command;
+    }
+    return cleanTyped(typed);
+  }
+
   // ---------------------------------------------------------------- 内部
 
   private patchSession(sessionId: string, patch: Partial<SshSession>): void {
@@ -614,6 +870,10 @@ export class SshStore {
    */
   private discardSession(sessionId: string): void {
     terminalHub.dispose(sessionId);
+    this.blocks.delete(sessionId);
+    this.typed.delete(sessionId);
+    this.logs.delete(sessionId);
+    this.folded.delete(sessionId);
     const sessions = this.state.sessions.filter((s) => s.id !== sessionId);
     this.set({
       sessions,

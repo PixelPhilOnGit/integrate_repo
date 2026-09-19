@@ -113,6 +113,41 @@ export const KIND_LABEL: Record<AgentKind, string> = {
 };
 
 /**
+ * agent 的启动参数。**全局一份**，所有工作目录共用（用户明确要的这个粒度）。
+ *
+ * 只给 claude / codex 两个 —— 普通终端没有「参数」这回事（它的命令是空的，
+ * 参数没处加）。`custom` 同理，它连默认命令都还没有。
+ *
+ * ⚠️ 值是**原样追加到启动命令后面**的，不过任何解析、不切词：
+ * `--dangerously-skip-permissions` 这种就是一整串照抄。所以这里也不做校验 ——
+ * 参数合不合法是 CLI 自己的事，它报的错比我们猜得准。
+ */
+export interface LaunchArgs {
+  claude: string;
+  codex: string;
+}
+
+export const NO_LAUNCH_ARGS: LaunchArgs = { claude: '', codex: '' };
+
+/**
+ * 「建几个什么类型的会话」—— 新建对话框和 store 之间那一条约定。
+ *
+ * 是数组而不是 `Record<AgentKind, number>`：**顺序有意义**（网格按这个顺序铺，
+ * 用户填的顺序就是他希望看到的顺序），而且将来只加一种类型时不用动结构。
+ */
+export interface SessionRequest {
+  kind: AgentKind;
+  count: number;
+}
+
+/**
+ * 一次新建里**每类**会话的上限：对话框里是输入框的 `max`，store 里是保险。
+ *
+ * 每个会话都是一个真进程，一次开几十个不是笔误就是手改过的数据。
+ */
+export const MAX_SESSIONS_PER_KIND = 9;
+
+/**
  * IPC 契约：Rust 侧 `agent_open` 那条通道推上来的消息。
  *
  * 字段名**照着 Rust 的 serde 输出写**（tag 是 `kind` + camelCase），

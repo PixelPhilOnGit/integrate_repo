@@ -1507,6 +1507,24 @@ textarea:focus {
  * clientHeight，不给死高度的话它会随着终端内容一起长高，于是每次都量到
  * 一个更大的值，fit 就一路涨下去。
  */
+/*
+ * 终端 + 左边那条命令块色条。
+ *
+ * ⚠️ 上下那点留白放在**这一层**、不放 `.rd-term-host` 上：色条和终端在同一条
+ * 基线上，各自再加 padding 就会错开几像素 —— 而错开几像素的表现是「色条和
+ * 命令对不齐」，看着就是不对，却很难说清哪儿不对。
+ */
+.rd-ssh-term-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding-top: 4px;
+}
+
+.rd-ssh-term-row > .rd-term-host {
+  padding-top: 0;
+}
+
 .rd-term-host {
   flex: 1;
   min-height: 0;
@@ -1514,6 +1532,66 @@ textarea:focus {
   overflow: hidden;
   background: #1e1e1e;
   padding: 4px 0 0 6px;
+}
+
+/* 命令块色条那一栏。固定窄栏，终端自己缩进 —— 见 styles 上面 `.rd-ssh-term-row` */
+.rd-ssh-blocks {
+  position: relative;
+  flex: none;
+  width: 11px;
+  overflow: hidden;
+}
+
+.rd-ssh-band {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.1s;
+}
+
+/* 相邻两块交替颜色：一眼分得开哪块是哪块 */
+.rd-ssh-band.is-lane0 {
+  background: var(--accent);
+}
+
+.rd-ssh-band.is-lane1 {
+  background: #b07d3f;
+}
+
+.rd-ssh-band:hover {
+  opacity: 1;
+}
+
+.rd-ssh-band.is-copied {
+  background: #3fa96a;
+  opacity: 1;
+}
+
+/* 折起来的块画成空心 —— 和实心的「展开」一眼分得开 */
+.rd-ssh-band.is-folded {
+  background: transparent;
+  border: 1px solid var(--accent);
+  opacity: 0.9;
+}
+
+/* 「已复制」飘一下就走。定位在色条右边，不遮终端里的字 */
+.rd-ssh-band-toast {
+  position: absolute;
+  left: 14px;
+  top: 8px;
+  z-index: 2;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* 终端容器：由 hub 创建并 appendChild 进来。跟着宿主铺满 */
@@ -1683,6 +1761,25 @@ textarea:focus {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 14px;
+}
+
+/* 对话框底部那个「靠左站」的按钮（新建会话里的「启动参数…」）。
+   `.rd-modal-actions` 是右对齐的，这个把左边那一份顶出去 */
+.rd-modal-actions-left {
+  margin-right: auto;
+}
+
+/* 一行「名字 + 数字」：新建会话里填数量的那几行。
+   形状和 `.rd-field.rd-color` 一样（左标签右控件），只是控件是数字框 */
+.rd-field.rd-count {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.rd-field.rd-count input {
+  width: 76px;
 }
 
 /* --------------------------------------------------------- 智能体会话模块

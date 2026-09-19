@@ -32,6 +32,8 @@
  * 它描述的本来就是「被 hub 塞进来的那些节点」长什么样，和哪个模块无关。
  */
 
+import { isMacLike } from '../platform/detect';
+import { copyIntent } from './clipboard';
 import { createCoalescer, type Coalescer } from './coalesce';
 import { clampSize, hasLayout, sameSize, type TermSize } from './fit';
 
@@ -73,6 +75,41 @@ interface Entry {
   disposed: boolean;
   /** 上一次 fit 的调度。用来合并同一个动画帧里的多次触发 */
   frame: number | null;
+  /**
+   * 模块往终端容器里塞的叠层（按类名去重）。
+   *
+   * 放在容器**里面**而不是外面，是为了让它们跟着终端一起被挪到屏幕外 ——
+   * 否则切走再回来，叠层会留在原地对着空气画。
+   */
+  layers: Map<string, HTMLElement>;
+}
+
+/** 终端缓冲区里的一个位置。行号是**绝对行号**（含回滚区），列从 0 开始 */
+export interface TermPos {
+  line: number;
+  col: number;
+}
+
+/**
+ * 视口的量法。给叠层用：把「第几行」换算成像素。
+ *
+ * 拿不到布局（还没挂上、尺寸是 0）时 `cellHeight` 会是 0 —— 调用方要当
+ * 「这次先不画」处理，而不是拿 0 去除。
+ */
+export interface TermMetrics {
+  /** 视口顶部那一行的绝对行号 */
+  viewportLine: number;
+  /** 一行的像素高度 */
+  cellHeight: number;
+  /** 视口几行 */
+  rows: number;
+  /** 缓冲区总共几行（含回滚） */
+  lines: number;
+  /** 光标位置（绝对行号 + 列） */
+  cursorLine: number;
+  cursorCol: number;
+  /** 全屏程序在跑吗（备用屏幕）。在跑的时候不该做「命令块」这类东西 */
+  alt: boolean;
 }
 
 export interface HubHooks {
@@ -123,6 +160,9 @@ export class TerminalHub {
    * 手一停发最终尺寸 —— 详见 `coalesce.ts`。
    */
   private resizers = new Map<string, Coalescer<TermSize>>();
+
+  /** 谁在盯着视口。见 [`TerminalHub::onViewport`] */
+  private viewportListeners = new Map<string, Set<() => void>>();
 
   /**
    * 两个出口由 store 在构造时接上。
@@ -186,6 +226,11 @@ export class TerminalHub {
 
     installClipboard(term);
 
+    // 视口动了就叫一声：叠层（SSH 那边的命令块色条）要跟着重画。
+    // 只挂这两个事件，别用 `onRender` —— 那个每次重绘都响，滚动时一帧好几次
+    term.onScroll(() => this.notifyViewport(sessionId));
+    term.onLineFeed(() => this.notifyViewport(sessionId));
+
     const entry: Entry = {
       term,
       fit,
@@ -194,6 +239,7 @@ export class TerminalHub {
       size: clampSize(cols, rows),
       disposed: false,
       frame: null,
+      layers: new Map(),
     };
     this.entries.set(sessionId, entry);
 
@@ -290,6 +336,8 @@ export class TerminalHub {
 
     entry.size = proposed;
     this.resizerFor(sessionId).push(proposed);
+    // 行数或行高变了，叠层的像素位置就全不对了
+    this.notifyViewport(sessionId);
   }
 
   /** 每一路一个合并器，用的时候才建 */
@@ -309,6 +357,9 @@ export class TerminalHub {
     const entry = this.entries.get(sessionId);
     if (!entry || entry.disposed) return;
     entry.term.write(bytes);
+    // 输出也可能推动视口（在底部时每来一行就滚一行），而且叠层要等**写完**
+    // 才知道新内容落在第几行 —— 所以叫在 write 之后
+    this.notifyViewport(sessionId);
   }
 
   /** 往终端里写一行提示（会话结束时用）。会话不在了就静静地算了 */
@@ -336,6 +387,8 @@ export class TerminalHub {
     // 挂着的那个尺寸别再发了：会话已经没了
     this.resizers.get(sessionId)?.cancel();
     this.resizers.delete(sessionId);
+    // 视口的订阅跟着会话一起清掉（叠层的 DOM 随容器一起被删，不用管）
+    this.viewportListeners.delete(sessionId);
 
     if (entry.frame !== null) cancelAnimationFrame(entry.frame);
     entry.observer?.disconnect();
@@ -378,6 +431,172 @@ export class TerminalHub {
     while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
     return lines.join('\n');
   }
+
+  // ------------------------------------------------------------ 叠层与视口
+
+  /**
+   * 在终端容器里放一层叠层，**跟着终端一起被挪到屏幕外**。
+   *
+   * 按类名去重：同一个模块同一个用途只会有一层，重复调用拿到的是同一个节点。
+   * 容器是 hub 自己建、自己挪的，所以叠层必须挂在它里面 —— 挂在外面的宿主节点
+   * 上，切走的时候叠层会留在原地对着空气画。
+   */
+  layer(sessionId: string, className: string): HTMLElement | null {
+    const entry = this.entries.get(sessionId);
+    if (!entry || entry.disposed) return null;
+
+    const existing = entry.layers.get(className);
+    if (existing !== undefined) return existing;
+
+    const el = document.createElement('div');
+    el.className = className;
+    entry.container.appendChild(el);
+    entry.layers.set(className, el);
+    return el;
+  }
+
+  /**
+   * 视口的量法。拿不到（会话没了、还没挂上、量不出行高）返回 null。
+   *
+   * 行高是**量出来的**（屏幕元素的实际高度 ÷ 行数），不是按
+   * `fontSize × lineHeight` 算的：渲染器会取整，自己算迟早差几像素，
+   * 而几像素在色条上就是「和文字对不齐」。
+   */
+  metrics(sessionId: string): TermMetrics | null {
+    const entry = this.entries.get(sessionId);
+    if (!entry || entry.disposed) return null;
+
+    const buffer = entry.term.buffer.active;
+    const rows = entry.term.rows;
+    const screen = entry.container.querySelector('.xterm-screen');
+    const height = screen instanceof HTMLElement ? screen.getBoundingClientRect().height : 0;
+    const cellHeight = rows > 0 && height > 0 ? height / rows : 0;
+
+    return {
+      viewportLine: buffer.viewportY,
+      cellHeight,
+      rows,
+      lines: buffer.length,
+      cursorLine: buffer.baseY + buffer.cursorY,
+      cursorCol: buffer.cursorX,
+      alt: buffer.type === 'alternate',
+    };
+  }
+
+  /**
+   * 取缓冲区里的一段文字，`to` 不含（和 `slice` 一样）。
+   *
+   * **软换行的行会拼起来**：终端里一条长命令折成两行显示是常事，而那在逻辑上
+   * 还是同一行 —— 复制出来多一个换行就是错的。xterm 在每行上标了 `isWrapped`，
+   * 正是为这个准备的。
+   */
+  textBetween(sessionId: string, from: TermPos, to: TermPos): string | null {
+    const entry = this.entries.get(sessionId);
+    if (!entry || entry.disposed) return null;
+
+    const buffer = entry.term.buffer.active;
+    const parts: string[] = [];
+    for (let i = from.line; i <= to.line; i += 1) {
+      const line = buffer.getLine(i);
+      if (line === undefined) break;
+
+      const text = line.translateToString(true);
+      // 这一行是上一行的延续（软换行）→ 直接接上去，不插换行
+      if (parts.length > 0 && !line.isWrapped) parts.push('\n');
+
+      if (i === from.line && i === to.line) parts.push(text.slice(from.col, to.col));
+      else if (i === from.line) parts.push(text.slice(from.col));
+      else if (i === to.line) parts.push(text.slice(0, to.col));
+      else parts.push(text);
+    }
+    return parts.join('');
+  }
+
+  /**
+   * 把终端**按给定的段落重画一遍**（命令块折叠/展开用的就是它）。
+   *
+   * # ⚠️ 这是整套终端里唯一一处「重放字节」的地方
+   *
+   * 文件头部那段写明了：**裸字节重放重建不出终端的状态** —— 粘性模式、备用
+   * 屏幕、滚动区域都不在最近的输出里。所以这里加了三条护栏，缺一不可：
+   *
+   * 1. **备用屏幕里不做**（返回 false）：全屏程序的画面不是「一段段输出」，
+   *    重画没有意义，而且它那些模式丢掉就是真的坏了
+   * 2. **重画之后把粘性模式补回去**：方向键发 `ESC[A` 还是 `ESC O A` 全看
+   *    DECCKM，粘贴要不要 bracketed 包装看 2004 —— 丢了**不报错**，只是
+   *    「这个终端怪怪的」，最难查的一类
+   * 3. **光标会回到末尾**：重画就是把内容重新打一遍。这要求调用方只在
+   *    shell 停在提示符上（没有命令在跑）时调 —— 那正是调用方 `canRedraw` 管的事
+   *
+   * 段落：`bytes` 原样写回，`text` 写一行别的东西（折叠后的摘要就是它）。
+   */
+  redraw(sessionId: string, parts: readonly RedrawPart[]): boolean {
+    const entry = this.entries.get(sessionId);
+    if (!entry || entry.disposed) return false;
+    if (entry.term.buffer.active.type === 'alternate') return false;
+
+    // 先量一份粘性模式出来：reset 会把它们清成默认值
+    const modes = stickyModes(entry.term);
+
+    entry.term.reset();
+    for (const part of parts) {
+      if ('bytes' in part) entry.term.write(part.bytes);
+      else entry.term.write(part.text);
+    }
+    entry.term.write(modes);
+
+    this.notifyViewport(sessionId);
+    return true;
+  }
+
+  /**
+   * 视口变了（滚动、输出、换行）时叫一声。返回退订函数。
+   *
+   * ⚠️ 输出密集时这个回调**来得很快**（每来一段字节就一次），调用方要自己
+   * 合并到动画帧里再画 —— hub 不做节流：它不知道对面是要重画 DOM 还是只记个数。
+   */
+  onViewport(sessionId: string, cb: () => void): () => void {
+    let set = this.viewportListeners.get(sessionId);
+    if (set === undefined) {
+      set = new Set();
+      this.viewportListeners.set(sessionId, set);
+    }
+    set.add(cb);
+    return () => {
+      set.delete(cb);
+      if (set.size === 0) this.viewportListeners.delete(sessionId);
+    };
+  }
+
+  private notifyViewport(sessionId: string): void {
+    const set = this.viewportListeners.get(sessionId);
+    if (set === undefined) return;
+    for (const cb of set) cb();
+  }
+}
+
+/** [`TerminalHub::redraw`] 的一段：要么原样的字节，要么一段要写进去的文字 */
+export type RedrawPart = { bytes: Uint8Array } | { text: string };
+
+/**
+ * 把当前的粘性模式翻译成「再设一遍」的转义序列。
+ *
+ * 为什么需要它：`reset()`（还有「从空终端重放」）会把这些清成默认值，而它们
+ * 是**会话早期设一次、之后一直有效**的东西 —— 用户看不见，程序却依赖。
+ * 只补 xterm 自己认得、而且丢掉会出问题的那几个；多写几个「关」反而是噪音。
+ */
+function stickyModes(term: import('@xterm/xterm').Terminal): string {
+  const m = term.modes;
+  return [
+    m.applicationCursorKeysMode ? '\x1b[?1h' : '\x1b[?1l',
+    m.applicationKeypadMode ? '\x1b=' : '\x1b>',
+    m.bracketedPasteMode ? '\x1b[?2004h' : '\x1b[?2004l',
+    m.insertMode ? '\x1b[4h' : '\x1b[4l',
+    m.originMode ? '\x1b[?6h' : '\x1b[?6l',
+    m.reverseWraparoundMode ? '\x1b[?45h' : '\x1b[?45l',
+    m.sendFocusMode ? '\x1b[?1004h' : '\x1b[?1004l',
+    m.wraparoundMode ? '\x1b[?7h' : '\x1b[?7l',
+  ].join('');
 }
 
 /** 各模块调这个建自己的实例（一个模块一个，别在组件里建） */
@@ -386,36 +605,94 @@ export function createTerminalHub(options: TerminalHubOptions): TerminalHub {
 }
 
 /**
- * 复制粘贴。
+ * 复制。
  *
- * 只接管**复制**（`Ctrl+Shift+C`，macOS 上是 `Cmd+C` 带选中时）：
- * 终端里 `Ctrl+C` 必须是 SIGINT，不能是复制。
+ * **哪些键算复制**在 `./clipboard.ts` 里（纯函数，单独测）；这里只管两件事：
+ * 把文字写进剪贴板，以及**把这一下拦下来** —— 不拦的话 `Ctrl+Shift+C` 会被
+ * 当成普通按键发到远端，变成一个莫名其妙的控制字符。
  *
  * 粘贴走浏览器原生的那条路（xterm 的隐藏 textarea 会收到 paste 事件），
- * 所以 `Ctrl+V` / `Cmd+V` 不用管。⚠️ 但 `navigator.clipboard` 在 Tauri 的
- * WebView 里能不能用**没有验证过**（code-server 当初就是因为不是安全上下文
- * 才改的 HTTPS）。真机上要是复制不出来，退路是
- * `tauri-plugin-clipboard-manager`。
+ * 所以 `Ctrl+V` / `Cmd+V` 不用管。
  */
 function installClipboard(term: import('@xterm/xterm').Terminal): void {
+  // UA 在一次进程里不会变，认一次就够
+  const isMac = isMacLike();
+
   term.attachCustomKeyEventHandler((event) => {
     if (event.type !== 'keydown') return true;
 
-    const copyCombo =
-      (event.ctrlKey && event.shiftKey && event.code === 'KeyC') ||
-      (event.metaKey && !event.ctrlKey && event.code === 'KeyC');
-
-    if (!copyCombo) return true;
+    // ⚠️ 这道便宜的过滤要在 `getSelection()` **之前**：那个回调是每一个按键
+    // 都会走的，而 `getSelection()` 每次都要从缓冲区拼一遍字符串。
+    // 三条规则（Ctrl+Shift+C / Cmd+C / 有选中的 Ctrl+C）都只认 C 键，
+    // 所以先按 code 挡掉不会漏判
+    if (event.code !== 'KeyC') return true;
 
     const selection = term.getSelection();
-    if (selection !== '') {
-      void navigator.clipboard?.writeText(selection).catch(() => {
-        // 写不了剪贴板就算了：用户还能用鼠标选中再右键复制。
-        // 这里不弹错误条 —— 复制失败不值得打断他正在做的事
-      });
-    }
-    // 不管有没有选中都拦下：不拦的话 Ctrl+Shift+C 会被当成普通按键
-    // 发到远端，变成一个莫名其妙的控制字符
+    if (copyIntent(event, { hasSelection: selection !== '', isMac }) !== 'copy') return true;
+
+    // ⚠️ 没选中时**不要写**：写个空串进去会把用户剪贴板里原有的东西清掉，
+    // 而用户按这一下多半只是想中断。拦下来不发到远端就够了
+    if (selection !== '') writeClipboard(selection);
+
     return false;
   });
+}
+
+/**
+ * 把文字写进剪贴板。
+ *
+ * 两条路：`navigator.clipboard` 是标准那条，但它**不是到处都有**（不是安全
+ * 上下文、或者窗口没焦点的时候它会拒绝），所以留着退路。之前这里只有标准
+ * 那条、而且失败被吞掉 —— 表现就是「按了没反应，也说不出为什么」。
+ */
+function writeClipboard(text: string): void {
+  const write = navigator.clipboard?.writeText;
+  if (typeof write === 'function') {
+    void navigator.clipboard
+      .writeText(text)
+      // 异步失败时用户手势早就结束了，退路还可能被浏览器拒 —— 尽力而为
+      .catch(() => copyViaTextarea(text));
+    return;
+  }
+  copyViaTextarea(text);
+}
+
+/**
+ * 退路：`document.execCommand('copy')`。
+ *
+ * 老掉牙，但 WebView（包括 Windows 的 WebView2）都还认，而且**它是在按键事件
+ * 的同一个回调里同步跑的**，不会撞上「必须在用户手势里」那条限制。
+ *
+ * ⚠️ 它要有一个被选中的可编辑节点，于是会**把焦点抢走** —— 用完必须还回去，
+ * 否则用户按完 `Ctrl+C` 就打不进字了。
+ */
+function copyViaTextarea(text: string): void {
+  const previous = document.activeElement;
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('aria-hidden', 'true');
+  // 挪出视口而不是 display:none —— 后者选不中，等于什么都没复制
+  area.style.position = 'fixed';
+  area.style.top = '-1000px';
+  document.body.appendChild(area);
+  try {
+    area.select();
+    document.execCommand('copy');
+  } catch {
+    // 真写不了就算了：用户还能用鼠标选中再右键复制。
+    // 这里不弹错误条 —— 复制失败不值得打断他正在做的事
+  } finally {
+    area.remove();
+    if (previous instanceof HTMLElement) previous.focus();
+  }
+}
+
+/**
+ * 命令块的复制入口。
+ *
+ * 和按键那条路（`installClipboard`）走的是**同一个写入函数**：两条路各自写一份
+ * 的话，「在 WebView 里到底哪种写法能成」这件事就有了两个答案，迟早只对一半。
+ */
+export function copyText(text: string): void {
+  writeClipboard(text);
 }

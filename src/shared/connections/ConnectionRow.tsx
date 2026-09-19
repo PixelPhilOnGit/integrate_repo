@@ -29,6 +29,17 @@ export interface ConnectionRowProps {
   expanded?: boolean;
   onToggleExpand?: () => void;
   /**
+   * 覆盖右侧那个按钮的文案。不传就是默认的「连接 / 断开」。
+   *
+   * ⚠️ 需要它是因为**默认文案讲的是「连上/断开」这件事，而有的模块不是**：
+   * SSH 连上之后仍然可以再开一个终端（一个连接好几个会话），按钮的真意是
+   * 「再开一个」—— 那时候还写着「断开」就是在骗人（真发生过：点「断开」
+   * 又开出来一个会话）。
+   */
+  toggleLabels?: { idle: string; active: string };
+  /** 覆盖按钮的 title。不传就跟着文案走 */
+  toggleTitle?: string;
+  /**
    * 在行上点右键。传了就触发（坐标是屏幕坐标，直接喂给 `ContextMenu`）。
    *
    * 删除、重命名这类「低频但必须有」的操作走右键 —— 常驻按钮会把行挤得很挤，
@@ -36,6 +47,9 @@ export interface ConnectionRowProps {
    */
   onContextMenu?: (x: number, y: number) => void;
 }
+
+/** 默认文案：Redis / SQL 的「连上 / 断开」。SSH 会在调用处覆盖掉 */
+const DEFAULT_TOGGLE_LABELS = { idle: '连接', active: '断开' };
 
 export function ConnectionRow({
   id,
@@ -48,9 +62,13 @@ export function ConnectionRow({
   expanded,
   onToggleExpand,
   onContextMenu,
+  toggleLabels,
+  toggleTitle,
 }: ConnectionRowProps): ReactNode {
   const connected = status === 'connected';
   const busy = status === 'connecting';
+  const labels = toggleLabels ?? DEFAULT_TOGGLE_LABELS;
+  const toggleLabel = connected ? labels.active : labels.idle;
 
   return (
     <div
@@ -116,14 +134,14 @@ export function ConnectionRow({
         className="rd-conn-toggle"
         data-testid={`conn-toggle-${id}`}
         disabled={busy}
-        title={connected ? '断开' : '连接'}
+        title={toggleTitle ?? toggleLabel}
         onClick={(e) => {
           // 别让点按钮顺带把选中也切了 —— 用户可能只是想连一下另一个连接
           e.stopPropagation();
           onToggle();
         }}
       >
-        {busy ? '…' : connected ? '断开' : '连接'}
+        {busy ? '…' : toggleLabel}
       </button>
     </div>
   );

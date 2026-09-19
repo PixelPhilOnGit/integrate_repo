@@ -9,8 +9,8 @@
 | **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树，图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库 |
 | **Redis** | 可用。左侧「连接 → 库 → key」，主区看 key 列表和值；命令台是一个页签 |
 | **数据库**（MySQL / PostgreSQL） | 可用。连接配置里选引擎，侧栏「连接 → 库 / 表」，主区写 SQL 看结果表格 |
-| **SSH 终端** | 可用。多标签的真终端（xterm.js），密码 / 私钥认证，**首次连接要核对主机密钥指纹** |
-| **智能体会话** | 可用。一个窗口里分屏跑多个 Claude Code / Codex，按工作目录分组；**谁在等你一眼看出来**（窗格边框 + 侧栏队列 + 模块图标角标）。状态检测要往 Claude Code / Codex 的配置里装一个钩子，向导里能看到改了什么、随时撤销 |
+| **SSH 终端** | 可用。多标签的真终端（xterm.js），密码 / 私钥认证，**首次连接要核对主机密钥指纹**；终端左边**命令块色条**：一条命令一块、交替配色，单击复制命令 + 输出，双击折叠收起 |
+| **智能体会话** | 可用。一个窗口里分屏跑多个 Claude Code / Codex，按工作目录分组；**谁在等你一眼看出来**（窗格边框 + 侧栏队列 + 模块图标角标）。「新建会话」可以一次填几个、建完自动铺成网格，最下面能设**全局启动参数**（如 `--dangerously-skip-permissions`）。状态检测要往 Claude Code / Codex 的配置里装一个钩子，向导里能看到改了什么、随时撤销 |
 | MongoDB | 待做 |
 
 技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有系统操作（文件、
@@ -411,12 +411,12 @@ bulk string，天然免疫 RESP 注入；拼字符串的话 `SET k "a\r\nFLUSHAL
 
 | 层 | 命令 | 覆盖内容 |
 | --- | --- | --- |
-| 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出、各模块的假实现；**智能体会话的分屏树、状态机、OSC 扫描、事件文件解析** |
-| 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动界面：滚动、拖拽、中文输入、导出下载、文件管理、连接与查询、**SSH 终端与首次信任**、**智能体会话的分屏与状态流转** |
+| 纯逻辑 | `npm test` | 布局不变量、命令级联、撤销栈、schema 容错、Mermaid 导出、各模块的假实现；**智能体会话的分屏树 / 网格铺屏、状态机、OSC 扫描、事件文件解析**；**SSH 命令块的边界推断、色条几何、字节日志** |
+| 界面交互 | `npm run test:e2e` | 在真实 Chromium 里驱动界面：滚动、拖拽、中文输入、导出下载、文件管理、连接与查询、**SSH 终端与首次信任**、**SSH 命令块（一键复制要真读剪贴板、折叠要验展开后内容原样回来）**、**智能体会话的分屏与状态流转** |
 | Rust 后端 | `cd src-tauri && cargo test` | 路径逃逸攻击向量、文件操作、导出；三个连接内核打真服务端；**本机进程与事件目录** |
 | 原生窗口 | 见下 | 真 Tauri 应用启动 + 读写落盘 + **IPC Channel 那条流式路径** |
 
-数量（会随开发变动，看实际输出为准）：前端单测 ~760、e2e ~150、Rust ~180。
+数量（会随开发变动，看实际输出为准）：前端单测 ~876、e2e ~156、Rust ~279。
 
 **为什么 SSH 要额外做原生验证**：浏览器版走的是内存假实现，
 **完全不经过 `tauri::ipc::Channel`** —— 那条流式路径在前端测试里一次都没被跑过。
@@ -593,6 +593,14 @@ agent_open(id, config, channel)   ← config = { cwd, shell, command, cols, rows
 - **钩子用 exec 形式**（`command` 是脚本绝对路径 + `args: ["waiting"]`），
   两个平台都是 —— 不过 shell、不分词。shell 形式在 Windows 上会踩
   「用 bash 还是 PowerShell 取决于装没装 Git Bash」这个变量。
+- **Windows 上 Git Bash 由我们自己找给 claude。** Git for Windows 默认只把
+  `<Git>\cmd` 放进 PATH，`bash.exe` 所在的 `<Git>\bin` 往往不在 —— 于是
+  「`git` 能用、claude 却报 `requires git-bash`」。起窗格前探测一遍（从
+  PATH 里的 `git.exe` 上溯 + 几个标准安装位置），找到就把
+  `CLAUDE_CODE_GIT_BASH_PATH` 交给子进程；用户自己设过则一字不改，
+  没装 Git 则什么都不做（窗格照常开）。⚠️ 探测**只认 `git.exe` 上溯**：
+  去 PATH 里捡 `bash.exe` 会先撞上 WSL 的 `C:\Windows\System32\bash.exe`，
+  那比找不到更糟。
 - **装的是四个事件**：`UserPromptSubmit`→working、`PermissionRequest`→waiting
   （**主力**，权限弹窗一出现就触发）、`Notification`（matcher 只认 `idle_prompt`）
   →waiting（兜底）、`Stop`→done。⚠️ `UserPromptSubmit` / `Stop` **不支持 matcher**，

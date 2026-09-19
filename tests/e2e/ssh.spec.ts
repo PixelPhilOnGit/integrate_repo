@@ -227,6 +227,51 @@ test('关掉一个标签，另一个还在', async ({ page }) => {
   await expect(page.getByTestId('ssh-status')).toContainText('已连接');
 });
 
+test('⚠️ 侧栏那个按钮连上之后是「新开」，点它只多一个标签', async ({ page }) => {
+  await connectAndTrust(page);
+
+  // 侧栏一行上那个按钮做的事是「再开一个终端」，所以它**不能**在连上之后
+  // 自称「断开」—— 那正是原来的 bug：文案归共享组件按连接状态算，
+  // 按钮却只新开会话，用户点「断开」点出来一个新终端
+  const toggle = page
+    .locator('[data-testid="ssh-conn-list"] [data-testid^="conn-toggle-"]')
+    .first();
+  await expect(toggle).toHaveText('新开');
+  await expect(toggle).toHaveAttribute('title', '在同一个连接上再开一个终端');
+
+  const tabs = page.locator('[data-testid="ssh-tabs"] [data-session-title]');
+  await expect(tabs).toHaveCount(1);
+
+  await toggle.click();
+  await expect(tabs).toHaveCount(2);
+  // 两个会话都活着：是**多**开一个，不是把原来那个换掉
+  await expect(page.getByTestId('ssh-status')).toContainText('已连接');
+  await expect(toggle).toHaveText('新开');
+});
+
+test('会话行右键能关掉这一条，另一条留下', async ({ page }) => {
+  await connectAndTrust(page);
+  await page.getByTestId('ssh-btn-connect').click();
+  await expect(page.getByTestId('ssh-status')).toContainText('已连接');
+
+  const tabs = page.locator('[data-testid="ssh-tabs"] [data-session-title]');
+  await expect(tabs).toHaveCount(2);
+
+  // 连上之后这个连接是**自动展开**的（`connect()` 里顺手置的），
+  // 所以会话行此刻已经在了 —— 别去点那个箭头，那一下是折叠
+  //
+  // ⚠️ 必须限定 `button`：容器那个 testid 是 `ssh-sessions-<档案 id>`，
+  // 它也是 `ssh-session-` 开头，只按前缀选会把容器一起选进来
+  const sessions = page.locator(
+    '[data-testid="ssh-conn-list"] button[data-testid^="ssh-session-"]',
+  );
+  await expect(sessions).toHaveCount(2);
+
+  await sessions.nth(1).click({ button: 'right' });
+  await page.getByTestId('menu-关闭这个会话').click();
+  await expect(tabs).toHaveCount(1);
+});
+
 test('切到别的模块再回来，会话和画面都还在', async ({ page }) => {
   await connectAndTrust(page);
   await type(page, 'echo 切模块之前');
@@ -368,6 +413,60 @@ test('切到私钥认证：密码框换成私钥路径，凭据被清掉', async
 });
 
 // ------------------------------------------------------------------ 持久化
+
+// ------------------------------------------------------------------ 命令块
+
+test('命令块：敲一条命令就出一条色条，点一下连命令带输出复制走', async ({ page, context }) => {
+  // 读剪贴板要权限。⚠️ 这一条**验的是真链路**：色条 → 剪贴板，中间不塞替身
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+
+  await connectAndTrust(page);
+  await expect.poll(() => termText(page)).toContain('输入 help');
+
+  await type(page, 'echo 你好色条');
+  await expect.poll(() => termText(page)).toContain('你好色条');
+
+  // 色条出现了，而且认得出是哪条命令（测试按命令文本选，比按自动 id 稳）
+  const band = page.locator('[data-band-command="echo 你好色条"]');
+  await expect(band).toHaveCount(1);
+
+  await band.click();
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toContain('echo 你好色条'); // 命令本身
+  expect(copied).toContain('你好色条'); // 以及它的输出
+  // 提示符不该被复制进去（起点是「用户敲第一个键」那一列）
+  expect(copied).not.toContain('$ echo');
+});
+
+test('命令块：双击把输出折起来，再双击**原样**展开回来', async ({ page }) => {
+  await connectAndTrust(page);
+  await expect.poll(() => termText(page)).toContain('输入 help');
+
+  // 用 help：它的输出是一张表，里面有 `cd <PATH>` 这种别处不会出现的字样，
+  // 折没折掉一看就知道
+  await type(page, 'help');
+  await expect.poll(() => termText(page)).toContain('按子串过滤文件的每一行');
+
+  const band = page.locator('[data-band-command="help"]');
+  await expect(band).toHaveCount(1);
+
+  // ⚠️ 这里**必须等一下**：折叠有「输出停下来 250ms 才做」的闸（见 store 的
+  // `REDRAW_QUIET_MS`）。等不到就去双击的话会被拒，而且不报错 —— 这是设计里
+  // 就有的行为，不是测试的权宜之计。（别改成重试：重试的第二次双击会把刚折好
+  // 的那一下再展开，来回横跳）
+  await page.waitForTimeout(500);
+  await band.dblclick();
+  await expect(band).toHaveAttribute('data-band-folded', 'true');
+
+  // 折起来之后：输出收掉了，只剩一行摘要
+  await expect.poll(() => termText(page)).not.toContain('按子串过滤文件的每一行');
+  await expect.poll(() => termText(page)).toContain('已折叠');
+
+  // 再展开：**内容原样回来**（这是重放那条路最难的部分 —— 回来得不全就是坏的）
+  await band.dblclick();
+  await expect.poll(() => termText(page)).toContain('按子串过滤文件的每一行');
+  await expect(band).toHaveAttribute('data-band-folded', 'false');
+});
 
 test('连接和信任记录会留下来', async ({ page }) => {
   await connectAndTrust(page);

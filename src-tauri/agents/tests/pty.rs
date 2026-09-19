@@ -305,6 +305,87 @@ async fn 关窗格会把整棵进程树杀掉() {
     );
 }
 
+/// 起一个窗格，把子进程手里的 `CLAUDE_CODE_GIT_BASH_PATH` 打印出来再读回去。
+///
+/// ⚠️ 标记是**拼**出来的（`'GIT'+'BASH'+'@'`），不能直接写 `GITBASH@`：pty 会把
+/// 我们敲进去的那行**回显**出来，回显先到 —— 拿回显去断言就是假绿
+/// （`common/mod.rs` 里 `read_pid` 那段记的就是同一个坑）。
+///
+/// 值放在两个标记中间，读到结束标记才算完整：pty 的输出会被块边界切开，
+/// 只等开始标记的话，读到的可能是半条路径。
+#[cfg(windows)]
+async fn probe_git_bash_env(dir: &std::path::Path, caller_value: Option<&str>) -> String {
+    let reg = AgentRegistry::new();
+    let mut config = cfg(
+        dir,
+        r#"Write-Output ('GIT'+'BASH'+'@'+$env:CLAUDE_CODE_GIT_BASH_PATH+'@'+'Z'+'Z')"#,
+    );
+    if let Some(value) = caller_value {
+        config
+            .env
+            .insert("CLAUDE_CODE_GIT_BASH_PATH".to_string(), value.to_string());
+    }
+
+    let mut rx = open(&reg, "p1", &config);
+    let out = read_until(&mut rx, "ZZ", FIVE_SECONDS).await;
+    reg.close("p1");
+
+    let start = out
+        .find("GITBASH@")
+        .map(|i| i + "GITBASH@".len())
+        .unwrap_or_else(|| panic!("输出里没有开始标记，读到的是：\n{out}"));
+    let end = out[start..]
+        .find("@ZZ")
+        .map(|i| i + start)
+        .unwrap_or_else(|| panic!("输出里没有结束标记，读到的是：\n{out}"));
+
+    out[start..end].to_string()
+}
+
+/// 产品会给子进程塞 `CLAUDE_CODE_GIT_BASH_PATH`（见 `pty.rs` 的 Git Bash 那段），
+/// 这条盯的是「塞进去的东西**确实存在**」。
+///
+/// ⚠️ **判据故意是宽容的**：允许"没探到"（值空）也算过。因为这个用例**不许依赖
+/// runner 装没装 Git** —— 那正是这个仓库对这类测试的规矩（`claude_schema.rs` 就是
+/// 因为需要真 `claude` 才被 CI 排除的）。在一台有 Git 的机器（比如 windows-latest）
+/// 上它是一次真检查；在没有 Git 的机器上它退化成「我们没乱塞」—— 而那**也是**
+/// 正确行为（没装 Git 不是错误）。
+#[cfg(windows)]
+#[tokio::test]
+async fn 注入的_git_bash_要么是空的要么真的存在() {
+    use std::path::Path;
+
+    let dir = TempDir::new("git-bash-probe");
+    let value = probe_git_bash_env(dir.path(), None).await;
+
+    if value.trim().is_empty() {
+        return; // 这台机器上没有 Git Bash：什么都不塞是对的
+    }
+
+    let path = Path::new(&value);
+    assert!(path.is_file(), "塞进去的路径不存在：{value}");
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    assert_eq!(name, "bash.exe", "塞进去的不像 bash.exe：{value}");
+}
+
+/// 调用方（前端）自己给了 `CLAUDE_CODE_GIT_BASH_PATH` 时，产品的探测**不许**盖掉它。
+///
+/// 这条在没有 Git 的机器上也是绿的（我们本来就什么都没探到），但它在 CI 上有
+/// 意义：windows-latest 装了 Git，探测一定会命中 —— 覆盖规则要是写反了，这里会红。
+#[cfg(windows)]
+#[tokio::test]
+async fn 调用方给的_git_bash_不会被产品的探测盖掉() {
+    const MINE: &str = r"C:\devtoolkit-test\fake\bash.exe";
+
+    let dir = TempDir::new("git-bash-override");
+    let value = probe_git_bash_env(dir.path(), Some(MINE)).await;
+
+    assert_eq!(value, MINE, "调用方给的值被产品的探测盖掉了");
+}
+
 /// 回归：**「只把跑着的那个进程杀掉」是不够的**。
 ///
 /// 这是上一条的反面 —— 不是测我们做对了什么，而是把「为什么必须按进程组杀」

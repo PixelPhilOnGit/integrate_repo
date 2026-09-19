@@ -170,6 +170,82 @@ export function replacePane(
 }
 
 /**
+ * 把 `target` 那一块**整棵**换掉 —— 不是换成另一个会话，而是换成任意一棵子树。
+ *
+ * 和 [`replacePane`] 的差别就在这里：那个的用途是「这一格改看另一个会话」，
+ * 新的东西仍然是一个叶子；这个用来把一格**撑成一片**（新建会话时的网格铺屏）。
+ */
+export function replaceWith(root: PaneLayout, target: string, next: PaneLayout): PaneLayout {
+  if (root.kind === 'leaf') {
+    return root.sessionId === target ? next : root;
+  }
+  const a = replaceWith(root.a, target, next);
+  if (a !== root.a) return { ...root, a };
+  const b = replaceWith(root.b, target, next);
+  return b === root.b ? root : { ...root, b };
+}
+
+/**
+ * 把一组会话摆成网格：`cols` 列，行数按数量算。
+ *
+ * # 为什么列数由调用方给
+ *
+ * 这个文件是纯函数，不该去猜屏幕有多大。调用方（新建会话那一步）按数量算出
+ * 一个「看着像网格」的列数传进来 —— 它知道自己在干什么，这里只管摆。
+ *
+ * # 最后一行可能不满
+ *
+ * 比如 5 个会话、3 列：上面一行三个，下面一行两个，**下面那两个会更宽**。
+ * 因为叶子必须挂一个会话，造不出「空的格子」；与其塞一个假会话，不如让它宽着
+ * —— 用户拖一下分隔条就好了。这条写进注释是因为它会被当成 bug 报上来。
+ */
+export function gridLayout(sessionIds: readonly string[], cols: number): PaneLayout | null {
+  const ids = [...sessionIds];
+  if (ids.length === 0) return null;
+
+  const width = Math.max(1, Math.min(Math.floor(cols), ids.length));
+  const rows: PaneLayout[] = [];
+  for (let i = 0; i < ids.length; i += width) {
+    const row = chain(ids.slice(i, i + width).map(leafPane), 'row');
+    if (row !== null) rows.push(row);
+  }
+  return chain(rows, 'col');
+}
+
+/**
+ * 按数量挑一个「看着像网格」的列数：1→1、2→2、4→2、6→3、9→3。
+ *
+ * 放在这儿而不是界面里，是为了让它和 [`gridLayout`] 挨着 —— 两者是同一件事
+ * 的两半（一个算列数、一个摆位置），分开写迟早会各自漂移。
+ */
+export function gridColsFor(count: number): number {
+  if (count <= 1) return 1;
+  return Math.ceil(Math.sqrt(count));
+}
+
+/**
+ * 把一串子树按 `dir` 依次排开，**每块一样大**。
+ *
+ * 不是二分递归而是左边累积：每加一块，已有那部分占 `n/(n+1)`、新块占 `1/(n+1)`。
+ * 累下来正好等分（三块就是 1/3、1/3、1/3），而二分递归很容易写成
+ * 「第一块 1/2、后面两块各 1/4」这种越分越小的形状。
+ */
+function chain(parts: readonly PaneLayout[], dir: SplitDir): PaneLayout | null {
+  const head = parts[0];
+  if (head === undefined) return null;
+
+  let acc: PaneLayout = head;
+  let count = 1;
+  for (let i = 1; i < parts.length; i += 1) {
+    const part = parts[i];
+    if (part === undefined) continue;
+    acc = { kind: 'split', dir, ratio: count / (count + 1), a: acc, b: part };
+    count += 1;
+  }
+  return acc;
+}
+
+/**
  * 每个会话占的矩形（相对比例）。
  *
  * 不变量：任意两块**不重叠**、都落在 [0,1] 里、所有面积加起来是 1。

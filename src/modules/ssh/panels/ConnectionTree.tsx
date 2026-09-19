@@ -137,7 +137,13 @@ function ConnectionBranch({
         onSelect={() => store.select(profile.id)}
         // 行右侧那个按钮是「新开一个终端」而不是「连接/断开」——
         // 多标签下「断开」是个说不清的操作（断哪一个？），
-        // 而「再开一个」永远是明确的。要关就去标签上关
+        // 而「再开一个」永远是明确的。
+        //
+        // ⚠️ 文案必须一起改：不给的话共享组件按状态显示「断开」，
+        // 于是这个**只会新开会话**的按钮写着「断开」—— 用户点了以为是断开，
+        // 实际又开出来一个终端。要关会话去会话行右键（下面 `SessionRow`）
+        toggleLabels={{ idle: '连接', active: '新开' }}
+        toggleTitle="在同一个连接上再开一个终端"
         onToggle={() => {
           store.select(profile.id);
           void store.connect(profile.id);
@@ -154,6 +160,7 @@ function ConnectionBranch({
               session={session}
               active={state.activeSessionId === session.id}
               store={store}
+              onMenu={onMenu}
             />
           ))}
         </div>
@@ -166,10 +173,12 @@ function SessionRow({
   session,
   active,
   store,
+  onMenu,
 }: {
   session: SshSession;
   active: boolean;
   store: SshStore;
+  onMenu: (menu: OpenMenu) => void;
 }): ReactNode {
   return (
     <button
@@ -183,6 +192,21 @@ function SessionRow({
       onClick={() => {
         store.select(session.profileId);
         store.setActiveSession(session.id);
+      }}
+      // 「断开」挂在这儿而不是连接行上：会话行**就是**那一条会话，
+      // 点哪条关哪条，不会出现「开了三个，断的是哪个」这种说不清的情况
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu({
+          x: e.clientX,
+          y: e.clientY,
+          items: [
+            {
+              label: '关闭这个会话',
+              onSelect: () => void store.closeSession(session.id),
+            },
+          ],
+        });
       }}
       title={sessionEndLabel(session) ?? session.title}
     >
