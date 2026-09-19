@@ -27,7 +27,7 @@ import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { fuzzyBest } from '../../../shared/search';
 import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
-import type { AgentSession, AgentWorkspace, SessionStatus } from '../core/types';
+import { STATUS_LABEL, type AgentSession, type AgentWorkspace, type SessionStatus } from '../core/types';
 import type { AgentsState, AgentsStore } from '../state/store';
 import { NewSessionDialog } from './NewSessionDialog';
 import { StatusDot } from './StatusDot';
@@ -235,17 +235,29 @@ function WorkspaceHead({
 
       {rollup !== null && <StatusDot status={rollup} />}
 
-      {renaming ? (
-        <RenameInput value={workspace.name} onDone={onFinishRename} />
-      ) : (
-        <span
-          className="rd-agent-ws-name"
-          data-testid={`agent-ws-name-${workspace.id}`}
-          onDoubleClick={onStartRename}
-        >
-          {workspace.name}
+      {/* 两行：上面是名字，下面是**路径 + 会话数 + 状态汇总**。
+          用户要的「胖一点」——一个项目最有用的三件事（在哪儿、开了几个、
+          有没有在等你）收起时也该看得见，而不是只能看见一个名字 */}
+      <span className="rd-agent-ws-text">
+        {renaming ? (
+          <RenameInput value={workspace.name} onDone={onFinishRename} />
+        ) : (
+          <span
+            className="rd-agent-ws-name"
+            data-testid={`agent-ws-name-${workspace.id}`}
+            onDoubleClick={onStartRename}
+          >
+            {workspace.name}
+          </span>
+        )}
+        <span className="rd-agent-ws-sub" data-testid={`agent-ws-sub-${workspace.id}`}>
+          <span className="rd-agent-ws-path" title={workspace.path}>
+            {workspace.path}
+          </span>
+          {sessions.length > 0 && <> · {sessions.length} 个会话</>}
+          {rollup !== null && <> · {STATUS_LABEL[rollup]}</>}
         </span>
-      )}
+      </span>
 
       <span className="rd-muted rd-agent-ws-count">{sessions.length}</span>
       <button

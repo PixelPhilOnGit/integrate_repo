@@ -32,8 +32,8 @@ use base64::Engine as _;
 use devtoolkit_agents::integration::{self, AgentPaths, IntegrationTarget};
 use devtoolkit_agents::registry::forward;
 use devtoolkit_agents::{
-    events, AgentError, AgentRegistry, IntegrationOutcome, IntegrationStatus, PtyConfig, PtyEvent,
-    RawEvent,
+    events, AgentError, AgentRegistry, EnvironmentReport, IntegrationOutcome, IntegrationStatus,
+    PtyConfig, PtyEvent, RawEvent,
 };
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -294,4 +294,18 @@ pub async fn agent_integration_revert(
 ) -> Result<IntegrationOutcome, String> {
     let paths = paths(&app)?;
     integration::revert(&paths, target).map_err(|e| e.to_string())
+}
+
+/// 环境自检：把**我们这个进程眼里的** claude / git / bash 和 PATH 摊开。
+///
+/// 用途见 `devtoolkit_agents::probe_environment` 的说明 —— 一句话：
+/// 「VS Code 里好好的、窗格里跑不起来」这类问题，差别只在环境，而环境是不可见的。
+#[tauri::command]
+pub async fn agent_probe() -> Result<EnvironmentReport, String> {
+    // 解析 PATH 要扫目录、Windows 上还要问一次注册表（`reg query`）——
+    // 丢 blocking 池，别占着 tokio 的工作线程（教训见 HANDOFF）
+    let _span = crate::health::span("agent_probe", "-");
+    tauri::async_runtime::spawn_blocking(devtoolkit_agents::probe_environment)
+        .await
+        .map_err(|e| format!("自检的线程没能跑起来：{e}"))
 }

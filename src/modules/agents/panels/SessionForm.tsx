@@ -43,6 +43,57 @@ export function SessionForm({ state, store, now }: Props): ReactNode {
             <SessionDetail session={session} path={workspace?.path ?? ''} now={now} />
           )}
 
+          {/*
+            环境自检。**为什么在界面上留这样一格**：真机上出过「VS Code 里 claude
+            好好的、我们窗格里跑不起来」—— 同一个程序、同一台机器，差别只在环境，
+            而环境是看不见的。有了这一格，用户（和我们）不用猜。
+          */}
+          <div className="rd-agent-section" data-testid="agent-env">
+            <h4 className="rd-agent-section-title">环境自检</h4>
+            <p className="rd-hint">
+              这是**应用进程自己**看到的东西。在你自己的终端（或者 VS Code）里
+              跑一下 <code className="rd-mono">where.exe claude</code> 对比，
+              两边不一样的地方就是「窗格里跑不起来」的原因。
+            </p>
+
+            {state.environment === null ? (
+              <p className="rd-hint rd-muted">还没查过</p>
+            ) : (
+              <dl className="rd-agent-detail" data-testid="agent-env-detail">
+                <dt>shell</dt>
+                <dd className="rd-mono">{state.environment.shell}</dd>
+                <dt>claude</dt>
+                <dd className="rd-mono" data-testid="agent-env-claude">
+                  {state.environment.claude ?? '（PATH 里找不到）'}
+                </dd>
+                <dt>git</dt>
+                <dd className="rd-mono">{state.environment.git ?? '（找不到）'}</dd>
+                <dt>bash</dt>
+                <dd className="rd-mono" data-testid="agent-env-bash">
+                  {state.environment.bash ?? '（找不到）'}
+                </dd>
+                <dt>Git Bash 设置</dt>
+                <dd className="rd-mono">
+                  {state.environment.gitBashSetting ?? '（没设）'}
+                </dd>
+                <dt>PATH</dt>
+                <dd className="rd-muted">
+                  {state.environment.pathCount} 条 · 前几条：
+                  {state.environment.pathHead.join(' · ')}
+                </dd>
+              </dl>
+            )}
+
+            <button
+              type="button"
+              className="rd-btn"
+              data-testid="agent-env-refresh"
+              onClick={() => void store.refreshEnvironment()}
+            >
+              重新自检
+            </button>
+          </div>
+
           <div className="rd-agent-section" data-testid="agent-integration">
             <h4 className="rd-agent-section-title">状态检测</h4>
             <p className="rd-hint">

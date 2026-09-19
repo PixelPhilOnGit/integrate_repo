@@ -530,27 +530,28 @@ SSH 的标签栏图省事复用了 `rd-tabs`，结果**标签和那个 × 各占
   「一段段输出」）、**输出没停不重放**（半路插进来几行，内容和行号立刻对不上，
   而且是静默地对不上）。折叠之后行号要整体挪（`tracker.remap`）——
   重放改变的是行数，色条的位置全跟着变。
-- **Git Bash 这条路走过三版，现在的样子是「能配 + 会找 + 只认验证过的」。**
-  用户的真机情况值得记下来：Git 装在 **`D:\software\git\install\Git`**，
-  **不在 PATH 里**；而 Claude Code 要的是 `<Git>\bin\bash.exe`，
-  **不是** Git 根目录那个 `git-bash.exe`（那是开窗口的启动器，它不认）。
+- **⚠️ 「VS Code 里 claude 好好的，窗格里跑不起来」→ 根因是 PATH 是登录时的快照。**
+  用户真机上的完整经过，值得记下来（因为这类的表现极具迷惑性）：
 
-  三代：
-  1. **不设** —— 窗格里的 claude 报「requires git-bash」（老版硬要 bash）。
-  2. **从 PATH 里的 `git.exe` 上溯，找到就设** —— 他那台机器上**什么都没找到**
-     （git 压根不在 PATH 里），等于没做；而且当时他还手动设过一个错路径，
-     表现成更难查的 `unable to find ... path "D:\...\bash.exe"`（claude 连启动都不肯）。
-  3. **现在**：用户能在「启动参数 → Windows 上的 Git Bash」里**自己填**（留空 = 自动找）；
-     自动找的候选顺序是 **注册表 `SOFTWARE\GitForWindows\InstallPath`**（装了但不在
-     PATH 里的答案）→ PATH 里的 `git.exe` 上溯 → `%ProgramFiles%` 等标准位置，
-     每个候选都要**过验证**（存在 + 文件名就是 `bash.exe`）才交给 claude，
-     一个都不成立就什么都不设。
+  * 窗格里 `claude` 报「requires git-bash」，而他自己的 VS Code 终端里一切正常；
+  * 他手动设 `CLAUDE_CODE_GIT_BASH_PATH` 指向 `D:\software\git\install\Git\bin\bash.exe`
+    （他确认路径没问题），claude 照样说 `unable to find ... path`；
+  * 关键线索是「同一个路径，他那边行、我们这边不行」——
+    **两个终端里的 `claude` 根本不是同一个版本**：应用是**从桌面图标起的**，
+    拿到的是**登录时的 PATH 快照**，那之后装的 npm 全局目录 / 新 claude / Git
+    都不在里面；VS Code 是从开发环境起的，PATH 是新的。
 
-  ⚠️ 三条不许动的规矩：**用户填的永远优先**（他给值就一个字节都不改）、
-  **从不设未经验证的路径**（设错比不设糟：claude 会直接起不来）、
-  **找不到不报错**（没装 Git 是正常情况）。注册表那段走 `reg query` 而不是
-  `RegQueryValueExW`：手写 unsafe 没法在开发机（Linux）上验，写错是把应用带崩，
-  而 `reg` 最坏只是拿不到（结果还缓存了，一次会话只问一次）。
+  修法（`pty.rs` 的 `effective_path`）：起窗格时把 **注册表里当前的 PATH**
+  （`HKCU\Environment` + 机器的 Session Manager，`REG_EXPAND_SZ` 要展开）
+  和进程自己那份**合并**、去重后交给子进程。进程自己的排前面（用户可能在会话里
+  有意覆盖过），注册表补充的追加在后。
+
+  顺带做了**环境自检**（`agent_probe` + 检查器那一格）：把**应用进程自己**解析出的
+  claude / git / bash / PATH 摊开给用户看。以后这类「两边不一样」的问题不用再猜 ——
+  用户拿它和 VS Code 里的 `where.exe claude` 一比就知道差在哪。
+
+  Git Bash 本身那条路仍然是三代演进的老规矩：**用户填的优先、只设验证过的路径、
+  找不到不报错**（见下一条）。
 
 ### 前端
 

@@ -45,7 +45,11 @@ interface Harness {
 
 async function harness(): Promise<Harness> {
   const client = createWebAgentsClient();
-  const store = new AgentsStore({ client, integration: agentsServices.integration });
+  const store = new AgentsStore({
+    client,
+    integration: agentsServices.integration,
+    probe: agentsServices.probe,
+  });
   await store.init();
 
   const workspaceId = (await store.addWorkspace())!;

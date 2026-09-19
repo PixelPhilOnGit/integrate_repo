@@ -16,6 +16,8 @@
  *   直接 spawn 很容易找不到；而且 agent 退出后用户该剩一个能用的 shell）
  */
 
+import type { EnvironmentReport } from '../core/types';
+
 /** 开一个会话需要的全部输入 */
 export interface PtyOpenRequest {
   /** 会话 id。同时会作为 `DEVTOOLKIT_PANE_ID` 注入进去 */
@@ -152,4 +154,17 @@ export interface IntegrationClient {
 export interface AgentsServices {
   client: AgentsClient;
   integration: IntegrationClient;
+  /** 环境自检（见 [`EnvironmentProbe`]）。单独一路：它不是「会话」那件事 */
+  probe: EnvironmentProbe;
+}
+
+/**
+ * 环境自检那一格用的（见 `core/types.ts` 的 `EnvironmentReport`）。
+ *
+ * 单独一个接口而不是塞进 `AgentsClient`：它不是「会话」那一路的东西，
+ * 而且浏览器版给的是一个**诚实的假报告**（`shell` 是 `/bin/sh`、其余全是 null）——
+ * 界面在浏览器里也画得出来，只是内容说明「这儿没有 Windows 那些东西」。
+ */
+export interface EnvironmentProbe {
+  probe(): Promise<EnvironmentReport>;
 }

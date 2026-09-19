@@ -76,6 +76,7 @@ pub fn run() {
             agent_commands::agent_integration_status,
             agent_commands::agent_integration_apply,
             agent_commands::agent_integration_revert,
+            agent_commands::agent_probe,
             task_commands::tasks_list,
             task_commands::tasks_counts,
             task_commands::tasks_create,

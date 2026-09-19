@@ -51,6 +51,7 @@ import {
   type AgentKind,
   type AgentSession,
   type AgentWorkspace,
+  type EnvironmentReport,
   type LaunchArgs,
   type SessionRequest,
 } from '../core/types';
@@ -141,6 +142,14 @@ export interface AgentsState {
   /** 集成操作进行中（按钮要禁用，避免连点写两次） */
   integrating: boolean;
   /**
+   * 环境自检的结果。null = 还没查过。
+   *
+   * 放在 state 里是因为它是**给人看的**（检查器那一格）：用户 VS Code 里
+   * 能跑、窗格里跑不起来的时候，这是唯一能看到「我们这边到底解析出了什么」
+   * 的地方。它不是流、也不频繁变，人手级别的东西。
+   */
+  environment: EnvironmentReport | null;
+  /**
    * agent 的启动参数，**全局一份**（见 `LaunchArgs` 的说明）。
    *
    * 存在 state 里而不是每次现读：新建会话时要同步取（`commandFor`），
@@ -175,6 +184,7 @@ export class AgentsStore {
     eventsError: null,
     integration: { claude: null, codex: null },
     integrating: false,
+    environment: null,
     launchArgs: NO_LAUNCH_ARGS,
     gitBashPath: '',
   };
@@ -1006,6 +1016,21 @@ export class AgentsStore {
   }
 
   // ------------------------------------------------------------ 集成
+
+  /**
+   * 环境自检：问一次 Rust「你眼里的 claude / git / bash 各是哪个文件」。
+   *
+   * 失败不弹错误条（它本来就是排查用的，查不到也是一种结果）——
+   * 记进 state 让检查器显示。
+   */
+  async refreshEnvironment(): Promise<void> {
+    try {
+      const environment = await this.services.probe.probe();
+      this.patch({ environment });
+    } catch {
+      this.patch({ environment: null });
+    }
+  }
 
   async refreshIntegration(target: IntegrationTarget): Promise<void> {
     try {

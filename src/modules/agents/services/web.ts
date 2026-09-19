@@ -15,7 +15,7 @@
  */
 
 import { createFakeAgent, type FakeAgent } from '../core/fakeAgent';
-import type { AgentsClient, EventFile, PtyOpenRequest } from './types';
+import type { AgentsClient, EnvironmentProbe, EventFile, PtyOpenRequest } from './types';
 
 const encoder = new TextEncoder();
 
@@ -95,6 +95,29 @@ export function createWebAgentsClient(): AgentsClient {
     async eventsDir(): Promise<string> {
       // 说实话：浏览器里没有目录。界面上会把这句原样显示出来
       return '（浏览器模式：状态事件走内存，没有真的目录）';
+    },
+  };
+}
+
+
+/**
+ * 环境自检的**浏览器版**：一份诚实的假报告。
+ *
+ * 浏览器里没有 Windows 那些东西，所以如实说「这里没有」—— 比编一份像模像样的
+ * 假数据好：界面上那一格的作用是「告诉我真实环境」，编数据等于把它的意义抹掉。
+ */
+export function createWebProbe(): EnvironmentProbe {
+  return {
+    async probe() {
+      return {
+        shell: '/bin/sh',
+        pathCount: 0,
+        pathHead: [],
+        claude: null,
+        git: null,
+        bash: null,
+        gitBashSetting: null,
+      };
     },
   };
 }

@@ -216,6 +216,120 @@ fn resolve_program(program: &str) -> Option<String> {
     None
 }
 
+
+/// 当前生效的 PATH：**进程自己的**那几个 + **注册表里现在的**那几个。
+///
+/// # 为什么必须合起来（真机踩过）
+///
+/// 应用是从桌面图标起的，它继承的是**登录那一刻**的环境快照 —— 而用户在
+/// 那之后装的东西（npm 全局目录、Git、新版本的 claude……）都不在里面。
+/// 表现特别迷惑：**同样的命令在他自己的终端（或者 VS Code）里好好的，
+/// 在我们窗格里就是另一个结果** —— 因为窗格里的 PATH 是旧的，找到的是另一个
+/// （更旧的）同名的程序，甚至是找不到。
+///
+/// 用户那台机器上就是这么栽的：VS Code 里 `claude` 正常，窗格里那个 claude
+/// 报「requires git-bash」—— 两个 claude 根本不是一个版本。
+///
+/// 注册表里那两份（用户的 `HKCU\Environment` + 系统的 Session Manager）才是
+/// 「新开一个终端会拿到什么」的答案，所以合并进去。顺序上**进程自己的排在前面**
+/// （用户可能有意在会话里覆盖过），注册表补充的追加在后、去重。
+#[cfg(windows)]
+fn effective_path() -> Option<std::ffi::OsString> {
+    let mut parts: Vec<String> = std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.display().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // 去重用小写比较：Windows 的路径不区分大小写
+    let mut seen: std::collections::HashSet<String> =
+        parts.iter().map(|p| p.to_lowercase()).collect();
+
+    for hive in [
+        r"HKCU\Environment",
+        r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+    ] {
+        let Some(raw) = registry_value(hive, "Path") else {
+            continue;
+        };
+        // 注册表里那份是 REG_EXPAND_SZ，带着 `%SystemRoot%` 这类引用 —— 要展开，
+        // 不展开的话 `%SystemRoot%\system32` 就成了一个不存在的目录（**不报错**，
+        // 只是那些工具找不到了）
+        let expanded = expand_env_refs(&raw);
+        for dir in expanded.split(';') {
+            let dir = dir.trim();
+            if dir.is_empty() || seen.contains(&dir.to_lowercase()) {
+                continue;
+            }
+            seen.insert(dir.to_lowercase());
+            parts.push(dir.to_string());
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+    Some(std::ffi::OsString::from(parts.join(";")))
+}
+
+/// 把 `%VAR%` 展开成当前环境里的值（展开不了就原样留着）。
+#[cfg(windows)]
+fn expand_env_refs(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%') else {
+            out.push('%');
+            rest = after;
+            continue;
+        };
+        let name = &after[..end];
+        match std::env::var(name) {
+            Ok(value) if !name.is_empty() => out.push_str(&value),
+            // 展开不了就原样留着 —— 猜一个值比留着原文更糟
+            _ => {
+                out.push('%');
+                out.push_str(name);
+                out.push('%');
+            }
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 读注册表里一个字符串值（`reg query`，理由见 [`git_install_from_registry`]）。
+#[cfg(windows)]
+fn registry_value(hive_and_key: &str, name: &str) -> Option<String> {
+    let out = std::process::Command::new("reg")
+        .args(["query", hive_and_key, "/v", name])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        // 形如：`    Path    REG_EXPAND_SZ    C:\Windows;...`
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some(name) {
+            continue;
+        }
+        // 类型之后剩下的**整段**都是值（路径里有空格也吃得下）
+        let rest = line.splitn(2, "REG_EXPAND_SZ").nth(1).or_else(|| line.splitn(2, "REG_SZ").nth(1))?;
+        let value = rest.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------- Git Bash
 
 /// 找 Git Bash 给 claude 用（`CLAUDE_CODE_GIT_BASH_PATH`）。
@@ -741,7 +855,10 @@ pub fn spawn(id: &str, cfg: &PtyConfig, generation: u64) -> Result<OpenedPty, Ag
     // 而从注册表读回来的 PATH 看着还挺正常，很难往这儿想。
     #[cfg(windows)]
     {
-        if let Some(path) = std::env::var_os("PATH") {
+        // ⚠️ 是**合并后的** PATH（进程自己的 + 注册表里现在的），不是进程自己那份。
+        // 理由见 `effective_path`：桌面启动拿的是登录时的快照，那之后装的东西
+        // 都不在里面 —— 用户会在窗格里跑出「和他自己的终端不一样」的结果
+        if let Some(path) = effective_path() {
             cmd.env("PATH", path);
         }
     }
@@ -990,4 +1107,71 @@ fn maybe_send_exit(shared: &Shared, tx: &tokio::sync::mpsc::Sender<PtyEvent>) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- 环境自检
+
+/// 把**这个进程眼里的**环境摊开给用户看（claude / git / bash 各解析到哪个文件、
+/// PATH 有多长、那个 Git Bash 变量是怎么来的）。
+///
+/// # 为什么要有它
+///
+/// 真机上出过一次：用户 VS Code 的终端里 `claude` 好好的，我们窗格里就报
+/// 「找不到 git-bash」—— 同一个 claude、同一台机器，**差别只在环境**。
+/// 而环境是不可见的：用户没法自己看出「我们这个进程的 PATH 里没有 Git」。
+///
+/// 有了这个，用户（和我们）不用猜：窗格里点一下就看见我们到底解析出了什么，
+/// 和他在 VS Code 里 `where.exe claude` 的结果一比，差在哪一目了然。
+///
+/// ⚠️ PATH 只报**条目数**和**前几条**，不整串吐出来 —— 那可能有几十条、
+/// 还夹着用户环境里的私货，界面上没地方放。
+pub fn probe_environment() -> EnvironmentReport {
+    // ⚠️ 两个平台分开取：`resolve_program` / `find_git_bash` / `GIT_BASH_ENV`
+    // 都是 Windows 专属的，无条件引用会让 Linux 那边编不过
+    #[cfg(windows)]
+    let (claude, git, bash, git_bash_setting) = (
+        resolve_program("claude.cmd").or_else(|| resolve_program("claude.exe")),
+        resolve_program("git.exe"),
+        find_git_bash().map(|p| p.display().to_string()),
+        std::env::var(GIT_BASH_ENV).ok(),
+    );
+    #[cfg(not(windows))]
+    let (claude, git, bash, git_bash_setting): (Option<String>, Option<String>, Option<String>, Option<String>) =
+        (None, None, None, None);
+
+    let path_entries: Vec<String> = std::env::var_os("PATH")
+        .map(|p| {
+            std::env::split_paths(&p)
+                .map(|d| d.display().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    EnvironmentReport {
+        shell: default_shell(),
+        // 子进程拿到的那一份 PATH（就是上面那条，Rust 侧会把它抢回成进程自己的）
+        path_count: path_entries.len(),
+        path_head: path_entries.iter().take(6).cloned().collect(),
+        claude,
+        git,
+        bash,
+        git_bash_setting,
+    }
+}
+
+/// [`probe_environment`] 的结果。字段名就是前端拿到的名字
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentReport {
+    /// 起窗格时用的 shell（`default_shell` 的结果）
+    pub shell: String,
+    pub path_count: usize,
+    pub path_head: Vec<String>,
+    /// `claude.cmd` / `claude.exe` 解析到哪
+    pub claude: Option<String>,
+    pub git: Option<String>,
+    /// 我们替 claude 找的 bash（找不到就是 None，那正是「窗格里跑不起来」的原因）
+    pub bash: Option<String>,
+    /// `CLAUDE_CODE_GIT_BASH_PATH` 在当前环境里是什么值
+    pub git_bash_setting: Option<String>,
 }

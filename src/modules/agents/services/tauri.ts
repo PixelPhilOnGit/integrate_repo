@@ -10,8 +10,8 @@
  */
 
 import { createChannel, invoke } from '../../../shared/platform/invoke';
-import type { PtyChannelEvent } from '../core/types';
-import type { AgentsClient, EventFile, PtyOpenRequest } from './types';
+import type { EnvironmentReport, PtyChannelEvent } from '../core/types';
+import type { AgentsClient, EnvironmentProbe, EventFile, PtyOpenRequest } from './types';
 
 export function createTauriAgentsClient(): AgentsClient {
   /**
@@ -109,4 +109,20 @@ function decode(event: PtyChannelEvent): { kind: 'data'; bytes: Uint8Array } | {
   return event.kind === 'data'
     ? { kind: 'data', bytes: decodeBase64(event.bytes) }
     : { kind: 'exit', code: event.code };
+}
+
+
+/**
+ * 环境自检：把 Rust 那边解析出来的东西原样拿回来。
+ *
+ * 它跑在**应用进程自己的环境**里 —— 那正是问题所在的地方（应用从桌面启动，
+ * PATH 是登录时的快照）。用户拿这个和在 VS Code 里 `where.exe claude` 一比，
+ * 差在哪一目了然。
+ */
+export function createTauriProbe(): EnvironmentProbe {
+  return {
+    async probe() {
+      return invoke<EnvironmentReport>('agent_probe');
+    },
+  };
 }

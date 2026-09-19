@@ -40,6 +40,7 @@ pub mod registry;
 mod contract;
 
 pub use error::AgentError;
+pub use pty::{probe_environment, EnvironmentReport};
 pub use events::{events_dir, RawEvent, EVENT_STATES, EVENTS_DIR_NAME};
 pub use integration::{
     AgentPaths, IntegrationOutcome, IntegrationState, IntegrationStatus, IntegrationTarget,

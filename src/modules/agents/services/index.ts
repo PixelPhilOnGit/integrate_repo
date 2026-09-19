@@ -10,16 +10,18 @@
 
 import { isTauri } from '../../../shared/platform/detect';
 import { createTauriIntegrationClient, createWebIntegrationClient } from './integrate';
-import { createTauriAgentsClient } from './tauri';
+import { createTauriAgentsClient, createTauriProbe } from './tauri';
 import type { AgentsServices } from './types';
-import { createWebAgentsClient } from './web';
+import { createWebAgentsClient, createWebProbe } from './web';
 
 export const agentsServices: AgentsServices = isTauri()
   ? {
       client: createTauriAgentsClient(),
       integration: createTauriIntegrationClient(),
+      probe: createTauriProbe(),
     }
   : {
       client: createWebAgentsClient(),
       integration: createWebIntegrationClient(),
+      probe: createWebProbe(),
     };

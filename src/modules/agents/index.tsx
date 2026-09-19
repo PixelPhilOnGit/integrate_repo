@@ -31,6 +31,8 @@ export const agentsModule: Module = {
   onActivate(api) {
     agentsStore.attachShell(api);
     void agentsStore.init();
+    // 环境自检：切过来就查一次（检查器那一格不该是空的）
+    void agentsStore.refreshEnvironment();
   },
 
   onDeactivate() {

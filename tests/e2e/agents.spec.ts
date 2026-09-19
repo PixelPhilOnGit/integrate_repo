@@ -235,7 +235,10 @@ test('分屏：切一刀、拖分隔条、收掉一格', async ({ page }) => {
 
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x - 120, box.y + box.height / 2, { steps: 8 });
+  // 先抖一下再走：分隔条用的是 pointer 事件 + setPointerCapture，
+  // 全量跑的时候第一次 move 偶尔会被丢掉（那样整段拖拽等于没发生）
+  await page.mouse.move(box.x + box.width / 2 - 4, box.y + box.height / 2, { steps: 2 });
+  await page.mouse.move(box.x - 120, box.y + box.height / 2, { steps: 12 });
   await page.mouse.up();
 
   // ⚠️ 用轮询而不是读一次：拖拽在**全量并行**跑的时候会被节流，布局晚一两帧
@@ -594,4 +597,19 @@ test('Git Bash 路径：填了就存下来，下次打开还在', async ({ page 
 
   // 填了之后给一句「会原样交给 claude」的提示（路径对不对由 claude 说了算）
   await expect(page.getByTestId('agent-args-gitbash-set')).toBeVisible();
+});
+
+test('环境自检：把应用自己看到的 claude / bash / PATH 列出来', async ({ page }) => {
+  // 真机上出过「VS Code 里 claude 好好的、窗格跑不起来」——差别只在环境，
+  // 而环境是看不见的。这一格就是把它摊开（浏览器版给的是诚实的假报告）
+  await newSession(page);
+
+  await expect(page.getByTestId('agent-env')).toBeVisible();
+  await expect(page.getByTestId('agent-env-detail')).toBeVisible();
+  await expect(page.getByTestId('agent-env-claude')).toContainText('PATH 里找不到');
+  await expect(page.getByTestId('agent-env-bash')).toContainText('找不到');
+
+  // 重新自检也点得动（走一遍真链路：按钮 → store → 服务层 → 报告）
+  await page.getByTestId('agent-env-refresh').click();
+  await expect(page.getByTestId('agent-env-detail')).toBeVisible();
 });

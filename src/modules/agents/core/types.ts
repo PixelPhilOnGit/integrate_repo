@@ -161,3 +161,29 @@ export const MAX_SESSIONS_PER_KIND = 9;
 export type PtyChannelEvent =
   | { kind: 'data'; bytes: string }
   | { kind: 'exit'; code: number | null };
+
+/**
+ * 环境自检的结果（Rust 侧 `probe_environment` 原样传过来）。
+ *
+ * # 它是干什么的
+ *
+ * 真机上出过一次：用户 VS Code 的终端里 `claude` 好好的，我们窗格里报
+ * 「找不到 git-bash」—— 同一个 claude、同一台机器，**差别只在环境**，
+ * 而环境是不可见的。有了这个，用户点一下就看见**我们**解析出了什么，
+ * 和他的终端一比就知道差在哪。
+ */
+export interface EnvironmentReport {
+  /** 起窗格时用的 shell */
+  shell: string;
+  /** 子进程拿到的那份 PATH 有几条 */
+  pathCount: number;
+  /** PATH 的前几条（整串太长，界面上放不下） */
+  pathHead: string[];
+  /** `claude.cmd` / `claude.exe` 解析到哪。null = PATH 里找不到 */
+  claude: string | null;
+  git: string | null;
+  /** 我们替 claude 找的 bash。**null 就是「窗格里跑不起来」的原因** */
+  bash: string | null;
+  /** `CLAUDE_CODE_GIT_BASH_PATH` 当前的值 */
+  gitBashSetting: string | null;
+}
