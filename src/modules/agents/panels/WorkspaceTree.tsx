@@ -1,16 +1,23 @@
 /**
- * 侧栏：工作目录 → 会话。
+ * 侧栏：窗口（工作目录）→ 会话。
  *
- * # 两层的分工
+ * # 一个工作目录 = 一个窗口
  *
- * 上面是**工作目录**（一个本地文件夹），下面挂着它里面的**会话**。
- * 用户的心智模型是「这个项目我开了三个 agent」，所以分组不是装饰 ——
- * 它决定了「我在哪儿」这件事在界面上有没有答案。
+ * 上面那一层是**窗口**：一个本地文件夹，配一套自己的分屏布局。点它就切过去
+ * （右边换它那一套子窗口），点另一条就换回去 —— 两个项目的分屏互不影响。
+ * 下面那一层是窗口里的**会话**（右边那些格子），**默认收起**：侧栏一眼看到
+ * 的该是「我有几个窗口」，而不是「我有几个会话」。要看会话、要跳到某一格，
+ * 点开那个箭头。
+ *
+ * # 关掉父窗口 = 关掉里面全部会话，目录留着
+ *
+ * 在窗口那一行右键（`关闭全部会话（N）`，有会话在跑会先问一句）。
+ * 「删除这个工作目录」是另一件事：那个连目录一起删。
  *
  * # 点一个会话 = 让它上屏
  *
- * 侧栏是导航，主区是舞台。点一下，那个会话就出现在**当前聚焦的那一格**里
- * （不在屏幕上时才这样；已经在屏幕上就直接把焦点给它）。
+ * 侧栏是导航，主区是舞台。点一下，那个会话所在的窗口切到前面，它自己在
+ * 窗口里聚焦（已经在屏幕上的话就直接把焦点给它）。
  * 想并排看两个，用右键里的「在右边/下边分屏显示」，或者窗格标题上的分屏按钮。
  */
 
@@ -37,7 +44,8 @@ interface OpenMenu {
 
 export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // ⚠️ 展开状态在 store 里（默认收起），不在这儿：切个模块 React 就把它卸载了，
+  // 组件内的状态会让用户刚点开的那一行又合上（这条是 e2e 抓出来的）
   const [renaming, setRenaming] = useState<string | null>(null);
   /** 「新建会话」对话框是给哪个工作目录开的。null = 没开着 */
   const [newFor, setNewFor] = useState<AgentWorkspace | null>(null);
@@ -64,7 +72,11 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
           ) : (
             state.workspaces.map((workspace) => {
               const sessions = state.sessions.filter((s) => s.workspaceId === workspace.id);
-              const expanded = collapsed[workspace.id] !== true;
+              // ⚠️ **默认收起**：一个目录就是一个窗口，侧栏一眼看到的该是「有几个
+              // 窗口」而不是「有几个会话」—— 后者展开再看。会话级的状态（在等你、
+              // 已完成）在收起时由父行那个汇总圆点和顶部的「需要你」队列负责
+              const expanded = state.expanded[workspace.id] === true;
+              const active = state.activeWorkspaceId === workspace.id;
 
               return (
                 <div className="rd-agent-ws" key={workspace.id} data-testid={`agent-ws-${workspace.id}`}>
@@ -72,17 +84,21 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
                     workspace={workspace}
                     sessions={sessions}
                     expanded={expanded}
+                    active={active}
                     renaming={renaming === workspace.id}
-                    onToggle={() =>
-                      setCollapsed((c) => ({ ...c, [workspace.id]: expanded }))
-                    }
+                    onToggle={() => store.toggleExpanded(workspace.id)}
+                    onActivate={() => store.setActiveWorkspace(workspace.id)}
                     onStartRename={() => setRenaming(workspace.id)}
                     onFinishRename={(name) => {
                       setRenaming(null);
                       if (name !== null) store.renameWorkspace(workspace.id, name);
                     }}
                     onMenu={(x, y) =>
-                      setMenu({ x, y, items: workspaceMenu(store, workspace, () => setNewFor(workspace)) })
+                      setMenu({
+                        x,
+                        y,
+                        items: workspaceMenu(store, workspace, sessions, () => setNewFor(workspace)),
+                      })
                     }
                     onNewSession={() => setNewFor(workspace)}
                   />
@@ -92,8 +108,8 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
                       <SessionRow
                         key={session.id}
                         session={session}
-                        focused={session.id === state.focusedId}
-                        onScreen={isOnScreen(state, session.id)}
+                        focused={active && session.id === state.focusedId}
+                        onScreen={isOnScreen(state, session)}
                         now={now}
                         onClick={() => store.jumpTo(session.id)}
                         onMenu={(x, y) => setMenu({ x, y, items: sessionMenu(store, state, session) })}
@@ -126,8 +142,10 @@ function WorkspaceHead({
   workspace,
   sessions,
   expanded,
+  active,
   renaming,
   onToggle,
+  onActivate,
   onStartRename,
   onFinishRename,
   onMenu,
@@ -136,8 +154,11 @@ function WorkspaceHead({
   workspace: AgentWorkspace;
   sessions: readonly AgentSession[];
   expanded: boolean;
+  /** 现在右边显示的就是这一个窗口吗 */
+  active: boolean;
   renaming: boolean;
   onToggle: () => void;
+  onActivate: () => void;
   onStartRename: () => void;
   onFinishRename: (name: string | null) => void;
   onMenu: (x: number, y: number) => void;
@@ -148,10 +169,14 @@ function WorkspaceHead({
 
   return (
     <div
-      className="rd-agent-ws-head"
+      className={`rd-agent-ws-head${active ? ' is-active' : ''}`}
       data-testid={`agent-ws-head-${workspace.id}`}
+      data-workspace-active={active ? 'true' : 'false'}
       // 路径是这一行真正有用的信息，但显示出来太长 —— 放 title 里
       title={workspace.path}
+      // 点这一行就切到它那个窗口（右边换一整套分屏）。和「点会话切过去」
+      // 是同一件事的两个粒度：点目录 = 整个窗口，点会话 = 窗口里的某一格
+      onClick={onActivate}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e.clientX, e.clientY);
@@ -161,7 +186,11 @@ function WorkspaceHead({
         type="button"
         className="rd-agent-caret"
         aria-label={expanded ? '收起' : '展开'}
-        onClick={onToggle}
+        onClick={(e) => {
+          // 别让展开顺带把窗口也切了 —— 用户可能只是想看看里面有什么
+          e.stopPropagation();
+          onToggle();
+        }}
       >
         {expanded ? '▾' : '▸'}
       </button>
@@ -187,7 +216,10 @@ function WorkspaceHead({
         title="在这个目录里新开会话"
         aria-label="新开会话"
         data-testid={`agent-new-session-${workspace.id}`}
-        onClick={onNewSession}
+        onClick={(e) => {
+          e.stopPropagation();
+          onNewSession();
+        }}
       >
         ＋
       </button>
@@ -289,20 +321,29 @@ function rollupStatus(sessions: readonly AgentSession[]): SessionStatus | null {
   return null;
 }
 
-function isOnScreen(state: AgentsState, sessionId: string): boolean {
-  const layout = state.layout;
-  if (layout === null) return false;
+/**
+ * 这个会话是不是正摆在**它那个窗口**里。
+ *
+ * ⚠️ 按会话自己的窗口算，不是「当前显示的那套」：它在别的窗口里摆着也算
+ * 「已经在屏幕上」（那个窗口里不能再摆第二份），但侧栏那一行会诚实地说
+ * 它在不在**现在看的**这一屏上 —— 前者管菜单里能不能点「分屏显示」，
+ * 后者只是显示。
+ */
+function isOnScreen(state: AgentsState, session: AgentSession): boolean {
+  const layout = state.layouts[session.workspaceId];
+  if (layout === undefined) return false;
   const walk = (node: typeof layout): boolean =>
-    node.kind === 'leaf' ? node.sessionId === sessionId : walk(node.a) || walk(node.b);
+    node.kind === 'leaf' ? node.sessionId === session.id : walk(node.a) || walk(node.b);
   return walk(layout);
 }
 
 function workspaceMenu(
   store: AgentsStore,
   workspace: AgentWorkspace,
+  sessions: readonly AgentSession[],
   onNewSession: () => void,
 ): MenuItem[] {
-  return [
+  const items: MenuItem[] = [
     // 「新建会话…」在最上面：一次可以开好几个，是默认的那条路；
     // 下面三条是「就来一个」的快捷方式，熟手用起来还是它们快
     { label: '新建会话…', onSelect: onNewSession },
@@ -313,20 +354,33 @@ function workspaceMenu(
     },
     { label: '新开 Codex', onSelect: () => void store.createSession(workspace.id, 'codex') },
     { label: '新开终端', onSelect: () => void store.createSession(workspace.id, 'shell') },
-    {
-      label: '删除这个工作目录',
-      danger: true,
-      separatorBefore: true,
-      onSelect: () => void store.removeWorkspace(workspace.id),
-    },
   ];
+
+  if (sessions.length > 0) {
+    // 「关掉父窗口」= 只收子窗口，**目录留着**（下次直接重开一批）。
+    // 要连目录一起删是下面那条「删除这个工作目录」
+    items.push({
+      label: `关闭全部会话（${sessions.length}）`,
+      separatorBefore: true,
+      onSelect: () => void store.closeWorkspaceSessions(workspace.id),
+    });
+  }
+
+  items.push({
+    label: '删除这个工作目录',
+    danger: true,
+    separatorBefore: true,
+    onSelect: () => void store.removeWorkspace(workspace.id),
+  });
+
+  return items;
 }
 
 function sessionMenu(store: AgentsStore, state: AgentsState, session: AgentSession): MenuItem[] {
   const items: MenuItem[] = [];
 
   // 已经在屏幕上的会话不该再提供「分屏显示」—— 一个会话不能同时占两格
-  if (!isOnScreen(state, session.id)) {
+  if (!isOnScreen(state, session)) {
     items.push({
       label: '在右边分屏显示',
       onSelect: () => store.putOnScreen(session.id, 'row'),

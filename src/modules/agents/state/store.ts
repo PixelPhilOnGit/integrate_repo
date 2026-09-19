@@ -98,9 +98,30 @@ export interface AgentsState {
   ready: boolean;
   workspaces: AgentWorkspace[];
   sessions: AgentSession[];
-  /** 分屏布局。null = 主区是空的（一个会话都没上屏） */
-  layout: PaneLayout | null;
-  /** 当前聚焦的那一块显示的是哪个会话。键盘往哪去、分屏从哪分，都看它 */
+  /**
+   * 一个**窗口**一套分屏布局，按工作目录索引。
+   *
+   * ⚠️ 不是一份全局布局：用户的心智是「这个项目我摆了四个格子」，切去看另一个
+   * 项目不该把那四个格子拆掉。所以侧栏点哪个目录，右边就换它那一套。
+   * 目录没有了（或者里面一块都没了）就没有这个键 —— 空对象 = 空窗口。
+   */
+  layouts: Record<string, PaneLayout>;
+  /** 现在显示的是哪个窗口（工作目录）。null = 一个目录都没加 */
+  activeWorkspaceId: string | null;
+  /**
+   * 侧栏里哪些窗口被**展开**了（默认收起）。
+   *
+   * 放进 state 而不是组件里：切去别的模块再回来，React 会把侧栏整个卸载，
+   * 组件里的展开状态就没了 —— 用户会看到自己刚点开的那一行又合上了。
+   * （SSH 模块的侧栏是同一个理由。）
+   */
+  expanded: Record<string, boolean>;
+  /**
+   * 当前窗口里聚焦的那一块。
+   *
+   * ⚠️ 只对**当前窗口**有意义：切窗口时它会跟着落到新窗口的第一块上，
+   * 否则键盘还指向上一个窗口的某块，用户看到的和键盘指向的不是同一处。
+   */
   focusedId: string | null;
   /** 检查器里在看哪个会话。可以和 focused 不同（点侧栏看一眼，不动屏幕） */
   selectedId: string | null;
@@ -135,7 +156,9 @@ export class AgentsStore {
     ready: false,
     workspaces: [],
     sessions: [],
-    layout: null,
+    layouts: {},
+    activeWorkspaceId: null,
+    expanded: {},
     focusedId: null,
     selectedId: null,
     eventsDir: null,
@@ -206,7 +229,12 @@ export class AgentsStore {
     const workspaces = await this.loadWorkspaces();
     // 启动参数也一起读：**新建会话时要用它拼命令**，晚读一步就可能漏掉
     const launchArgs = await this.loadLaunchArgs();
-    this.patch({ workspaces, launchArgs });
+    this.patch({
+      workspaces,
+      launchArgs,
+      // 起来就显示第一个窗口：一个目录都没有的话就是空的
+      activeWorkspaceId: workspaces[0]?.id ?? null,
+    });
 
     // 再收孤儿。**和读盘的顺序不能反**：先读盘的话，中间这段时间从界面上
     // 看是一切正常的，但后台还挂着上一次的会话
@@ -448,7 +476,11 @@ export class AgentsStore {
     }
 
     const workspace: AgentWorkspace = { id: newId('ws'), path, name: baseName(path) };
-    this.patch({ workspaces: [...this.state.workspaces, workspace] });
+    this.patch({
+      workspaces: [...this.state.workspaces, workspace],
+      // 新加的目录直接切过去：用户刚选完文件夹，下一步就是往里开会话
+      activeWorkspaceId: workspace.id,
+    });
     this.persistWorkspaces();
     return workspace.id;
   }
@@ -473,8 +505,56 @@ export class AgentsStore {
     }
 
     for (const session of mine) await this.closeSession(session.id);
-    this.patch({ workspaces: this.state.workspaces.filter((w) => w.id !== workspaceId) });
+
+    // 窗口本身也要收掉：布局、以及「现在显示的是哪一个」
+    const layouts = { ...this.state.layouts };
+    delete layouts[workspaceId];
+    const rest = this.state.workspaces.filter((w) => w.id !== workspaceId);
+
+    this.patch({
+      workspaces: rest,
+      layouts,
+      activeWorkspaceId:
+        this.state.activeWorkspaceId === workspaceId
+          ? (rest[0]?.id ?? null)
+          : this.state.activeWorkspaceId,
+      focusedId:
+        this.state.activeWorkspaceId === workspaceId ? null : this.state.focusedId,
+    });
     this.persistWorkspaces();
+  }
+
+  /**
+   * 关掉一个窗口（工作目录）里的**全部会话**，目录留着。
+   *
+   * 和 [`removeWorkspace`] 的差别就在这句：那个连目录一起删，这个只收子窗口。
+   * 有会话在跑就先问一句 —— 一次关掉四个跑着的 agent 值得拦一下，而且是
+   * **不可逆**的（那些会话里的上下文就没了）。
+   */
+  async closeWorkspaceSessions(workspaceId: string): Promise<number> {
+    const mine = this.state.sessions.filter((s) => s.workspaceId === workspaceId);
+    if (mine.length === 0) return 0;
+
+    const running = mine.filter((s) => s.status !== 'exited').length;
+    if (running > 0) {
+      const name = this.workspaceById(workspaceId)?.name ?? '这个目录';
+      const ok = await platform.confirm(
+        `「${name}」里有 ${running} 个会话还在跑，全部关掉？`,
+        '关闭全部会话',
+      );
+      if (!ok) return 0;
+    }
+
+    for (const session of mine) await this.closeSession(session.id);
+    return mine.length;
+  }
+
+  /** 侧栏里展开/收起一个窗口（看清楚它里面有哪些会话） */
+  toggleExpanded(workspaceId: string): void {
+    const expanded = { ...this.state.expanded };
+    if (expanded[workspaceId] === true) delete expanded[workspaceId];
+    else expanded[workspaceId] = true;
+    this.patch({ expanded });
   }
 
   renameWorkspace(workspaceId: string, name: string): void {
@@ -638,12 +718,15 @@ export class AgentsStore {
 
     await this.services.client.close(sessionId).catch(() => undefined);
 
-    const layout = this.state.layout === null ? null : closePane(this.state.layout, sessionId);
+    // 布局改动打在**会话自己那个窗口**上：关掉别的窗口里的会话时，
+    // 当前显示的那一套不该动
+    const workspaceId = session.workspaceId;
+    const current = this.layoutOf(workspaceId);
+    const layout = current === null ? null : closePane(current, sessionId);
     const remaining = this.state.sessions.filter((s) => s.id !== sessionId);
 
-    this.patch({
+    this.setLayout(workspaceId, layout, {
       sessions: remaining,
-      layout,
       focusedId: this.focusedAfterChange(sessionId, layout),
       selectedId: this.state.selectedId === sessionId ? null : this.state.selectedId,
     });
@@ -681,74 +764,131 @@ export class AgentsStore {
     return `${base} #${same + 1}`;
   }
 
-  // ------------------------------------------------------------ 分屏
+  // ------------------------------------------------------------ 窗口与分屏
 
-  /**
-   * 把一个会话摆到屏幕上。
-   *
-   * `split` 给了就切当前聚焦的那块，没给就**替换**聚焦那块的内容。
-   */
-  putOnScreen(sessionId: string, split: SplitDir | null): void {
-    const { layout, focusedId } = this.state;
+  /** 某个窗口（工作目录）的布局。null = 这个窗口里一块都没有 */
+  layoutOf(workspaceId: string | null): PaneLayout | null {
+    if (workspaceId === null) return null;
+    return this.state.layouts[workspaceId] ?? null;
+  }
 
-    if (layout === null || focusedId === null) {
-      this.patch({ layout: leafPane(sessionId), focusedId: sessionId, selectedId: sessionId });
-      return;
-    }
-    if (split === null) {
-      // 聚焦的那块可能已经不在布局里了（比如它刚被关掉，而这次调用是上一帧
-      // 的按钮触发的）。那就退到第一块上，别让「上屏」变成一个静默的空操作
-      const target = paneOf(layout, focusedId) ? focusedId : firstPane(layout);
-      this.patch({
-        layout: replacePane(layout, target, sessionId),
-        focusedId: sessionId,
-        selectedId: sessionId,
-      });
-      return;
-    }
-
-    // 分屏时新的一块永远在右边/下边 —— 界面上按钮写的就是「向右/向下分屏」
-    this.patch({
-      layout: splitPane(layout, focusedId, split, sessionId, false),
-      focusedId: sessionId,
-      selectedId: sessionId,
-    });
+  /** 现在显示的那一套布局 */
+  activeLayout(): PaneLayout | null {
+    return this.layoutOf(this.state.activeWorkspaceId);
   }
 
   /**
-   * 把一组会话一次摆成网格，**替换当前聚焦的那一块**。
+   * 切窗口：侧栏点一个工作目录走的就是这儿。
+   *
+   * 焦点跟着落到新窗口的第一块上 —— 不落的话键盘还指向上一个窗口里那块，
+   * 打进去的字会跑到看不见的地方。
+   */
+  setActiveWorkspace(workspaceId: string | null): void {
+    if (workspaceId === this.state.activeWorkspaceId) return;
+
+    const layout = this.layoutOf(workspaceId);
+    const first = layout === null ? null : firstPane(layout);
+    this.patch({
+      activeWorkspaceId: workspaceId,
+      focusedId: first,
+      // 检查器跟着切到新窗口里的东西；新窗口是空的话就保持原样（用户可能
+      // 正在看上一个窗口里某个会话的详情）
+      selectedId: first ?? this.state.selectedId,
+    });
+  }
+
+  /** 改某个窗口的布局。`null` = 这个窗口空了（把键删掉，而不是留个 null） */
+  private setLayout(
+    workspaceId: string,
+    next: PaneLayout | null,
+    extra: Partial<AgentsState> = {},
+  ): void {
+    const layouts = { ...this.state.layouts };
+    if (next === null) delete layouts[workspaceId];
+    else layouts[workspaceId] = next;
+    this.patch({ layouts, ...extra });
+  }
+
+  /**
+   * 在这个窗口里挑一块下手（替换 / 分屏的目标）。
+   *
+   * 优先用当前聚焦的那块，但它可能已经不在布局里了（刚被关掉，而这次调用是
+   * 上一帧的按钮触发的），或者这个窗口根本不是当前显示的那个 —— 那就退到
+   * 第一块上，别让「上屏」变成一次静默的空操作。
+   */
+  private targetPaneIn(workspaceId: string, layout: PaneLayout): string {
+    const focused = this.state.activeWorkspaceId === workspaceId ? this.state.focusedId : null;
+    return focused !== null && paneOf(layout, focused) ? focused : firstPane(layout);
+  }
+
+  /**
+   * 把一个会话摆到**它自己那个窗口**里，并把那个窗口切到前面。
+   *
+   * `split` 给了就切一块出去，没给就**替换**目标那一块的内容。
+   */
+  putOnScreen(sessionId: string, split: SplitDir | null): void {
+    const session = this.sessionById(sessionId);
+    if (session === null) return;
+
+    const workspaceId = session.workspaceId;
+    // 会话是用户刚建的（或者刚点着要看的）—— 那个窗口必须显示出来
+    const show = {
+      activeWorkspaceId: workspaceId,
+      focusedId: sessionId,
+      selectedId: sessionId,
+    };
+
+    const layout = this.layoutOf(workspaceId);
+    if (layout === null) {
+      this.setLayout(workspaceId, leafPane(sessionId), show);
+      return;
+    }
+
+    const target = this.targetPaneIn(workspaceId, layout);
+    // 分屏时新的一块永远在右边/下边 —— 界面上按钮写的就是「向右/向下分屏」
+    const next =
+      split === null
+        ? replacePane(layout, target, sessionId)
+        : splitPane(layout, target, split, sessionId, false);
+    this.setLayout(workspaceId, next, show);
+  }
+
+  /**
+   * 把一组会话一次摆成网格，**替换那个窗口里选中的一块**。
    *
    * 和 [`putOnScreen`] 的分工：那个一次摆一个（新建一个、从旁边分一个），
    * 这个一次摆一片。用「替换」而不是「追加」是因为一次建一批的语义就是
-   * 「这一格拿来放它们」—— 屏幕上别处用户摆好的东西不该被动。
+   * 「这一格拿来放它们」—— 窗口里别处用户摆好的东西不该被动。
    */
   putGridOnScreen(sessionIds: readonly string[], cols: number): void {
     const grid = gridLayout(sessionIds, cols);
     const first = sessionIds[0];
     if (grid === null || first === undefined) return;
 
-    const { layout, focusedId } = this.state;
-    if (layout === null || focusedId === null) {
-      this.patch({ layout: grid, focusedId: first, selectedId: first });
+    const session = this.sessionById(first);
+    if (session === null) return;
+
+    const workspaceId = session.workspaceId;
+    const show = { activeWorkspaceId: workspaceId, focusedId: first, selectedId: first };
+
+    const layout = this.layoutOf(workspaceId);
+    if (layout === null) {
+      this.setLayout(workspaceId, grid, show);
       return;
     }
 
-    // 聚焦的那块可能已经不在布局里了（见 `putOnScreen` 里同样的兜底）——
-    // 那就落到第一块上，别让「上屏」变成一次静默的空操作
-    const target = paneOf(layout, focusedId) ? focusedId : firstPane(layout);
-    this.patch({
-      layout: replaceWith(layout, target, grid),
-      focusedId: first,
-      selectedId: first,
-    });
+    const target = this.targetPaneIn(workspaceId, layout);
+    this.setLayout(workspaceId, replaceWith(layout, target, grid), show);
   }
 
   /** 分屏并且**新起一个会话**（这是「向右分屏」按钮的默认行为） */
   async splitWithNewSession(dir: SplitDir): Promise<void> {
     const focused = this.state.focusedId === null ? null : this.sessionById(this.state.focusedId);
     if (focused === null) {
-      // 屏幕上什么都没有：分屏没有意义，直接开一个
-      const workspace = this.state.workspaces[0];
+      // 当前窗口里什么都没有：分屏没有意义，直接开一个
+      const activeId = this.state.activeWorkspaceId;
+      const workspace =
+        this.state.workspaces.find((w) => w.id === activeId) ?? this.state.workspaces[0];
       if (workspace !== undefined) await this.createSession(workspace.id, 'claude');
       return;
     }
@@ -757,9 +897,16 @@ export class AgentsStore {
 
   /** 把一块从布局里摘掉。**会话不杀**，只是不在屏幕上了 */
   closePaneFor(sessionId: string): void {
-    if (this.state.layout === null) return;
-    const layout = closePane(this.state.layout, sessionId);
-    this.patch({ layout, focusedId: this.focusedAfterChange(sessionId, layout) });
+    const session = this.sessionById(sessionId);
+    if (session === null) return;
+
+    const current = this.layoutOf(session.workspaceId);
+    if (current === null) return;
+
+    const layout = closePane(current, sessionId);
+    this.setLayout(session.workspaceId, layout, {
+      focusedId: this.focusedAfterChange(sessionId, layout),
+    });
   }
 
   focusSession(sessionId: string): void {
@@ -771,15 +918,18 @@ export class AgentsStore {
     this.patch({ selectedId: sessionId });
   }
 
-  /** 拖分隔条。比例由 `core/layout.ts` 夹住 */
+  /** 拖分隔条。比例由 `core/layout.ts` 夹住。分隔条只属于当前窗口 */
   resize(path: SplitPath, ratio: number): void {
-    if (this.state.layout === null) return;
-    this.patch({ layout: setRatio(this.state.layout, path, ratio) });
+    const workspaceId = this.state.activeWorkspaceId;
+    const layout = this.activeLayout();
+    if (workspaceId === null || layout === null) return;
+    this.setLayout(workspaceId, setRatio(layout, path, ratio));
   }
 
   /** 方向键在窗格之间移动焦点 */
   focusDirection(dir: Direction): void {
-    const { layout, focusedId } = this.state;
+    const layout = this.activeLayout();
+    const focusedId = this.state.focusedId;
     if (layout === null || focusedId === null) return;
     const next = neighborOf(rectsOf(layout), focusedId, dir);
     if (next !== null) this.focusSession(next);
@@ -805,9 +955,17 @@ export class AgentsStore {
    * 跳过去这个动作本身就是「我看到了」。
    */
   jumpTo(sessionId: string): void {
-    if (this.sessionById(sessionId) === null) return;
-    if (!paneOf(this.state.layout, sessionId)) this.putOnScreen(sessionId, null);
-    else this.focusSession(sessionId);
+    const session = this.sessionById(sessionId);
+    if (session === null) return;
+
+    // 「在屏幕上」要按**它自己那个窗口**算：别的窗口里摆着它，不等于这个窗口
+    // 看得见（切过去才对）
+    if (!paneOf(this.layoutOf(session.workspaceId), sessionId)) {
+      this.putOnScreen(sessionId, null);
+    } else {
+      this.setActiveWorkspace(session.workspaceId);
+      this.focusSession(sessionId);
+    }
     this.acknowledge(sessionId);
   }
 

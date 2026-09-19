@@ -24,11 +24,14 @@ interface Props {
 }
 
 export function SplitView({ state, store }: Props): ReactNode {
-  if (state.layout === null) return <EmptyState state={state} store={store} />;
+  // 画的是**当前窗口**（工作目录）那一套。切窗口 = 换一棵树，
+  // 别的窗口里的终端会走 detach（挪到屏幕外、不销毁），回来画面还在
+  const layout = store.activeLayout();
+  if (layout === null) return <EmptyState state={state} store={store} />;
 
   return (
     <div className="rd-agent-split-root" data-testid="agent-split-root">
-      {renderNode(state.layout, [], state, store)}
+      {renderNode(layout, [], state, store)}
     </div>
   );
 }
@@ -157,15 +160,25 @@ function EmptyState({ state, store }: { state: AgentsState; store: AgentsStore }
     );
   }
 
-  const workspace = state.workspaces[0];
+  // 空的是**当前这个窗口**：别的目录里可能正开着好几个会话，那些在别的窗口里
+  // （侧栏上它们那一行会显示状态点）。所以这里说的是「这个目录」
+  const workspace =
+    state.workspaces.find((w) => w.id === state.activeWorkspaceId) ?? state.workspaces[0];
   if (workspace === undefined) return null;
+
+  const elsewhere = state.sessions.filter((s) => s.workspaceId !== workspace.id).length;
+  const hint =
+    elsewhere > 0
+      ? `别的目录里还开着 ${elsewhere} 个会话，点左边那一条就切过去。`
+      : '一个目录就是一个窗口，窗口里面想怎么分屏都行。';
 
   return (
     <div className="rd-agent-empty rd-empty" data-testid="agent-empty">
-      <h2>屏幕上还没有会话</h2>
+      <h2>这个窗口里还没有会话</h2>
       <p>
         从左边「{workspace.name}」下面开一个，或者点下面这个按钮直接开一个 Claude Code。
       </p>
+      <p className="rd-muted">{hint}</p>
       <button
         type="button"
         className="rd-btn rd-btn-primary"

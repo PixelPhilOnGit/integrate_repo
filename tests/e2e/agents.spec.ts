@@ -68,6 +68,26 @@ async function newSession(page: Page, command = 'claude'): Promise<string> {
   return await focusedId(page);
 }
 
+/**
+ * 展开某个工作目录 —— 侧栏里的会话行**默认是收起的**。
+ *
+ * 侧栏第一眼只回答「我有几个窗口」（一个工作目录就是一个窗口）；要看窗口里的
+ * 会话（状态行、右键菜单），得先把那一行的箭头点开。收起时那些信息由父行的
+ * 汇总圆点和顶部的「需要你」队列负责。
+ */
+async function expandWorkspace(page: Page, wsId: string): Promise<void> {
+  const head = page.getByTestId(`agent-ws-head-${wsId}`);
+  const caret = head.getByRole('button', { name: '展开' });
+  if ((await caret.count()) > 0) await caret.click();
+  // 等它真的开了：紧接着的操作都打在那些会话行上
+  await expect(head.getByRole('button', { name: '收起' })).toBeVisible();
+}
+
+/** 展开**第一个**工作目录（用例里九成只有一个） */
+async function expandFirst(page: Page): Promise<void> {
+  await expandWorkspace(page, await firstWorkspaceId(page));
+}
+
 // ------------------------------------------------------------------ 用例
 
 test('从零开始：加一个工作目录、开一个会话、终端里跑起来', async ({ page }) => {
@@ -82,7 +102,8 @@ test('从零开始：加一个工作目录、开一个会话、终端里跑起�
 
   // 假 agent 会画一个横幅出来
   await expect.poll(() => termText(page, id)).toContain('Devtoolkit 假 agent');
-  // 侧栏里也出现了这个会话
+  // 侧栏里也出现了这个会话（它那个窗口已经在列表里，展开就能看见）
+  await expandFirst(page);
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toBeVisible();
 });
 
@@ -119,6 +140,7 @@ test('终端是**真的**终端：行规程、退格、命令回显都在', asyn
 
 test('状态点跟着状态走：正在工作 → 需要你 → 已完成', async ({ page }) => {
   const id = await newSession(page);
+  await expandFirst(page); // 状态行在侧栏里，默认收起
   const dot = page.getByTestId(`agent-dot-${id}`);
   const row = page.locator(`[data-testid="agent-session-${id}"]`);
 
@@ -136,6 +158,7 @@ test('状态点跟着状态走：正在工作 → 需要你 → 已完成', asyn
 test('需要你的时候：状态点、边框、队列、状态栏四处一起变', async ({ page }) => {
   // 这条是这个模块存在的理由 —— 用户在四个会话之间不可能逐个去读终端
   const id = await newSession(page);
+  await expandFirst(page);
 
   await typeIn(page, id, 'ask');
 
@@ -165,6 +188,7 @@ test('⚠️提示里那句「等你确认」是从终端转义序列里读出�
 
 test('在需要你的窗格里敲键 = 你在处理了，它离开队列', async ({ page }) => {
   const id = await newSession(page);
+  await expandFirst(page);
   await typeIn(page, id, 'ask');
   await expect(page.getByTestId(`agent-queue-${id}`)).toBeVisible();
 
@@ -196,6 +220,7 @@ test('Ctrl+Shift+U 跳到等得最久的那个会话', async ({ page }) => {
 
 test('分屏：切一刀、拖分隔条、收掉一格', async ({ page }) => {
   const left = await newSession(page);
+  await expandFirst(page);
   await expect(page.getByTestId(`agent-pane-${left}`)).toBeVisible();
 
   await page.keyboard.press('Control+Shift+KeyD');
@@ -224,6 +249,7 @@ test('分屏：切一刀、拖分隔条、收掉一格', async ({ page }) => {
 
 test('一个会话不会同时占两格 —— 已经在屏幕上就不再提供「分屏显示」', async ({ page }) => {
   const id = await newSession(page);
+  await expandFirst(page);
   await page.locator(`[data-testid="agent-session-${id}"]`).click({ button: 'right' });
   await expect(page.getByTestId('menu-在右边分屏显示')).toHaveCount(0);
   // 右键菜单开着的时候按 Esc 关掉，免得挡住后面的操作
@@ -232,6 +258,7 @@ test('一个会话不会同时占两格 —— 已经在屏幕上就不再提供
 
 test('关掉一个会话：进程没了，布局里那一格也收掉', async ({ page }) => {
   const id = await newSession(page);
+  await expandFirst(page);
   await page.locator(`[data-testid="agent-session-${id}"]`).click({ button: 'right' });
   await page.getByTestId('menu-关掉这个会话').click();
 
@@ -241,6 +268,7 @@ test('关掉一个会话：进程没了，布局里那一格也收掉', async ({
 
 test('退出码显示出来，状态是「已退出」', async ({ page }) => {
   const id = await newSession(page);
+  await expandFirst(page);
   await typeIn(page, id, 'exit');
 
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toHaveAttribute(
@@ -322,11 +350,16 @@ test('工作目录的会话数、展开收起、双击改名', async ({ page }) 
   const wsHead = page.locator('[data-testid^="agent-ws-head-"]').first();
   const wsId = (await wsHead.getAttribute('data-testid'))!.replace('agent-ws-head-', '');
 
-  // 收起之后会话行不在了，展开又回来
-  await page.getByTestId(`agent-ws-head-${wsId}`).getByRole('button', { name: '收起' }).click();
+  // ⚠️ 会话行**默认收起**：侧栏一眼看到的该是「我有几个窗口」而不是
+  // 「我有几个会话」。所以这里先展开，再收起确认它真的收得回去
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toHaveCount(0);
   await page.getByTestId(`agent-ws-head-${wsId}`).getByRole('button', { name: '展开' }).click();
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toBeVisible();
+  await page.getByTestId(`agent-ws-head-${wsId}`).getByRole('button', { name: '收起' }).click();
+  await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toHaveCount(0);
+
+  // 那个数字是窗口里的会话数
+  await expect(page.getByTestId(`agent-ws-head-${wsId}`)).toContainText('1');
 
   // 双击改名
   await page.getByTestId(`agent-ws-name-${wsId}`).dblclick();
@@ -339,6 +372,7 @@ test('工作目录的会话数、展开收起、双击改名', async ({ page }) 
 test('切到别的模块再回来，会话和画面都还在', async ({ page }) => {
   // 终端字节流着的时候切模块 —— 这是「终端实例活在 React 树外面」那条设计的验收
   const id = await newSession(page);
+  await expandFirst(page);
   await typeIn(page, id, 'work');
   await expect.poll(() => termText(page, id)).toContain('正在处理');
 
@@ -386,6 +420,8 @@ test('新建会话：填几个就开几个，一次铺成网格', async ({ page 
   // 侧栏里加上原来那个一共 5 个会话
   // ⚠️ 前缀要限定在侧栏里：检查器里那块详情的 testid 是 `agent-session-detail`，
   // 按前缀选会把它也算进来（这条曾经写成 6 而不是 5）
+  // ⚠️ 会话行默认收起，先展开
+  await expandFirst(page);
   await expect(
     page.locator('[data-testid="agent-workspaces"] [data-testid^="agent-session-"]'),
   ).toHaveCount(5);
@@ -425,4 +461,62 @@ test('启动参数：设一次，之后新建的命令都带上', async ({ page 
   await page.getByTestId(`agent-new-session-${wsId}`).click();
   await page.getByTestId('agent-new-args').click();
   await expect(page.getByTestId('agent-args-claude')).toHaveValue('--dangerously-skip-permissions');
+});
+
+// ------------------------------------------------------------ 一个目录一个窗口
+
+test('一个工作目录就是一个窗口：各看各的分屏，父窗口一关子窗口全收', async ({ page }) => {
+  // 预置两个工作目录。浏览器里那个假「选文件夹」永远返回同一个路径，第二次
+  // 添加会被去重 —— 而这条用例正需要**两个不同的窗口**
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'devtoolkit.agents.v1',
+      JSON.stringify({
+        workspaces: [
+          { id: 'ws_alpha', path: 'D:\\work\\alpha', name: 'alpha' },
+          { id: 'ws_beta', path: 'D:\\work\\beta', name: 'beta' },
+        ],
+      }),
+    );
+  });
+  await page.reload();
+  await page.getByTestId('module-agents').click();
+
+  // 侧栏一眼是**两个窗口**（一个目录一条），不是「一堆会话」
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
+
+  // alpha 里摆两块
+  await page.getByTestId('agent-new-session-ws_alpha').click();
+  await page.getByTestId('agent-new-confirm').click();
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(1);
+  await page.keyboard.press('Control+Shift+KeyD');
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(2);
+
+  // 切到 beta：它是**空的**（不是继承了 alpha 的两块）
+  await page.getByTestId('agent-ws-head-ws_beta').click();
+  await expect(page.getByTestId('agent-empty')).toBeVisible();
+  await expect(page.getByTestId('agent-ws-head-ws_beta')).toHaveAttribute(
+    'data-workspace-active',
+    'true',
+  );
+
+  // beta 里开一个
+  await page.getByTestId('agent-new-session-ws_beta').click();
+  await page.getByTestId('agent-new-confirm').click();
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(1);
+
+  // 切回 alpha：两块原样还在
+  await page.getByTestId('agent-ws-head-ws_alpha').click();
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(2);
+
+  // 关掉父窗口：它里面的会话全收掉，**目录还在**（那一行还看得见）
+  page.on('dialog', (d) => void d.accept());
+  await page.getByTestId('agent-ws-head-ws_alpha').click({ button: 'right' });
+  await page.getByTestId('menu-关闭全部会话（2）').click();
+
+  await expect(page.getByTestId('agent-empty')).toBeVisible();
+  await expect(page.getByTestId('agent-ws-head-ws_alpha')).toBeVisible();
+  // beta 那个会话没被连累
+  await page.getByTestId('agent-ws-head-ws_beta').click();
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(1);
 });

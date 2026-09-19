@@ -372,7 +372,7 @@ describe('新建会话', () => {
     const ws = await withWorkspace(h);
     const id = await h.store.createSession(ws, 'claude');
     const s = h.store.getSnapshot();
-    expect(s.layout).toEqual({ kind: 'leaf', sessionId: id });
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: id });
     expect(s.focusedId).toBe(id);
   });
 
@@ -383,7 +383,7 @@ describe('新建会话', () => {
     await h.store.createSession(ws, 'claude');
     const second = await h.store.createSession(ws, 'claude');
     const s = h.store.getSnapshot();
-    expect(s.layout).toEqual({ kind: 'leaf', sessionId: second });
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: second });
     expect(s.sessions).toHaveLength(2);
   });
 
@@ -422,7 +422,7 @@ describe('分屏', () => {
     await h.store.splitWithNewSession('row');
 
     const s = h.store.getSnapshot();
-    expect(s.layout).toEqual({
+    expect(h.store.activeLayout()).toEqual({
       kind: 'split',
       dir: 'row',
       ratio: 0.5,
@@ -438,8 +438,7 @@ describe('分屏', () => {
     const b = await h.store.createSession(ws, 'claude'); // b 现在占着唯一那块
 
     h.store.putOnScreen(a!, 'row');
-    const s = h.store.getSnapshot();
-    expect(s.layout).toEqual({
+    expect(h.store.activeLayout()).toEqual({
       kind: 'split',
       dir: 'row',
       ratio: 0.5,
@@ -457,7 +456,7 @@ describe('分屏', () => {
 
     h.store.closePaneFor(b);
     const s = h.store.getSnapshot();
-    expect(s.layout).toEqual({ kind: 'leaf', sessionId: a });
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: a });
     expect(s.sessions.map((x) => x.id)).toContain(b); // 进程没被杀
     expect(h.client.closed).toEqual([]);
   });
@@ -471,7 +470,7 @@ describe('分屏', () => {
 
     h.store.closePaneFor(b); // 布局回到只剩 a，但 focusedId 还指着 b
     const c = await h.store.createSession(ws, 'codex');
-    expect(h.store.getSnapshot().layout).toEqual({ kind: 'leaf', sessionId: c });
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: c });
     expect(a).not.toBe(c);
   });
 
@@ -737,7 +736,7 @@ describe('关会话', () => {
     expect(h.client.closed).toEqual([id]);
     expect(hub.dispose).toHaveBeenCalledWith(id);
     expect(h.store.getSnapshot().sessions).toEqual([]);
-    expect(h.store.getSnapshot().layout).toBeNull();
+    expect(h.store.activeLayout()).toBeNull();
   });
 
   it('关掉一块之后，布局里剩下的那一块顶上', async () => {
@@ -747,7 +746,7 @@ describe('关会话', () => {
     const b = (await h.store.splitWithNewSession('row').then(() => h.store.getSnapshot().focusedId!))!;
 
     await h.store.closeSession(b);
-    expect(h.store.getSnapshot().layout).toEqual({ kind: 'leaf', sessionId: a });
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: a });
     expect(h.store.getSnapshot().focusedId).toBe(a);
   });
 });
@@ -847,6 +846,141 @@ describe('集成向导', () => {
   });
 });
 
+describe('窗口：一个工作目录一套分屏', () => {
+  it('两个目录各摆各的，切回去原样还在', async () => {
+    const h = make();
+    const a = await withWorkspace(h, 'D:\\work\\a');
+    const b = await withWorkspace(h, 'D:\\work\\b');
+
+    // a 里摆两块
+    await h.store.createSession(a, 'claude');
+    await h.store.splitWithNewSession('row');
+    const layoutA = h.store.activeLayout();
+    expect(panesOf(layoutA!)).toHaveLength(2);
+
+    // 切到 b：它是空的（不是「继承了 a 的两块」）
+    h.store.setActiveWorkspace(b);
+    expect(h.store.activeLayout()).toBeNull();
+
+    // b 里开一个 —— 会**自动切回 b**（用户刚建的会话得看得见）
+    const b1 = (await h.store.createSession(b, 'shell'))!;
+    expect(h.store.getSnapshot().activeWorkspaceId).toBe(b);
+    expect(panesOf(h.store.activeLayout()!)).toEqual([b1]);
+
+    // 切回 a：两块原样
+    h.store.setActiveWorkspace(a);
+    expect(h.store.activeLayout()).toEqual(layoutA);
+  });
+
+  it('切窗口时焦点落到新窗口的第一块（不然键盘指向上一个窗口）', async () => {
+    const h = make();
+    const a = await withWorkspace(h, 'D:\\work\\a');
+    const b = await withWorkspace(h, 'D:\\work\\b');
+
+    await h.store.createSession(a, 'claude');
+    const b1 = (await h.store.createSession(b, 'claude'))!;
+    h.store.setActiveWorkspace(a);
+
+    const firstInA = panesOf(h.store.activeLayout()!)[0];
+    expect(h.store.getSnapshot().focusedId).toBe(firstInA);
+    expect(h.store.getSnapshot().focusedId).not.toBe(b1);
+  });
+
+  it('关掉会话只动它自己那个窗口', async () => {
+    const h = make();
+    const a = await withWorkspace(h, 'D:\\work\\a');
+    const b = await withWorkspace(h, 'D:\\work\\b');
+
+    await h.store.createSession(a, 'claude');
+    await h.store.splitWithNewSession('row');
+    const layoutA = h.store.activeLayout();
+
+    const b1 = (await h.store.createSession(b, 'claude'))!;
+    // 现在显示的是 b；把 b 里那个会话关掉，a 的两块不该被动
+    await h.store.closeSession(b1);
+
+    h.store.setActiveWorkspace(a);
+    expect(h.store.activeLayout()).toEqual(layoutA);
+  });
+
+  it('跳到一个别的窗口里的会话：窗口跟着切过去', async () => {
+    const h = make();
+    const a = await withWorkspace(h, 'D:\\work\\a');
+    const b = await withWorkspace(h, 'D:\\work\\b');
+
+    await h.store.createSession(a, 'claude');
+    const b1 = (await h.store.createSession(b, 'claude'))!;
+    h.store.setActiveWorkspace(a);
+
+    h.store.jumpTo(b1);
+    expect(h.store.getSnapshot().activeWorkspaceId).toBe(b);
+    expect(h.store.getSnapshot().focusedId).toBe(b1);
+  });
+});
+
+describe('关掉一个窗口里的全部会话（目录留着）', () => {
+  it('全关掉，目录还在', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    await h.store.createSession(ws, 'claude');
+    await h.store.splitWithNewSession('row');
+    expect(h.store.getSnapshot().sessions).toHaveLength(2);
+
+    const closed = await h.store.closeWorkspaceSessions(ws);
+
+    expect(closed).toBe(2);
+    expect(h.store.getSnapshot().sessions).toHaveLength(0);
+    expect(h.store.getSnapshot().workspaces).toHaveLength(1); // 目录留着
+    expect(h.store.activeLayout()).toBeNull();
+  });
+
+  it('⚠️ 有会话在跑就先问一句；用户说不就不关', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    await h.store.createSession(ws, 'claude');
+
+    fakePlatform.confirm.mockResolvedValueOnce(false);
+    expect(await h.store.closeWorkspaceSessions(ws)).toBe(0);
+    expect(h.store.getSnapshot().sessions).toHaveLength(1);
+    // 而且是真的问过（不是默默跳过）
+    expect(fakePlatform.confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('会话都已经跑完了就不问，直接收', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    const id = (await h.store.createSession(ws, 'claude'))!;
+    h.client.emitExit(id, 0);
+
+    expect(await h.store.closeWorkspaceSessions(ws)).toBe(1);
+    expect(fakePlatform.confirm).not.toHaveBeenCalled();
+  });
+
+  it('一个会话都没有时什么都不做', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    expect(await h.store.closeWorkspaceSessions(ws)).toBe(0);
+  });
+});
+
+describe('删掉工作目录', () => {
+  it('窗口跟着收掉，当前窗口换到剩下的那个', async () => {
+    const h = make();
+    const a = await withWorkspace(h, 'D:\\work\\a');
+    const b = await withWorkspace(h, 'D:\\work\\b');
+    await h.store.createSession(a, 'claude');
+    await h.store.createSession(b, 'claude');
+
+    // 现在显示的是 b
+    await h.store.removeWorkspace(b);
+
+    const snap = h.store.getSnapshot();
+    expect(snap.workspaces.map((w) => w.id)).toEqual([a]);
+    expect(snap.activeWorkspaceId).toBe(a);
+    expect(Object.keys(snap.layouts)).toEqual([a]); // b 那套布局没了
+  });
+});
+
 describe('启动参数（全局一份）', () => {
   it('没设过就是默认命令', async () => {
     const h = make();
@@ -936,9 +1070,9 @@ describe('一次新建一批（createMany）', () => {
 
     const snap = h.store.getSnapshot();
     const ids = snap.sessions.map((s) => s.id);
-    expect(panesOf(snap.layout!)).toEqual(ids);
+    expect(panesOf(h.store.activeLayout()!)).toEqual(ids);
     // 4 个 → 2×2
-    expect(rectsOf(snap.layout!)[ids[0]!]!.w).toBeCloseTo(0.5, 9);
+    expect(rectsOf(h.store.activeLayout()!)[ids[0]!]!.w).toBeCloseTo(0.5, 9);
   });
 
   it('⚠️ 中途只动一次布局 —— 一格格地摆屏用户会看到抖动', async () => {
@@ -948,9 +1082,9 @@ describe('一次新建一批（createMany）', () => {
     await h.store.createSession(ws, 'shell');
 
     let changes = 0;
-    let last = h.store.getSnapshot().layout;
+    let last = h.store.activeLayout();
     h.store.subscribe(() => {
-      const now = h.store.getSnapshot().layout;
+      const now = h.store.activeLayout();
       if (now !== last) {
         changes += 1;
         last = now;

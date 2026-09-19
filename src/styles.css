@@ -1963,6 +1963,23 @@ textarea:focus {
   padding: 4px 6px 4px 2px;
   font-size: 12px;
   font-weight: 600;
+  /* 一行 = 一个窗口（工作目录），点它切右边显示哪一套 */
+  cursor: pointer;
+}
+
+.rd-agent-ws-head:hover {
+  background: var(--accent-soft);
+}
+
+/*
+ * 现在右边显示的就是这一个窗口。
+ *
+ * 左侧的哪一条「亮着」= 右侧那片分屏属于谁 —— 没有这个高亮，用户切了两下之后
+ * 就不知道自己在哪个项目里了（几个窗口的分屏可能长得很像）。
+ */
+.rd-agent-ws-head.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .rd-agent-caret {
