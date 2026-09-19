@@ -16,6 +16,7 @@ mod health;
 mod redis_commands;
 mod sql_commands;
 mod ssh_commands;
+mod task_commands;
 
 /// 供 `main.rs`（以及将来的移动端入口）调用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -35,6 +36,8 @@ pub fn run() {
         // 智能体会话的 pane 表。同样包一层 Arc：读线程和等待线程要活到会话结束，
         // 而它们收尾时（转发任务里）要回头把会话从表里摘掉（`forget`）。
         .manage(std::sync::Arc::new(devtoolkit_agents::AgentRegistry::new()))
+        // 任务库。惰性打开（第一次真看任务的时候才碰磁盘）—— 见 task_commands.rs
+        .manage(std::sync::Arc::new(task_commands::TasksState::new()))
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,
@@ -73,6 +76,11 @@ pub fn run() {
             agent_commands::agent_integration_status,
             agent_commands::agent_integration_apply,
             agent_commands::agent_integration_revert,
+            task_commands::tasks_list,
+            task_commands::tasks_counts,
+            task_commands::tasks_create,
+            task_commands::tasks_update,
+            task_commands::tasks_delete,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

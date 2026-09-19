@@ -65,13 +65,17 @@ devtoolkit-ssh = { path = "ssh" }
 # 那些进程的生命周期管理（关 pane、应用退出不能留孤儿）是这个 crate 的重头戏。
 devtoolkit-agents = { path = "agents" }
 
+# 任务内核（SQLite）。同样不依赖 tauri —— 结构迁移和增删改查的测试
+# 起一个临时库文件就能跑，不需要 WebKit。
+devtoolkit-tasks = { path = "tasks" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh", "agents"]
+members = ["core", "redis", "sql", "ssh", "agents", "tasks"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "tasks"]
 resolver = "2"
 
 [profile.release]

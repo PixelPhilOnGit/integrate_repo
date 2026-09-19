@@ -2386,3 +2386,266 @@ textarea:focus {
   max-height: 160px;
   overflow: auto;
 }
+
+/* --------------------------------------------------------- 任务模块
+ *
+ * 只追加。用到的类一律 `rd-task-` 开头（先 grep 过：这个前缀之前没有），
+ * 和上面几节共用同一套变量（--panel / --border / --accent / --muted）。
+ */
+
+/* 侧栏那排状态筛选。横向排、窄间距，最多五个（全部 + 三档 + 余量） */
+.rd-task-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+.rd-task-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rd-task-chip:hover {
+  background: var(--accent-soft);
+}
+
+.rd-task-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* 一条任务 = 一张小卡片。
+ *
+ * 为什么不是「一行一行的列表」：任务是**一件件独立的事**，卡片把每条的范围
+ * 画在视觉上（圆角、边框、淡淡的投影），一眼能数出「有几件事」；
+ * 平铺的行读起来像表格，而表格会让人觉得这些条目之间是有关系的。
+ */
+.rd-task-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 16px);
+  margin: 5px 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.rd-task-row:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 选中：边框加深 + 一圈外描边（比换底色更清楚，而且是「卡片的选中」该有的样子） */
+.rd-task-row.is-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.rd-task-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rd-task-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  /* 标题可以很长，一行截断（完整的那份在右边卡片里） */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 完成的任务灰掉一点：列表里一眼看得出「这些不用看了」 */
+.rd-task-row.is-done .rd-task-title {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.rd-task-meta {
+  font-size: 11px;
+}
+
+/* 状态点：待办灰、进行中蓝、完成绿 */
+.rd-task-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.rd-task-dot.is-doing {
+  background: var(--accent);
+}
+
+.rd-task-dot.is-done {
+  background: #3fa96a;
+}
+
+.rd-task-nomatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+}
+
+.rd-task-error {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+/* ------------------------------------------------------------ 主区：任务卡 */
+
+.rd-task-board {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  background: var(--bg);
+}
+
+.rd-task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
+}
+
+.rd-task-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/*
+ * 卡片里的标题：默认**没有边框**（它看起来该是卡片的一部分，不是表单的一格），
+ * 悬浮才浮出一道边、获得焦点才变成输入框的样子 —— 这样「点进去改」这件事
+ * 自己就说明了自己。
+ */
+.rd-task-title-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 4px 6px;
+}
+
+.rd-task-title-input:hover {
+  border-color: var(--border);
+}
+
+.rd-task-title-input:focus {
+  background: var(--panel);
+  border-color: var(--accent);
+}
+
+/* 状态小标签（卡片头上那个，只读） */
+.rd-task-pill {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.rd-task-pill.is-doing {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rd-task-pill.is-done {
+  border-color: #3fa96a;
+  color: #3fa96a;
+}
+
+.rd-task-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rd-task-field-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.rd-task-field-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.rd-task-field-hint {
+  font-size: 11px;
+}
+
+.rd-task-textarea {
+  min-height: 96px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.7;
+  padding: 8px 10px;
+}
+
+.rd-task-empty-main {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------ 检查器 */
+
+.rd-task-section {
+  margin-bottom: 14px;
+}
+
+.rd-task-section-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.rd-task-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.rd-task-times {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  font-size: 12px;
+  margin: 0;
+}
+
+.rd-task-times dt {
+  color: var(--muted);
+}

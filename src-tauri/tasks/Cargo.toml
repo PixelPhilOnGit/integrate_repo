@@ -1,0 +1,27 @@
+[package]
+name = "devtoolkit-tasks"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的任务内核：SQLite 存储 + 查询（不依赖 Tauri）"
+license = "MIT"
+
+[dependencies]
+# 为什么是 rusqlite 而不是 sqlx / tauri-plugin-sql：
+#
+# * **`bundled` 连带把 SQLite 自己编进去** —— 三个平台都不需要用户装任何东西，
+#   也不会撞上「系统那份 SQLite 版本太老/没开某些编译选项」这种事。
+#   代价是一次性的编译时间（sqlite3.c 那一个文件）。
+# * 它是**同步**的：这个内核不依赖 tauri、不依赖 tokio，保持和其它四个内核
+#   一样的形状（纯逻辑 + 能脱离 WebKit 跑测试）。命令层丢进 `spawn_blocking`
+#   就够 —— 任务列表是几十条的量级，犯不上为它引一套异步数据库栈。
+# * `sqlx` 自带一套异步运行时和宏，对「几十条任务」来说太重；
+#   `tauri-plugin-sql` 把 SQL 暴露给前端，而我们的规矩是**逻辑留在 Rust**。
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# 任务要在 IPC 上过一趟（命令层直接把它序列化给前端），字段名跟着 serde 走。
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# 临时目录（和 agents 那边同一套用法）
+tempfile = "3"

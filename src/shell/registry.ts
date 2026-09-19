@@ -14,6 +14,7 @@ import { devPlaceholderModule } from '../modules/devplaceholder';
 import { redisModule } from '../modules/redis';
 import { sqlModule } from '../modules/sql';
 import { sshModule } from '../modules/ssh';
+import { tasksModule } from '../modules/tasks';
 import type { Module } from './types';
 
 export const MODULES: readonly Module[] = [
@@ -22,6 +23,7 @@ export const MODULES: readonly Module[] = [
   sqlModule,
   sshModule,
   agentsModule,
+  tasksModule,
   devPlaceholderModule,
 ];
 

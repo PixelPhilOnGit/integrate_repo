@@ -9,7 +9,7 @@
 
 ## 一句话状态
 
-**五个模块（顺序图 / Redis / 数据库 / SSH 终端 / 智能体会话）都可用。**
+**六个模块（顺序图 / Redis / 数据库 / SSH 终端 / 智能体会话 / 任务）都可用。**
 
 - SSH 是第一个**流式**模块，也是第一个带安全决策（TOFU）的模块
 - 智能体会话是第一个**起用户本机进程**的模块，也是第一个**改工作区之外的文件**的模块
@@ -17,6 +17,9 @@
   路径由 Rust 侧算，前端只能传枚举值）
 
 凭据是明文存储（用户明确选的），上生产前必须换钥匙串。下一个是 MongoDB。
+
+**任务模块是第一个用 SQLite 的模块**（其余的键值存储都是「一坨 JSON 整体读写」），
+理由和迁移规则写在 `src-tauri/tasks/src/store.rs` 头部。
 
 ---
 
@@ -116,6 +119,34 @@
 **Codex 的 hooks 要用户去 `/hooks` 审阅一次**（信任按 hook 定义的**哈希**记账，
 我们改一次它就得重审一次 —— 所以生成的内容要稳定，别塞时间戳）。
 
+### 任务（新）
+
+一件事从「待办」到「完成」的**账本**：标题 + 描述 + 状态 + 备注，就这四样。
+侧栏是卡片列表（搜索 + 状态筛选 + 「还没做完的」角标），主区是一张**任务卡**
+（标题、描述、备注都在卡片里改，失焦即存），检查器放状态、时间和删除。
+
+**为什么单独一个模块**：任务是**所有事**的入口，不隶属于任何技术域 ——
+挂在某个模块下的话，它的可见性就跟着那个模块走了。
+
+**为什么用 SQLite**（其余模块都是「一个 JSON 整体读写」）：任务天然是**一堆行** ——
+要按状态筛、按时间排、搜标题和描述，以后还要和 agent 的执行记录联表查。
+JSON 也能做，但每加一个维度就得在内存里重写一遍过滤排序，而且**并发写会丢数据**
+（两份整体覆盖彼此）。库文件在应用数据目录下的 `tasks.db`，结构版本记在
+`PRAGMA user_version` 里，迁移**每一步都要能从任意旧版本跑上来**（用户可能从
+0.3 直接跳到 0.7）。
+
+⚠️ 这一轮**刻意不接 agent**（用户明确要求「先把任务弄好」）：把任务派给某个会话、
+把执行结果回写，是下一步的事。外键已经开了，位置留着。
+
+### 搜索框（新）
+
+五个侧栏都有：Redis / SQL / SSH 连接列表、智能体会话的窗口树、顺序图的文件树。
+模糊匹配（`shared/search.ts`，子序列 + 打分）能搜 IP、名字、路径。
+
+两条口径：**树形侧栏保序**（顺序就是树的形状），**平铺的连接列表按相关度排**；
+搜索期间的撑开一律**叠加在点击状态之上**（`store.expanded` 一个字不动），
+清空之后树回原样 —— 这条有 e2e 钉着。
+
 ---
 
 ## 怎么跑起来
@@ -132,9 +163,9 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 
 ```bash
 npm run typecheck    # 类型检查
-npm test             # 885 个纯逻辑单测（秒级）
-npm run test:e2e     # 157 个端到端测试（真实 Chromium）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 266 条（agents 那套是 79 条）
+npm test             # 924 个纯逻辑单测（秒级）
+npm run test:e2e     # 168 个端到端测试（真实 Chromium）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 278 条（agents 那套是 79 条）
 ```
 
 ### ⚠️ 跑测试/编译之前必读
@@ -183,6 +214,7 @@ src/
     ├── sql/       数据库
     ├── ssh/       SSH 终端
     ├── agents/    智能体会话（一屏多个 agent）
+    ├── tasks/     任务（SQLite）
     └── devplaceholder/  占位（验证「加模块 = 一个目录 + 一行」）
 ```
 
@@ -194,10 +226,11 @@ src-tauri/
 ├── redis/       devtoolkit-redis：连接管理、命令执行、回复解析
 ├── sql/         devtoolkit-sql：MySQL / PostgreSQL 连接与查询
 ├── ssh/         devtoolkit-ssh：连接、认证、主机密钥、PTY 会话
-└── agents/      devtoolkit-agents：本机进程、状态事件目录、集成配置读写
+├── agents/      devtoolkit-agents：本机进程、状态事件目录、集成配置读写
+└── tasks/       devtoolkit-tasks：任务库（SQLite，rusqlite bundled）
 ```
 
-五个 crate 都**不依赖 tauri**，所以能脱离 WebKit/GTK 跑测试（含打真服务端的集成测试）。
+六个 crate 都**不依赖 tauri**，所以能脱离 WebKit/GTK 跑测试（含打真服务端的集成测试）。
 
 ### 加一个模块要做什么
 
@@ -205,7 +238,8 @@ src-tauri/
 
 ```ts
 export const MODULES = [
-  diagramModule, redisModule, sqlModule, sshModule, agentsModule, devPlaceholderModule,
+  diagramModule, redisModule, sqlModule, sshModule, agentsModule, tasksModule,
+  devPlaceholderModule,
 ];
 ```
 
