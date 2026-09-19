@@ -593,31 +593,6 @@ agent_open(id, config, channel)   ← config = { cwd, shell, command, cols, rows
 - **钩子用 exec 形式**（`command` 是脚本绝对路径 + `args: ["waiting"]`），
   两个平台都是 —— 不过 shell、不分词。shell 形式在 Windows 上会踩
   「用 bash 还是 PowerShell 取决于装没装 Git Bash」这个变量。
-- **Windows 上 Git Bash 由我们自己找给 claude。** Git for Windows 默认只把
-  `<Git>\cmd` 放进 PATH，`bash.exe` 所在的 `<Git>\bin` 往往不在 —— 于是
-  「`git` 能用、claude 却报 `requires git-bash`」。起窗格前探测一遍（从
-  PATH 里的 `git.exe` 上溯 + 几个标准安装位置），找到就把
-  `CLAUDE_CODE_GIT_BASH_PATH` 交给子进程；用户自己设过则一字不改，
-  没装 Git 则什么都不做（窗格照常开）。⚠️ 探测**只认 `git.exe` 上溯**：
-  去 PATH 里捡 `bash.exe` 会先撞上 WSL 的 `C:\Windows\System32\bash.exe`，
-  那比找不到更糟。
-- **装的是四个事件**：`UserPromptSubmit`→working、`PermissionRequest`→waiting
-  （**主力**，权限弹窗一出现就触发）、`Notification`（matcher 只认 `idle_prompt`）
-  →waiting（兜底）、`Stop`→done。⚠️ `UserPromptSubmit` / `Stop` **不支持 matcher**，
-  给它们写上是死配置（不报错也不生效）。
-- **已知边界：被外部信号杀掉的进程，退出码会报成 `1`。** `portable-pty` 0.8.1
-  的 `ExitStatus` 把 `signal` 藏起来了（0.9.0 才公开，而 0.9 在 Windows 上会让
-  终端白屏 —— 见 `agents/Cargo.toml`），所以「被信号带走」和「真的退出码 1」
-  分不开。我们自己关掉的窗格不受影响（那条路报 `null`：是我们杀的，
-  退出码没有意义）。
-- **状态事件是「钩子写文件、我们读走删掉」**，不是钩子调我们的程序：
-  钩子是**同步阻塞** agent 的，而 Tauri 二进制启动要 200ms+。
-  约定是 `<状态>.<会话id>`（状态只有 `working` / `waiting` / `done`），
-  时间戳用文件的 **mtime**。目录里的杂物（编辑器残留、用户手扔的）一律静静跳过 ——
-  为它们弹一条错误条才是错的。
-- **`agent_take_events` 返回的是按时间升序的一整批**，前端要**逐条**喂给状态机。
-  压成「每个会话只留最新那条」会丢掉「它离开过等待又回来了」这个事实，
-  而那正是「确认过之后它又需要我」要用的东西。
 
 
 

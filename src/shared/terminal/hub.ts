@@ -82,6 +82,27 @@ interface Entry {
    * 否则切走再回来，叠层会留在原地对着空气画。
    */
   layers: Map<string, HTMLElement>;
+  /**
+   * 一行多高（像素）。**量出来缓存的**，见 [`measureCellHeight`]。
+   *
+   * 缓存是因为叠层（命令块色条）每秒要问几十次，而量它要 `getBoundingClientRect()`
+   * —— 那会强制一次同步布局。0 = 还没量到（那时候别用它算位置）。
+   */
+  cellHeight: number;
+}
+
+/**
+ * 量一行多高：屏幕元素的**实际高度 ÷ 行数**。
+ *
+ * 不用 `fontSize × lineHeight` 自己算：渲染器会取整，自己算迟早差几像素，
+ * 而几像素在色条上就是「和文字对不齐」。量完缓存在 entry 上（`fitNow` 里刷新，
+ * 那儿是尺寸真变了的地方）。
+ */
+function measureCellHeight(entry: Entry): number {
+  const rows = entry.term.rows;
+  const screen = entry.container.querySelector('.xterm-screen');
+  const height = screen instanceof HTMLElement ? screen.getBoundingClientRect().height : 0;
+  return rows > 0 && height > 0 ? height / rows : 0;
 }
 
 /** 终端缓冲区里的一个位置。行号是**绝对行号**（含回滚区），列从 0 开始 */
@@ -240,6 +261,7 @@ export class TerminalHub {
       disposed: false,
       frame: null,
       layers: new Map(),
+      cellHeight: 0,
     };
     this.entries.set(sessionId, entry);
 
@@ -335,6 +357,8 @@ export class TerminalHub {
     if (sameSize(proposed, entry.size)) return;
 
     entry.size = proposed;
+    // 尺寸真变了才可能改行高（字号没变过），所以在这儿刷新就够
+    entry.cellHeight = 0;
     this.resizerFor(sessionId).push(proposed);
     // 行数或行高变了，叠层的像素位置就全不对了
     this.notifyViewport(sessionId);
@@ -461,6 +485,10 @@ export class TerminalHub {
    * 行高是**量出来的**（屏幕元素的实际高度 ÷ 行数），不是按
    * `fontSize × lineHeight` 算的：渲染器会取整，自己算迟早差几像素，
    * 而几像素在色条上就是「和文字对不齐」。
+   *
+   * ⚠️ 量出来的值**缓存**在 entry 上（`fitNow` 里刷新）。这个函数每秒会被
+   * 叠层问几十次，而 `getBoundingClientRect()` 会**强制一次同步布局** ——
+   * 每次都量等于每帧逼浏览器停下来算一遍排版，长时间跑就是卡顿的来源。
    */
   metrics(sessionId: string): TermMetrics | null {
     const entry = this.entries.get(sessionId);
@@ -468,13 +496,11 @@ export class TerminalHub {
 
     const buffer = entry.term.buffer.active;
     const rows = entry.term.rows;
-    const screen = entry.container.querySelector('.xterm-screen');
-    const height = screen instanceof HTMLElement ? screen.getBoundingClientRect().height : 0;
-    const cellHeight = rows > 0 && height > 0 ? height / rows : 0;
+    if (entry.cellHeight === 0) entry.cellHeight = measureCellHeight(entry);
 
     return {
       viewportLine: buffer.viewportY,
-      cellHeight,
+      cellHeight: entry.cellHeight,
       rows,
       lines: buffer.length,
       cursorLine: buffer.baseY + buffer.cursorY,

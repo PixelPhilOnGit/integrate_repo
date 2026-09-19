@@ -38,6 +38,27 @@ interface Props {
 /** 复制成功那个提示显示多久 */
 const COPIED_MS = 900;
 
+/**
+ * 两批色条画出来是不是一模一样（位置、高度、颜色、命令）。
+ *
+ * 逐字段比而不是比引用：`bandsOf` 每次都新建数组，引用永远不等 —— 那样这道
+ * 判断等于没写。
+ */
+function sameBands(a: readonly BlockBand[], b: readonly BlockBand[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((band, i) => {
+    const other = b[i];
+    return (
+      other !== undefined &&
+      band.id === other.id &&
+      band.top === other.top &&
+      band.height === other.height &&
+      band.lane === other.lane &&
+      band.title === other.title
+    );
+  });
+}
+
 export function BlockGutter({ sessionId, store }: Props): ReactNode {
   const [bands, setBands] = useState<BlockBand[]>([]);
   const [copied, setCopied] = useState<number | null>(null);
@@ -49,7 +70,11 @@ export function BlockGutter({ sessionId, store }: Props): ReactNode {
     const draw = (): void => {
       frame = null;
       const metrics = terminalHub.metrics(sessionId);
-      setBands(metrics === null ? [] : bandsOf(store.blocksOf(sessionId), metrics));
+      const next = metrics === null ? [] : bandsOf(store.blocksOf(sessionId), metrics);
+      // ⚠️ **没变就不 setState**：远端刷屏时这个回调每帧都来，而绝大多数帧里
+      // 色条一个像素都没动（新输出还在视口下面）。照单全收的话，React 会在
+      // 每个动画帧里重渲染一遍侧栏外的这一块 —— 长时间跑就是白烧 CPU。
+      setBands((prev) => (sameBands(prev, next) ? prev : next));
     };
     // 远端刷屏时这个回调每秒能来几十次，合并到动画帧里再画
     const schedule = (): void => {

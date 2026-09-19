@@ -504,7 +504,16 @@ fn absorb(
     }
 }
 
-/// 把攒下的字节作为一条事件发出去。返回 `false` 表示接收端没了。
+/// 把攒下的字节作为事件发出去。返回 `false` 表示接收端没了。
+///
+/// ⚠️ **单条事件必须守住 [`FLUSH_BYTES`]。** 那个常量管的是「什么时候 flush」，
+/// 但一条 russh 包本身可能就有 32KB（`cat` 一个大文件、编译输出），
+/// `absorb` 会先把它整个塞进缓冲 —— 于是这一条 flush 出来的事件远超 4KB，
+/// 掉进 Tauri 的**慢路径**：超过 8KB 的消息不放 `webview.eval`，而是存进
+/// Rust 侧一张表等 WebView 执行一段 fetch 回来取，那张表**没有上限也没有超时**
+/// （WebView 被系统节流或卡住时就没人来取，数据一直堆在 Rust 进程里）。
+/// 所以这里**按 [`FLUSH_BYTES`] 切片**：代价只是事件条数多一点，
+/// 换来「这一路永远走快路径」这个保证。
 async fn flush(
     buffer: &mut Vec<u8>,
     events: &tokio::sync::mpsc::Sender<TerminalEvent>,
@@ -512,12 +521,20 @@ async fn flush(
     if buffer.is_empty() {
         return true;
     }
-    let payload = base64::engine::general_purpose::STANDARD.encode(&buffer[..]);
+
+    for chunk in buffer.chunks(FLUSH_BYTES) {
+        let payload = base64::engine::general_purpose::STANDARD.encode(chunk);
+        if events
+            .send(TerminalEvent::Data { bytes: payload })
+            .await
+            .is_err()
+        {
+            buffer.clear();
+            return false;
+        }
+    }
     buffer.clear();
-    events
-        .send(TerminalEvent::Data { bytes: payload })
-        .await
-        .is_ok()
+    true
 }
 
 // ------------------------------------------------------------------ 小工具

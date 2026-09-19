@@ -39,7 +39,29 @@ export function bandsOf(blocks: readonly CommandBlock[], metrics: TermMetrics): 
   const viewBottom = viewportLine + rows;
   const out: BlockBand[] = [];
 
-  for (let i = 0; i < blocks.length; i += 1) {
+  // ⚠️ **从哪一块开始扫**：二分找「最后一块起点在视口之上」的那一块。
+  //
+  // 一块占的范围是 [自己的行, 下一块的行)，所以跨过视口顶端的那一块（起点在
+  // 上面、内容伸进视口）也必须画。从它开始往后扫到第一块起点在视口下面为止。
+  //
+  // 以前是从 0 开始一格格 `continue` 过去 —— 平摊看没问题，但**每一帧**都这么扫，
+  // 而长时间用下来块数会上千（每条命令一块）。那是「开着一整天越来越卡」那类
+  // 问题的典型形状：单帧不慢，帧数一多就显出来了。
+  let first = 0;
+  let lo = 0;
+  let hi = blocks.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const line = blocks[mid]?.line ?? 0;
+    if (line <= viewTop) {
+      first = mid; // 候选：起点在视口之上（可能正跨着视口顶端）
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  for (let i = first; i < blocks.length; i += 1) {
     const block = blocks[i];
     if (block === undefined) continue;
 

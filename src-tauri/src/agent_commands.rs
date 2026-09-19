@@ -125,6 +125,20 @@ pub async fn agent_open(
 ///
 /// ⚠️ 前端**必须串行调用**：每次是独立的 invoke，两次没 await 的调用到达顺序
 /// 不保证，打字会乱序成 `sl`。串行化在 `modules/agents/services/tauri.ts` 里做。
+///
+/// # ⚠️ 为什么写要丢到 blocking 线程池
+///
+/// 写 PTY **是阻塞的**，而且在 Windows 上会**无限期**地阻塞：ConPTY 的输入
+/// 是一根 4KB 的匿名管道（阻塞模式），对面（`claude` / `codex` 正在想事情的时候）
+/// 不读标准输入，管道就会填满，`write_all` 就卡在那儿 —— 卡多久没有上界。
+///
+/// 这个函数以前是 `async fn` 但**里面一个 await 都没有**，于是那具阻塞的写
+/// 直接跑在 tokio 的**工作线程**上。工作线程是按 CPU 核数配的，堵住几个，
+/// 整个应用的命令通道就全停了：界面点什么都没反应，连「关掉这个窗格」
+/// 都排不上队 —— 用户看到的就是**假死**。
+///
+/// 丢进 blocking 池之后，堵住的只是一个可以随时再多开一个的线程池线程，
+/// IPC 那条路照样能跑（包括关窗格和退出）。
 #[tauri::command]
 pub async fn agent_write(
     registry: State<'_, Arc<AgentRegistry>>,
@@ -134,7 +148,14 @@ pub async fn agent_write(
     let data = base64::engine::general_purpose::STANDARD
         .decode(bytes.as_bytes())
         .map_err(|e| format!("终端输入不是合法的 base64：{e}"))?;
-    registry.write(&id, &data).map_err(|e| e.to_string())
+
+    // 卡住的话它会一直挂在健康日志的「在跑」那一列里（见 `health.rs`）
+    let _span = crate::health::span("agent_write", &id);
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || registry.write(&id, &data))
+        .await
+        .map_err(|e| format!("写窗格的线程没能跑起来：{e}"))?
+        .map_err(|e| e.to_string())
 }
 
 /// 告诉窗格里的程序尺寸变了（用户拖了分隔条、或者切了布局）。
@@ -151,17 +172,31 @@ pub async fn agent_resize(
     // 夹到 u16 是因为 pty 的尺寸就是这个宽度（IPC 上是 u32，好让前端传得进来）
     let cols = cols.clamp(1, u16::MAX as u32) as u16;
     let rows = rows.clamp(1, u16::MAX as u32) as u16;
-    registry.resize(&id, cols, rows).map_err(|e| e.to_string())
+
+    // 同 `agent_write`：`ResizePseudoConsole` 在旧版 Windows 上会等客户端，
+    // 而 resize 还要拿 master 的锁（别的线程可能正卡在里面）—— 别占着工作线程
+    let _span = crate::health::span("agent_resize", &id);
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || registry.resize(&id, cols, rows))
+        .await
+        .map_err(|e| format!("resize 的线程没能跑起来：{e}"))?
+        .map_err(|e| e.to_string())
 }
 
 /// 关掉一个窗格（**连同它那棵进程树**）。幂等：不存在也算成功。
+///
+/// 同 `agent_write`：这里会 `TerminateJobObject`（**等整棵树死**）并拿两把锁，
+/// 都可能在坏情况下等很久。丢到 blocking 池，别把命令通道拖死。
 #[tauri::command]
 pub async fn agent_close(
     registry: State<'_, Arc<AgentRegistry>>,
     id: String,
 ) -> Result<(), String> {
-    registry.close(&id);
-    Ok(())
+    let _span = crate::health::span("agent_close", &id);
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || registry.close(&id))
+        .await
+        .map_err(|e| format!("关窗格的线程没能跑起来：{e}"))
 }
 
 /// 关掉全部窗格。给两件事用：
@@ -171,8 +206,13 @@ pub async fn agent_close(
 /// 2. 应用退出（在 `lib.rs` 的 `RunEvent::Exit` 里直接调注册表，不走这条命令）。
 #[tauri::command]
 pub async fn agent_close_all(registry: State<'_, Arc<AgentRegistry>>) -> Result<(), String> {
-    registry.close_all();
-    Ok(())
+    // 同上：收尾要杀树 + 拿锁，可能等很久。前端 `init()` 会同步等这个调用，
+    // 堵住工作线程等于把「刚打开应用」也拖住
+    let _span = crate::health::span("agent_close_all", "-");
+    let registry = registry.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || registry.close_all())
+        .await
+        .map_err(|e| format!("收尾的线程没能跑起来：{e}"))
 }
 
 /// 事件目录的绝对路径（前端要把它塞进 `env.DEVTOOLKIT_EVENT_DIR`）。

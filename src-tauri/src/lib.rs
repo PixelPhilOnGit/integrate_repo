@@ -12,6 +12,7 @@
 
 mod agent_commands;
 mod commands;
+mod health;
 mod redis_commands;
 mod sql_commands;
 mod ssh_commands;
@@ -79,6 +80,32 @@ pub fn run() {
             std::process::exit(1);
         });
 
+    // 健康日志。**为什么需要、记什么、文件在哪**，见 `health.rs` 的头部注释。
+    // 一句话：真机上出过「跑一个多小时之后界面完全没反应、连窗口都关不掉」，
+    // 而那种问题没有现场记录就只能猜。
+    {
+        use tauri::Manager as _;
+        if let Ok(dir) = app.path().app_log_dir() {
+            health::init(&dir);
+        }
+        // 崩了也要留一行（默认的 panic 输出在 GUI 子系统的 Windows 上没有控制台，
+        // 等于什么也没留下）
+        std::panic::set_hook(Box::new(|info| {
+            health::line("PANIC", &format!("{info}"));
+            eprintln!("Devtoolkit 崩了：{info}");
+        }));
+
+        let agents = app
+            .state::<std::sync::Arc<devtoolkit_agents::AgentRegistry>>()
+            .inner()
+            .clone();
+        let ssh = app
+            .state::<std::sync::Arc<devtoolkit_ssh::SshRegistry>>()
+            .inner()
+            .clone();
+        health::start_watchdog(app.handle().clone(), agents, ssh);
+    }
+
     // 退出时**必须**把那一屏 pane 收干净。
     //
     // ⚠️ 这一条和别的模块不一样：用户点「关闭窗口」之后，Rust 侧那些进程
@@ -95,8 +122,26 @@ pub fn run() {
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {
             use tauri::Manager as _;
-            let registry = handle.state::<std::sync::Arc<devtoolkit_agents::AgentRegistry>>();
-            registry.close_all();
+            let registry = handle
+                .state::<std::sync::Arc<devtoolkit_agents::AgentRegistry>>()
+                .inner()
+                .clone();
+
+            // ⚠️ **不能在主线程上同步收尾。**
+            //
+            // `close_all` 里是 `TerminateJobObject`（**等整棵树死**）加两把锁，
+            // 每一项都可能等很久（锁可能被一个卡在写 PTY 的线程握着）。
+            // 主线程是**窗口事件循环**那根线：在这儿等，窗口就再也关不上了 ——
+            // 用户看到的是「点了关闭没反应，只能去任务管理器杀进程」（真机上出过）。
+            //
+            // 所以丢给一个线程，然后**由进程退出兜底**：exit 之后内核会关掉
+            // 我们持有的 Job Object 句柄，`KILL_ON_JOB_CLOSE` 保证那一树进程
+            // 一起走。也就是说这条线程只是「尽量收拾得干净点」，不是最后一道保险
+            // —— 最后一道保险一直是作业对象本身（见上面那段注释）。
+            std::thread::Builder::new()
+                .name("agents-exit".to_string())
+                .spawn(move || registry.close_all())
+                .ok();
         }
     });
 }

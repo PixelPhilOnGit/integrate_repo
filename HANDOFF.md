@@ -134,7 +134,7 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 npm run typecheck    # 类型检查
 npm test             # 885 个纯逻辑单测（秒级）
 npm run test:e2e     # 157 个端到端测试（真实 Chromium）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 279 条（agents 那套是 92 条）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 266 条（agents 那套是 79 条）
 ```
 
 ### ⚠️ 跑测试/编译之前必读
@@ -496,23 +496,60 @@ SSH 的标签栏图省事复用了 `rd-tabs`，结果**标签和那个 × 各占
   「一段段输出」）、**输出没停不重放**（半路插进来几行，内容和行号立刻对不上，
   而且是静默地对不上）。折叠之后行号要整体挪（`tracker.remap`）——
   重放改变的是行数，色条的位置全跟着变。
-- **Windows 上「claude 找不到 Git Bash」是常态，得我们自己交出去。**
-  Git for Windows 的安装器默认只把 `<Git>\cmd` 加进 PATH，而 `bash.exe` 在
-  `<Git>\bin`（要额外勾「Use Git and optional Unix tools」才进 PATH）——
-  所以「`git` 能用」和「`bash.exe` 在 PATH 里」是**两件事**。应用又是从桌面
-  启动的（拿到的是登录时那份 PATH），两条一叠加，窗格里的 claude 就报
-  `requires git-bash`。现在 spawn 前探测一遍，找到就把
-  `CLAUDE_CODE_GIT_BASH_PATH` 传给子进程：用户自己设过则一个字不动，
-  **找不到则什么都不做**（没装 Git 不是错误，不能让 spawn 失败）。
-  ⚠️ **探测入口只能是 `git.exe` 上溯**，绝不能是「PATH 里找 `bash.exe`」：
-  `C:\Windows\System32\bash.exe` 是 WSL 的，而 System32 永远在 PATH 上 ——
-  把它交出去，Claude Code 会判定「不是 bash/sh 二进制」再退回自动探测，
-  **比什么都不给还糟**（它以为我们给了答案）。这条有回归测试钉着。
-  另：新版 claude 的要求已放宽成「bash **或** PowerShell」，自动探测只认
-  `C:\Program Files\Git\bin\bash.exe` 那两条写死的路径 —— 用户贴的
-  `requires git-bash` 是**旧版**的文案（在 2.1.276 的二进制里已经不存在）。
-  最后，它和 `default_shell` 是**两件事**：这个变量决定 claude 自己去 fork
-  哪个 bash，窗格里的提示符仍然是 PowerShell（见 `pty.rs` 的 Git Bash 那段）。
+- **⚠️ 别替用户猜 `CLAUDE_CODE_GIT_BASH_PATH` —— 猜错比不猜糟得多。**
+  踩过的完整过程：用户在窗格里跑 `claude` 报 `requires git-bash`，我加了「探测
+  Git Bash 并把路径塞给 claude」。结果真机上变成
+  **`unable to find CLAUDE_CODE_GIT_BASH_PATH path "D:\...\Git\bin\bash.exe"` —— 
+  claude 连启动都不肯**：从「窗格里跑不起来」退化成「claude 本身起不来」，
+  用户更难查。**这一整套探测+注入已经删掉了**（`pty.rs` 里留了一段说明）。
+  结论：那个变量是**用户的**，我们一个字都不该动。claude 自己的要求也已经
+  放宽成「Git for Windows **或** PowerShell」，装什么都不装都该由它和用户决定。
+  （当时还查清了两件事，留着以后有用：Git for Windows 默认只把 `<Git>\cmd`
+  加进 PATH 而 `bash.exe` 在 `<Git>\bin`；以及 `C:\Windows\System32\bash.exe`
+  是 WSL 的，交给 claude 会被判定「不是 bash/sh 二进制」。）
+
+- **⚠️ 卡死到「连窗口都关不掉」：阻塞的写 + 退出时在主线程上收尾。**
+  Windows 真机报告：「开一个多小时之后界面完全没反应，点关闭也退不出，只能去
+  任务管理器杀进程」。查下来是两条叠在一起：
+
+  * `agent_write` 是 `async fn` 但**里面一个 await 都没有** —— 那具阻塞的写
+    就落在 tokio 的**工作线程**上。而 Windows 上写 ConPTY 会**无限期**阻塞
+    （输入是根 4KB 的阻塞管道，对面不读输入时写就卡住，而且握着 writer 锁）。
+    工作线程按核数配：堵住几个，**整个应用的命令通道全停**，点什么都没反应。
+  * 退出走 `RunEvent::Exit`，那里是**在主线程**上同步调 `close_all` —— 它会去
+    拿那把被卡住的 writer 锁。主线程是窗口事件循环那根线：堵在这儿，窗口就
+    再也关不上了。
+
+  修法四条，都在同一条链上：
+  1. 写 / resize / 关窗格 / 收尾**全丢进 `spawn_blocking`** —— 堵住的只是一个
+     可以再多开的池线程，IPC 那条路照跑；
+  2. `PtySession::close` 里**用 `try_lock` 拿两把锁**，拿不到就往下走（有人正
+     卡在写里，主端一丢管道自然断），绝不在关窗格/退出这条路上等；
+  3. 退出的收尾**丢到另一个线程**，由进程退出兜底（Job Object 的
+     `KILL_ON_JOB_CLOSE` 一直是最后那道保险）；
+  4. 送 `Exit` 改成**有上限地等**（2 秒）：以前 `blocking_send` 到底，通道满了
+     就永远等 —— 那个线程退不出来，「把死会话从表里摘掉」也就永远不发生，
+     死会话连同 PTY 句柄、作业对象、线程一起留在表里。
+
+  > 记一笔当时的查法：先怀疑内存（一整轮前端+后端增长点排查，确实找到几处，
+  > 都顺手修了），但用户那句「**点退出也退不出**」才是判据 —— 窗口关不掉说明
+  > **主线程被堵住**，那是锁和阻塞调用的事，不是内存的事。以后遇到类似报告，
+  > 先问两句：「卡住时内存多大」「窗口还能不能关」。
+- **卡住之后要能看出堵在哪：健康日志（`src-tauri/src/health.rs`）。**
+  写在应用日志目录的 `health.log`（Windows 上 `%LOCALAPPDATA%\<应用标识>\logs`），
+  每 15 秒一行，三样东西：
+  * **主线程心跳** —— 「主线程心跳 N 秒前」那一列是从**主线程**上打的
+    （`run_on_main_thread`）。数字一直涨就说明主线程被堵住了，窗口关不掉正是
+    它的直接后果。这是整份日志里最有用的一列。
+  * **「在跑」那一列** —— 此刻还没返回的操作和已经跑了多久（写 PTY、杀进程树、
+    resize 都在里面）。卡死的那个会一直挂在这一列里，名字和窗格 id 都在。
+  * 活着的会话数（agents / ssh）。
+
+  两个设计上的讲究：写日志用 **std 线程**而不是 tokio 任务（要诊断的正是
+  「运行时被堵住」，放同一个运行时里它自己也停摆）；「在跑」用**开始登记、
+  返回摘掉**的表，而不是「超过多少毫秒记一行」——**一直没返回**才是最想看的
+  那种，只记时长的话它永远等不到那一行。panic 也写进去（GUI 子系统的 Windows
+  没有控制台，默认的 panic 输出等于什么也没留下）。
 
 ### 前端
 
