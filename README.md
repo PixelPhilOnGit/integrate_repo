@@ -8,11 +8,13 @@
 |---|---|
 | **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树（右键可以**移动到别的目录**），图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库。**格式写在 [`docs/seq-format.md`](docs/seq-format.md)**：手写或让 AI 生成都照那一份，里面有能直接粘的提示词 |
 | **Redis** | 可用。左侧「连接 → 库 → key」，主区看 key 列表和值；命令台是一个页签 |
-| **数据库**（MySQL / PostgreSQL） | 可用。连接配置里选引擎，侧栏「连接 → 库 / 表」，主区写 SQL 看结果表格 |
-| **SSH 终端** | 可用。多标签的真终端（xterm.js），密码 / 私钥认证，**首次连接要核对主机密钥指纹**；终端左边**命令块色条**：一条命令一块、交替配色，单击复制命令 + 输出，双击折叠收起 |
+| **数据库**（PostgreSQL / MySQL / ClickHouse / MongoDB） | 可用。连接配置里选引擎，侧栏**按引擎分组**（连接 → 库 / 表），主区写 SQL 看结果表格；**MongoDB 是文档浏览器**（库 → 集合 → JSON 查询），不走 SQL 那条路 |
+| **SSH 终端** | 可用。多标签的真终端（xterm.js），**本地终端**（PowerShell / cmd）和远端连接并列，密码 / 私钥认证，**首次连接要核对主机密钥指纹**；终端左边**命令块色条**：一条命令一块、交替配色，单击复制命令 + 输出，双击折叠收起 |
 | **智能体会话** | 可用。分屏跑多个 Claude Code / Codex，**一个工作目录就是一个窗口**（各有各的分屏布局），侧栏点哪条右边就换哪一套；**谁在等你一眼看出来**（窗格边框 + 侧栏队列 + 模块图标角标）。「新建会话」可以一次填几个、建完自动铺成网格，最下面能设**全局启动参数**（如 `--dangerously-skip-permissions`）；父窗口右键可以一次收掉它里面全部会话。状态检测要往 Claude Code / Codex 的配置里装一个钩子，向导里能看到改了什么、随时撤销 |
-| **任务** | 可用。一件事从「待办」到「完成」的账本：标题 / 描述 / 状态 / 备注，卡片式列表 + 搜索 + 状态筛选，存在本机一个 SQLite 文件里。**下一轮**才接 agent（把任务派给会话、把结果回写） |
-| MongoDB | 待做 |
+| **任务** | 可用。一件事从「待办」到「完成」的账本：标题 / 描述 / 状态 / 备注，外加**进度记录**（一条条带时间戳的「什么时候干了什么」）和**归档**（做完的从列表里收起来，一条不删，回顾时看得到全程）。卡片式列表 + 搜索 + 状态筛选，存在本机一个 SQLite 文件里。**下一轮**才接 agent（把任务派给会话、把结果回写） |
+
+> 连接档案、工作目录这些**键值类**的存储也都在 SQLite 上（一个 `devtoolkit.db`，
+> 老的 JSON 文件第一次启动时自动搬进去、原文件改名成 `.bak` 留着）。
 
 技术形态是 [Tauri 2](https://v2.tauri.app/) 桌面应用：Rust 后端负责所有系统操作（文件、
 网络连接），前端是 React + TypeScript + Vite 渲染的 WebView。
@@ -23,8 +25,15 @@
 
 ```ts
 // src/shell/registry.ts
-export const MODULES = [diagramModule, redisModule, sqlModule, devPlaceholderModule];
+export const MODULES = [
+  diagramModule, redisModule, sqlModule, sshModule, agentsModule, tasksModule,
+  devPlaceholderModule,
+];
 ```
+
+> ⚠️ 注册表顺序 = 图标栏顺序 = `Ctrl+1..7` 的顺序，**是面向用户的**；
+> 而且 `main.tsx` 取 `MODULES[0]` 当默认模块，**顺序图必须留在第一位**。
+> 加模块会让 `tests/e2e/shell.spec.ts` 里「有几个模块」的断言失败 —— 那是故意的。
 
 模块要实现的接口在 `src/shell/types.ts`（`Module`）。外壳不认识任何具体模块，
 只认这个接口——它只管把当前模块的槽位摆出来、显示状态和错误。
@@ -53,8 +62,9 @@ Devtoolkit/
 │   └── modules/
 │       ├── diagram/         顺序图模块
 │       ├── redis/           Redis 模块（浏览式：库树 + key 列表 + 值）
-│       ├── sql/             数据库模块（MySQL + PostgreSQL）
-│       ├── ssh/             SSH 终端模块（多标签）
+│       ├── sql/             数据库模块（PostgreSQL / MySQL / ClickHouse / MongoDB）
+│       ├── ssh/             SSH 终端模块（多标签 + 本地终端）
+│       ├── agents/          智能体会话模块（一屏多个 agent）
 │       ├── tasks/           任务模块（SQLite）
 │       └── devplaceholder/  占位模块（验证「加模块 = 一个目录 + 一行」）
 ├── src-tauri/               Rust 后端
@@ -68,9 +78,10 @@ Devtoolkit/
 │   │   └── agent_commands.rs 智能体会话相关的 command
 │   ├── core/                纯逻辑内核：路径安全边界 + 文件操作
 │   ├── redis/               Redis 内核：连接管理、命令执行、回复解析
-│   ├── sql/                 SQL 内核：MySQL / PostgreSQL 的连接与查询
+│   ├── sql/                 SQL 内核：PostgreSQL / MySQL / ClickHouse / MongoDB
 │   ├── ssh/                 SSH 内核：连接、认证、主机密钥校验、PTY 会话
 │   ├── agents/              智能体会话内核：本机进程、状态事件目录、集成配置读写
+│   ├── store/               键值存储内核：SQLite + 从旧 JSON 一次性搬迁
 │   ├── tasks/               任务内核：SQLite 存储 + 查询
 │   ├── capabilities/        权限配置
 │   ├── icons/               图标（logo.svg 是源文件）
@@ -80,12 +91,17 @@ Devtoolkit/
 └── package.json
 ```
 
-五个内核 crate（`core` / `redis` / `sql` / `ssh` / `agents`）都被刻意拆成独立 crate：
+七个内核 crate（`core` / `redis` / `sql` / `ssh` / `agents` / `store` / `tasks`）都被刻意拆成独立 crate：
 它们**不依赖 tauri**，所以那几套逻辑都不需要装 WebKit / GTK 就能单独跑测试。
-集成测试还会**自己拉起真的服务端**（随机端口、不落盘、`Drop` 时杀掉）：
+集成测试还会**自己拉起真的服务端**（随机端口、不落盘、跑完就收拾干净）：
 `devtoolkit-redis` 起 `redis-server`，`devtoolkit-sql` 起 pg / mysqld，
 `devtoolkit-ssh` 起一个**进程内的 russh 服务端**（零系统依赖），
 另有一组打真 `sshd` 的。没装对应的服务端时会**明确报错并给安装命令，不静默跳过**。
+
+> ClickHouse / MongoDB 那两组走 **Docker**（官方分发就是容器，让人为了跑测试往本机
+> 装一个 clickhouse-server 不现实），所以还要有可用的 Docker。容器由一条读 stdin 的
+> shell 挂着，测试进程一退出（正常、panic、被杀都算）就 `docker rm -f -v` 收掉 ——
+> **`-v` 不能省**：镜像声明了 `VOLUME`，漏下的匿名卷会把磁盘吃满。
 
 `devtoolkit-agents` 是唯一**不需要任何服务端**的连接类内核 —— 它起的是本机进程，
 所以它的测试在任何机器上都能跑（包括真起 `sh` / `cmd.exe` 然后断言进程树被杀干净）。
@@ -268,6 +284,11 @@ src/
     │   │               还有集成向导（往用户配置里装钩子）
     │   ├── panels/     工作目录树、需要你队列、分屏、窗格、检查器、集成向导
     │   └── state/      模块自己的 store
+    ├── tasks/          任务（SQLite 账本）
+    │   ├── core/       纯逻辑：筛选、排序、格式化
+    │   ├── services/   平台桥：tauri 走 invoke，web 走内存假实现
+    │   ├── panels/     卡片列表、详情卡、检查器
+    │   └── state/      模块自己的 store
     └── devplaceholder/ 占位模块
 ```
 
@@ -420,7 +441,7 @@ bulk string，天然免疫 RESP 注入；拼字符串的话 `SET k "a\r\nFLUSHAL
 | Rust 后端 | `cd src-tauri && cargo test` | 路径逃逸攻击向量、文件操作、导出；三个连接内核打真服务端；**本机进程与事件目录** |
 | 原生窗口 | 见下 | 真 Tauri 应用启动 + 读写落盘 + **IPC Channel 那条流式路径** |
 
-数量（会随开发变动，看实际输出为准）：前端单测 ~924、e2e ~168、Rust ~278。
+数量（会随开发变动，看实际输出为准）：前端单测 ~970、e2e ~180、Rust ~330。
 
 **为什么 SSH 要额外做原生验证**：浏览器版走的是内存假实现，
 **完全不经过 `tauri::ipc::Channel`** —— 那条流式路径在前端测试里一次都没被跑过。
@@ -754,17 +775,17 @@ russh 的 `check_server_key` 默认就返回 `false`（拒绝一切），
 
 ### ⚠️ 凭据目前是明文存储
 
-四个连接类模块（Redis / SQL / SSH）的密码都以**明文**落在本机配置文件里
-（桌面端是应用配置目录下的 `redis.json` / `sql.json` / `ssh.json`，浏览器版是 localStorage）。
-SSH 还多一个**私钥口令**，存在同一个文件的同一个键下面。这是明确知情的妥协，
+三个连接类模块（Redis / SQL / SSH）的密码都以**明文**落在本机存储里
+（桌面端是应用数据目录下 SQLite 的 `kv` 表，浏览器版是 localStorage）。
+SSH 还多一个**私钥口令**，是同一张表里的另一个键。这是明确知情的妥协，
 沿用工作区路径那套「先明文、标记待改」的做法。
 
-代价说清楚：**任何能读到那些文件的进程都能拿到你的数据库和服务器密码** —— 同机器上的
+代价说清楚：**任何能读到那份存储的进程都能拿到你的数据库和服务器密码** —— 同机器上的
 其他程序、备份软件、误传的配置目录快照，都算。共用电脑上不要填生产密码。
 
 读写收敛在一处：**`src/shared/connections/profiles.ts`**（`TODO(security)` 就在那个文件的头部）。
-四个模块共用这一份，所以换成系统钥匙串（Windows 凭据管理器 / macOS Keychain /
-Linux Secret Service）时**一次覆盖全部四个**，而不是改四遍 —— 这是当初把这层抽出来的主要理由。
+三个模块共用这一份，所以换成系统钥匙串（Windows 凭据管理器 / macOS Keychain /
+Linux Secret Service）时**一次覆盖全部三个**，而不是改三遍 —— 这是当初把这层抽出来的主要理由。
 那个文件的注释里写了迁移的三步。
 
 顺带一提，Redis 命令台的回显对 `AUTH` 做了脱敏（`core/redact.ts`）—— 那解决的是**另一个**问题：
