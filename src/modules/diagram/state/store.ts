@@ -34,6 +34,7 @@ const AUTOSAVE_DELAY = 900;
 export class AppStore {
   private history: History<Doc>;
   private listeners = new Set<() => void>();
+  private initPromise: Promise<void> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private state: AppState;
 
@@ -122,7 +123,23 @@ export class AppStore {
 
   // ---------------------------------------------------------------- 启动
 
-  async init(): Promise<void> {
+  /**
+   * 惰性初始化。**只能真正跑一次** —— 由 `onActivate` 触发，而 `onActivate`
+   * 每次切回这个模块都会调。
+   *
+   * ⚠️ 这道闸以前没有，代价很具体：`init()` 的最后一步是「打开树里的第一张图」，
+   * 所以**切去看一眼 Redis 再回来，正在编辑的图就被换成别的了**（e2e 抓到的：
+   * 切回来之后 `current-path` 从「未命名.seq.json」变成了「示例.seq.json」）。
+   *
+   * 别的模块（agents / ssh）的 init 一直是 `initPromise ??=` 这个形状 ——
+   * 这里补上，行为就和它们一致了。
+   */
+  init(): Promise<void> {
+    this.initPromise ??= this.doInit();
+    return this.initPromise;
+  }
+
+  private async doInit(): Promise<void> {
     try {
       const prefs = await platform.getPrefs();
       const root = prefs.lastWorkspace;

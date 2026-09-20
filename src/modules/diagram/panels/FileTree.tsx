@@ -362,7 +362,16 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
 
       {state.workspaceRoot && (
         <div className="rd-tree-target" data-testid="tree-target">
-          新建到：{targetLabel}
+          <span>新建到：{targetLabel}</span>
+          <button
+            type="button"
+            className="rd-btn rd-tree-refresh"
+            data-testid="tree-refresh"
+            title="重新读一遍目录（在别的地方加/改了文件之后点这个）"
+            onClick={() => void store.refreshTree()}
+          >
+            刷新
+          </button>
         </div>
       )}
 

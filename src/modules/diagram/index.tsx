@@ -39,6 +39,10 @@ export const diagramModule: Module = {
     // 把自己接到外壳上（状态和错误都交给外壳显示），然后恢复上次的工作区
     diagramStore.attachShell(api);
     void diagramStore.init();
+    // ⚠️ **切回来时要重读一次目录。** `init()` 是幂等的、只在第一次读盘 ——
+    // 而用户（或者窗格里那个 Claude Code）完全可能在别的地方加了 `.seq.json`，
+    // 不重读就表现为「文件明明写了，界面里没有」。
+    void diagramStore.refreshTree();
   },
 
   onDeactivate() {

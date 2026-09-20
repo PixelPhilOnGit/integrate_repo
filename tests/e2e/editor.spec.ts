@@ -1251,3 +1251,22 @@ test('移动到对话框里不会出现「自己那棵子树」（移进去也�
   await expect(page.getByTestId('tree-move-to-__root__')).toBeVisible();
   await expect(page.getByTestId('tree-move-to-归档')).toHaveCount(0);
 });
+
+test('切走再切回来，文件树仍然是对的（回来时会重读一遍目录）', async ({ page }) => {
+  // 回归背景：`init()` 是幂等的、只在第一次读盘 —— 用户（或者窗格里的 Claude Code）
+  // 在别处加了 `.seq.json` 之后切回来，得能看到它。所以 onActivate 里补了一次
+  // refreshTree()；这条用例守的是**那次重读没把树/工作区搞坏**。
+  await page.getByTestId('btn-new-diagram').click();
+  await expect(page.getByTestId('tree-file-未命名.seq.json')).toBeVisible();
+
+  await page.getByTestId('module-redis').click();
+  await expect(page.getByTestId('redis-main')).toBeVisible();
+  await page.getByTestId('module-diagram').click();
+
+  await expect(page.getByTestId('tree-file-未命名.seq.json')).toBeVisible();
+  await expect(page.getByTestId('current-path')).toContainText('未命名.seq.json');
+
+  // 手动刷新也在（分屏开着编辑器时，自动那一次不会触发）
+  await page.getByTestId('tree-refresh').click();
+  await expect(page.getByTestId('tree-file-未命名.seq.json')).toBeVisible();
+});

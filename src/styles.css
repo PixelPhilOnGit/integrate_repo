@@ -2724,3 +2724,14 @@ textarea:focus {
   border: none;
   color: var(--accent);
 }
+
+/* 「新建到：…」那一行：左边文字、右边刷新按钮 */
+.rd-tree-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rd-tree-refresh {
+  margin-left: auto;
+}

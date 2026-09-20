@@ -14,11 +14,15 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseDoc, serializeDoc } from '../../src/modules/diagram/core/schema';
 
-function docExample(): string {
-  const md = readFileSync('docs/seq-format.md', 'utf8');
+function jsonExampleIn(file: string): string {
+  const md = readFileSync(file, 'utf8');
   const match = /```json\n([\s\S]*?)```/.exec(md);
-  if (match?.[1] === undefined) throw new Error('文档里找不到 json 代码块');
+  if (match?.[1] === undefined) throw new Error(`${file} 里找不到 json 代码块`);
   return match[1];
+}
+
+function docExample(): string {
+  return jsonExampleIn('docs/seq-format.md');
 }
 
 describe('docs/seq-format.md 里的例子', () => {
@@ -63,5 +67,23 @@ describe('docs/seq-format.md 里的例子', () => {
   it('写出去再读回来还是同一份（AI 改完、我们存回去不会走样）', () => {
     const doc = parseDoc(docExample());
     expect(parseDoc(serializeDoc(doc))).toEqual(doc);
+  });
+});
+
+/**
+ * 同一个例子也躺在 skill 里（`.claude/skills/sequence-diagram/SKILL.md`）——
+ * 那份是**用户会真正贴给 AI 的**东西。它里面的例子同样必须解析得动，
+ * 不然 AI 照着它写出来的图就是坏的。
+ */
+describe('.claude/skills/sequence-diagram/SKILL.md 里的例子', () => {
+  it('也能解析，而且和文档那份说的是同一张图', () => {
+    const fromSkill = parseDoc(jsonExampleIn('.claude/skills/sequence-diagram/SKILL.md'));
+    const fromDoc = parseDoc(docExample());
+
+    // 参与者、消息、激活条都对得上（skill 里省了 theme，那部分不参与比较）
+    expect(fromSkill.participants).toEqual(fromDoc.participants);
+    expect(fromSkill.messages).toEqual(fromDoc.messages);
+    expect(fromSkill.activations).toEqual(fromDoc.activations);
+    expect(fromSkill.notes).toEqual(fromDoc.notes);
   });
 });
