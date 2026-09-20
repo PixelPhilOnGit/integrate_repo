@@ -2847,3 +2847,11 @@ textarea:focus {
   max-height: 420px;
   overflow: auto;
 }
+
+/* 「这台机器上没有系统钥匙串」那个小提醒。不占地方，悬浮才展开说明了什么 */
+.rd-keychain-warn {
+  margin-left: 4px;
+  color: var(--danger, #d9534f);
+  cursor: help;
+  font-size: 12px;
+}

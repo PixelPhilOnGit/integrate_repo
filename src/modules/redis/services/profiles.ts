@@ -12,7 +12,7 @@ import {
   asRecord,
   asString,
   asArray,
-  createProfileStore,
+  createSecretProfileStore,
 } from '../../../shared/connections/profiles';
 import type { KeyValueStore } from '../../../shared/platform/kv';
 import type { ProfileStore } from '../../../shared/connections/types';
@@ -21,7 +21,7 @@ import type { ConnectionProfile } from '../core/types';
 const DEFAULT_PORT = 6379;
 
 export function createRedisProfileStore(kv: KeyValueStore): ProfileStore<ConnectionProfile> {
-  return createProfileStore<ConnectionProfile>(kv, { sanitize });
+  return createSecretProfileStore<ConnectionProfile>(kv, { sanitize });
 }
 
 /** 把存储里的不可信数据整形成 `ConnectionProfile[]`，坏记录丢掉而不是让整个列表消失 */

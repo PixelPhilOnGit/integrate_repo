@@ -33,6 +33,7 @@ import { useState, type ReactNode } from 'react';
 import { ConnectionGroupRow } from '../../../shared/connections/ConnectionGroupRow';
 import { assignGroups } from '../../../shared/connections/groups';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
+import { KeychainNotice } from '../../../shared/connections/KeychainNotice';
 import type { ConnectionGroup } from '../../../shared/connections/types';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
@@ -186,6 +187,8 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
     <div className="rd-panel rd-conn-list" data-testid="sql-conn-list">
       <div className="rd-panel-head">
         <span>连接</span>
+        {/* 钥匙串用不了时提醒一句（桌面端才有；见 KeychainNotice） */}
+        <KeychainNotice />
         <button
           type="button"
           data-testid="btn-new-group"

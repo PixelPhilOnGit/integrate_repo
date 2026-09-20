@@ -7,6 +7,7 @@ description = "Devtoolkit 的键值存储：SQLite（不依赖 Tauri，可脱离
 license = "MIT"
 
 [dependencies]
+keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
 # 和任务内核同一套理由：`bundled` 把 SQLite 编进去，三个平台都不需要用户装东西；
 # 同步 API，命令层丢 blocking 池就够。
 rusqlite = { version = "0.32", features = ["bundled"] }

@@ -15,6 +15,7 @@ import {
   asRecord,
   asString,
   createProfileStore,
+  createSecretProfileStore,
 } from '../../../shared/connections/profiles';
 import type { KeyValueStore } from '../../../shared/platform/kv';
 import type { ProfileStore } from '../../../shared/connections/types';
@@ -28,7 +29,13 @@ import {
 import { KNOWN_HOSTS_KEY, sanitizeKnownHosts } from '../core/knownHosts';
 
 export function createSshProfileStore(kv: KeyValueStore): ProfileStore<SshProfile> {
-  return createProfileStore<SshProfile>(kv, { sanitize });
+  return createSecretProfileStore<SshProfile>(kv, {
+    sanitize,
+    // ⚠️ **SSH 有两个敏感字段**，别只搬密码：`passphrase` 是私钥口令，
+    // 它和密码一样是明文的（见 `core/types.ts` 里那个字段的说明）。
+    // 漏掉它的表现是「换了钥匙串还是漏一个」，而且没人会注意到。
+    secretFields: ['password', 'passphrase'],
+  });
 }
 
 /**

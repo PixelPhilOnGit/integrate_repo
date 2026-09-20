@@ -16,6 +16,7 @@ mod health;
 mod kv_commands;
 mod local_commands;
 mod redis_commands;
+mod secret_commands;
 mod sql_commands;
 mod ssh_commands;
 mod task_commands;
@@ -100,6 +101,11 @@ pub fn run() {
             kv_commands::kv_open,
             kv_commands::kv_get,
             kv_commands::kv_set,
+
+            // 系统钥匙串（连接密码）。见 secret_commands.rs
+            secret_commands::secret_load,
+            secret_commands::secret_store,
+            secret_commands::secret_available,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

@@ -35,6 +35,12 @@ mod error;
 
 pub use error::StoreError;
 
+/// 系统钥匙串：连接密码的归宿。
+///
+/// ⚠️ 它和这个 crate 的键值表**是两套东西**，别混：键值表里存的是**能公开的**
+/// 那些字段（主机、端口、用户名……），密码单独走钥匙串。理由和两条边界见模块文档。
+pub mod secrets;
+
 /// 结构版本。加表/加列时 +1 并在 [`migrate`] 里补一段。
 const SCHEMA_VERSION: i64 = 1;
 

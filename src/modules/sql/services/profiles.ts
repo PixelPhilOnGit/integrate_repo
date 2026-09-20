@@ -11,14 +11,14 @@ import {
   asPort,
   asRecord,
   asString,
-  createProfileStore,
+  createSecretProfileStore,
 } from '../../../shared/connections/profiles';
 import type { KeyValueStore } from '../../../shared/platform/kv';
 import type { ProfileStore } from '../../../shared/connections/types';
 import type { SqlKind, SqlProfile } from '../core/types';
 
 export function createSqlProfileStore(kv: KeyValueStore): ProfileStore<SqlProfile> {
-  return createProfileStore<SqlProfile>(kv, { sanitize });
+  return createSecretProfileStore<SqlProfile>(kv, { sanitize });
 }
 
 function asKind(value: unknown): SqlKind {
