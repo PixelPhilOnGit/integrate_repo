@@ -2394,14 +2394,20 @@ textarea:focus {
  */
 
 /* 侧栏那排状态筛选。横向排、窄间距，最多五个（全部 + 三档 + 余量） */
-.rd-task-filters {
+/* 筛选按钮那一排的容器。两个类名共用一套（同 `.rd-task-chip` / `.rd-chip` 的理由） */
+.rd-task-filters,
+.rd-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   padding: 4px 6px 6px;
 }
 
-.rd-task-chip {
+/* 筛选小按钮（任务的「全部 / 待办 / 已完成」、智能体会话的「全部 / 需要你 / 在跑」）。
+ * ⚠️ 两个类名共用一套样式：`rd-chip` 是抽到 `shared/ui/FilterChip.tsx` 之后的通用名，
+ * `rd-task-chip` 是最早那三个留下来的（它们还挂在任务侧栏上，改它只会白白制造 diff）。 */
+.rd-task-chip,
+.rd-chip {
   padding: 2px 8px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -2411,11 +2417,13 @@ textarea:focus {
   cursor: pointer;
 }
 
-.rd-task-chip:hover {
+.rd-task-chip:hover,
+.rd-chip:hover {
   background: var(--accent-soft);
 }
 
-.rd-task-chip.is-active {
+.rd-task-chip.is-active,
+.rd-chip.is-active {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);

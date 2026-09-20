@@ -42,6 +42,13 @@ export interface AgentWorkspace {
   path: string;
   /** 展示名。默认取目录名，用户可改 */
   name: string;
+  /**
+   * 置顶 —— 排在别的目录前面（常驻的那两三个项目不用每次都往下找）。
+   *
+   * ⚠️ **只影响显示顺序**，和「当前打开的是哪个窗口」（`activeWorkspaceId`）
+   * 是两件事，别混。持久化在同一个 `workspaces` 键里。
+   */
+  pinned?: boolean;
 }
 
 /** 一次状态变化。用来在检查器里给用户看「这个会话刚才在干什么」 */

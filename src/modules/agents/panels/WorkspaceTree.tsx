@@ -22,9 +22,18 @@
  */
 
 import { useState, type ReactNode } from 'react';
+import { FilterChip } from '../../../shared/ui/FilterChip';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { fuzzyBest } from '../../../shared/search';
+import {
+  matchesSessionFilter,
+  sessionCounts,
+  SESSION_FILTER_LABEL,
+  SESSION_FILTERS,
+  sortWorkspaces,
+  type SessionFilter,
+} from '../core/workspaces';
 import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
 import { STATUS_LABEL, type AgentSession, type AgentWorkspace, type SessionStatus } from '../core/types';
@@ -55,20 +64,40 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
 
   const q = query.trim();
   const searching = q !== '';
+  /** 哪些状态的会话要显示。和搜索**同时生效**（不是各算各的），和任务那边一个口径 */
+  const [filter, setFilter] = useState<SessionFilter>('all');
+  /** 搜索或者筛状态**有一件在生效** —— 生效时树要临时撑开、没有命中的目录不画 */
+  const filtering = searching || filter !== 'all';
 
   /**
-   * 匹配**窗口自己**（目录名 / 路径）或者它下面的会话（标题）。
+   * 一个会话在**当前条件**下要不要显示。
+   *
+   * ⚠️ 搜索和状态档是**与**的关系：搜了名字又筛了状态，两个都得满足。
+   * 「同时生效」这条是任务那边定下来的口径，两个模块不该有两套直觉。
+   */
+  const matches = (session: AgentSession): boolean =>
+    (!searching || fuzzyBest(q, [session.title]) !== null) &&
+    matchesSessionFilter(session.status, filter);
+
+  /**
+   * 匹配**窗口自己**（目录名 / 路径）或者它下面的会话。
+   *
+   * 目录名命中时整棵树都留着（用户找的是这个项目，不是某一条会话）；
+   * 只有会话命中时才留下那个目录 —— 否则搜会话名会得到「没有匹配的」。
    *
    * ⚠️ 保序（`filter` 而不是按分排序）：这儿是一棵树，顺序是用户摆出来的形状；
    * 平铺的连接列表（Redis / SQL）才按相关度排。
    */
-  const visible = state.workspaces.filter((workspace) => {
-    if (!searching) return true;
-    if (fuzzyBest(q, [workspace.name, workspace.path]) !== null) return true;
-    return state.sessions.some(
-      (s) => s.workspaceId === workspace.id && fuzzyBest(q, [s.title]) !== null,
-    );
+  // ⚠️ **排序在渲染这一步做，不写回数组**（见 store 的 `toggleWorkspacePin`）：
+  // 数组顺序永远是「用户添加的顺序」，置顶只是画的时候拎一下 ——
+  // 写回去的话取消置顶就回不到原位了
+  const visible = sortWorkspaces(state.workspaces).filter((workspace) => {
+    if (!filtering) return true;
+    if (searching && fuzzyBest(q, [workspace.name, workspace.path]) !== null) return true;
+    return state.sessions.some((s) => s.workspaceId === workspace.id && matches(s));
   });
+
+  const counts = sessionCounts(state.sessions);
 
   return (
     <>
@@ -95,6 +124,27 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
           />
         )}
 
+        {/*
+          按状态筛。⚠️ 一个项目开十个会话之后标题全是「claude #1」「claude #2」，
+          **搜索帮不上忙**（用户不知道哪个是哪个）—— 能缩小范围的只有状态。
+          和顶部那个「需要你」队列不冲突：那是跨所有目录按等待时长排的行动列表，
+          这个是**在当前树上过滤**。
+        */}
+        {state.workspaces.length > 0 && (
+          <div className="rd-chips" data-testid="agents-session-filter">
+            {SESSION_FILTERS.map((f) => (
+              <FilterChip
+                key={f}
+                label={SESSION_FILTER_LABEL[f]}
+                count={counts[f]}
+                active={filter === f}
+                testId={`agents-filter-${f}`}
+                onClick={() => setFilter(f)}
+              />
+            ))}
+          </div>
+        )}
+
         <div className="rd-panel-body">
           {state.workspaces.length === 0 ? (
             <div className="rd-empty">还没有工作目录，点「添加」选一个项目文件夹</div>
@@ -107,13 +157,12 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
               // 窗口」而不是「有几个会话」—— 后者展开再看。会话级的状态（在等你、
               // 已完成）在收起时由父行那个汇总圆点和顶部的「需要你」队列负责
               //
-              // 搜索期间：只显示命中的会话，并**临时撑开**（叠加在点击状态之上，
-              // `state.expanded` 一个字不动 —— 否则清空搜索之后树回不到原样）
-              const sessions = searching
-                ? allSessions.filter((s) => fuzzyBest(q, [s.title]) !== null)
-                : allSessions;
+              // 过滤期间（搜索或筛状态）：只显示命中的会话，并**临时撑开**
+              // （叠加在点击状态之上，`state.expanded` 一个字不动 ——
+              // 否则清空条件之后树回不到用户自己摆的样子）
+              const sessions = filtering ? allSessions.filter(matches) : allSessions;
               const expanded =
-                searching && sessions.length > 0 ? true : state.expanded[workspace.id] === true;
+                filtering && sessions.length > 0 ? true : state.expanded[workspace.id] === true;
               const active = state.activeWorkspaceId === workspace.id;
 
               return (
@@ -405,6 +454,14 @@ function workspaceMenu(
     { label: '新开 Codex', onSelect: () => void store.createSession(workspace.id, 'codex') },
     { label: '新开终端', onSelect: () => void store.createSession(workspace.id, 'shell') },
   ];
+
+  // 置顶只改**列表顺序**，不影响「当前打开的是哪个窗口」——
+  // 常驻的那两三个项目不用每次都往下找
+  items.push({
+    label: workspace.pinned === true ? '取消置顶' : '置顶',
+    separatorBefore: true,
+    onSelect: () => store.toggleWorkspacePin(workspace.id),
+  });
 
   if (sessions.length > 0) {
     // 「关掉父窗口」= 只收子窗口，**目录留着**（下次直接重开一批）。

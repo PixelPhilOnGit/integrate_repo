@@ -15,6 +15,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { FilterChip } from '../../../shared/ui/FilterChip';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { archivedCount } from '../core/filter';
 import { STATUS_LABEL, STATUS_ORDER } from '../core/types';
@@ -146,29 +147,6 @@ export function TaskList({ state, store }: Props): ReactNode {
   );
 }
 
-function FilterChip({
-  label,
-  count,
-  active,
-  testId,
-  onClick,
-}: {
-  label: string;
-  count: number;
-  active: boolean;
-  testId: string;
-  onClick: () => void;
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      className={`rd-task-chip${active ? ' is-active' : ''}`}
-      data-testid={testId}
-      aria-pressed={active}
-      onClick={onClick}
-    >
-      {label}
-      <span className="rd-muted"> {count}</span>
-    </button>
-  );
-}
+/* FilterChip 已经抽到 `shared/ui/FilterChip.tsx` —— 智能体会话的侧栏也要按状态筛
+   （那边是「全部 / 需要你 / 在跑」），两边长得一模一样。
+   ⚠️ 类名从 `rd-task-chip` 换成了共享的 `rd-chip`，两个在 CSS 里共用一套样式。 */

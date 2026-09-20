@@ -51,10 +51,16 @@ async function termText(page: Page, sessionId: string): Promise<string> {
 /** 加一个工作目录并开一个会话，返回那个会话的 id */
 async function newSession(page: Page, command = 'claude'): Promise<string> {
   if (await page.getByTestId('agent-empty').isVisible()) {
-    // 空态里那个按钮直接开 Claude Code；要别的类型就走侧栏
-    await page.getByTestId('agent-add-workspace-empty').click();
+    // ⚠️ 空态有**两个**形态，入口按钮不一样：一个目录都没有 → 「选择文件夹」；
+    // 有目录但当前窗口是空的 → 「开一个 Claude Code」。
+    // 光看 `agent-empty` 可不可见是分不出来的 —— 「预置了目录但没会话」时
+    // 它会去点一个压根不存在的按钮，然后一直等到超时（e2e 里真踩过）。
+    const addWorkspace = page.getByTestId('agent-add-workspace-empty');
+    if ((await addWorkspace.count()) > 0) await addWorkspace.click();
     if (command === 'claude') {
       await page.getByTestId('agent-new-session-empty').click();
+      // 等它真的上屏再问 id（`focusedId` 是立即读 DOM 的，不等待）
+      await expect(page.locator('.rd-agent-pane.is-focused')).toHaveCount(1);
       return await focusedId(page);
     }
   } else if ((await page.locator('[data-testid^="agent-ws-"]').count()) === 0) {
@@ -612,4 +618,119 @@ test('环境自检：把应用自己看到的 claude / bash / PATH 列出来', a
   // 重新自检也点得动（走一遍真链路：按钮 → store → 服务层 → 报告）
   await page.getByTestId('agent-env-refresh').click();
   await expect(page.getByTestId('agent-env-detail')).toBeVisible();
+});
+
+// ---------------------------------------------------- 状态筛选 + 工作目录置顶
+
+/** 预置两个工作目录（和上面「侧栏搜索」那两条一样的写法） */
+async function presetTwoWorkspaces(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'devtoolkit.agents.v1',
+      JSON.stringify({
+        workspaces: [
+          { id: 'ws_alpha', path: 'D:\\work\\alpha', name: 'alpha' },
+          { id: 'ws_beta', path: 'D:\\work\\beta', name: 'beta' },
+        ],
+      }),
+    );
+  });
+  await page.reload();
+  await page.getByTestId('module-agents').click();
+  await expect(page.getByTestId('agents-main')).toBeVisible();
+  // ⚠️ 必须等**工作目录真的加载出来**：store 初始化是异步的，在那之前主区显示的是
+  // 空态（`agent-empty`），`newSession` 里的 `isVisible()` 是**不等待**的，
+  // 会据此走「空态那条路」去点一个马上就要消失的按钮 —— 然后超时
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
+}
+
+test('按状态筛会话 —— 一个项目开很多会话时靠它缩小范围', async ({ page }) => {
+  // 用户最早的原话：「一个目录下开很多会话时只能一个个看」。
+  // 搜索在这里帮不上忙：标题全是「claude #1」「claude #2」，用户根本不知道哪个是哪个。
+  // 能缩小范围的只有**状态**
+  await presetTwoWorkspaces(page);
+
+  const working = await newSession(page);
+  const waiting = await newSession(page);
+  const done = await newSession(page);
+  await expandFirst(page);
+
+  // 逐个切上去敲命令（`jumpTo` 会把那个会话放上屏，终端才接得到键盘）
+  for (const [id, cmd] of [
+    [working, 'work'],
+    [waiting, 'ask'],
+    [done, 'done'],
+  ] as const) {
+    await page.locator(`[data-testid="agent-session-${id}"]`).click();
+    await typeIn(page, id, cmd);
+  }
+
+  // ⚠️ 按**具体的 id** 断言，不用 `[data-testid^="agent-session-"]` 前缀选择器：
+  // 检查器里那张「会话详情」卡片叫 `agent-session-detail`，它会一起被数进来
+  const row = (id: string) => page.getByTestId(`agent-session-${id}`);
+
+  // 默认「全部」：三个都在
+  await expect(row(working)).toBeVisible();
+  await expect(row(waiting)).toBeVisible();
+  await expect(row(done)).toBeVisible();
+
+  // 只看「需要你」—— 这一档是行动导向的：它要我去处理
+  await page.getByTestId('agents-filter-waiting').click();
+  await expect(row(waiting)).toBeVisible();
+  await expect(row(working)).toHaveCount(0);
+  await expect(row(done)).toHaveCount(0);
+
+  // 只看「在跑」
+  await page.getByTestId('agents-filter-active').click();
+  await expect(row(working)).toBeVisible();
+  await expect(row(waiting)).toHaveCount(0);
+  await expect(row(done)).toHaveCount(0);
+
+  // 回到全部
+  await page.getByTestId('agents-filter-all').click();
+  await expect(row(waiting)).toBeVisible();
+  await expect(row(done)).toBeVisible();
+});
+
+test('筛选和搜索是「同时生效」，不是各算各的', async ({ page }) => {
+  await presetTwoWorkspaces(page);
+  const waiting = await newSession(page);
+  const other = await newSession(page);
+  await expandFirst(page);
+
+  await page.locator(`[data-testid="agent-session-${waiting}"]`).click();
+  await typeIn(page, waiting, 'ask');
+  await expect(page.locator(`[data-testid="agent-session-${waiting}"]`)).toHaveAttribute(
+    'data-session-status',
+    'waiting',
+  );
+
+  // 搜索 + 状态档两个条件都要满足（和任务那边一个口径）：
+  // 搜「claude」时两个会话都命中，但状态档把手砍到只剩「需要你」那一个
+  await page.getByTestId('agents-ws-search').fill('claude');
+  await expect(page.getByTestId(`agent-session-${other}`)).toBeVisible();
+
+  await page.getByTestId('agents-filter-waiting').click();
+  await expect(page.getByTestId(`agent-session-${waiting}`)).toBeVisible();
+  await expect(page.getByTestId(`agent-session-${other}`)).toHaveCount(0);
+});
+
+test('工作目录能置顶 —— 常驻的那几个项目排到上面', async ({ page }) => {
+  await presetTwoWorkspaces(page);
+
+  const heads = page.locator('[data-testid^="agent-ws-head-"]');
+  await expect(heads).toHaveCount(2);
+  // 默认按添加顺序：alpha 在前
+  await expect(heads.first()).toHaveAttribute('data-testid', 'agent-ws-head-ws_alpha');
+
+  // 把 beta 置顶
+  await page.getByTestId('agent-ws-head-ws_beta').click({ button: 'right' });
+  await page.getByTestId('menu-置顶').click();
+
+  await expect(heads.first()).toHaveAttribute('data-testid', 'agent-ws-head-ws_beta');
+
+  // 取消置顶之后回到原来的顺序
+  await page.getByTestId('agent-ws-head-ws_beta').click({ button: 'right' });
+  await page.getByTestId('menu-取消置顶').click();
+  await expect(heads.first()).toHaveAttribute('data-testid', 'agent-ws-head-ws_alpha');
 });

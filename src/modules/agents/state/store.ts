@@ -45,6 +45,7 @@ import {
 } from '../core/layout';
 import { createOscScanner, type OscScanner } from '../core/osc';
 import { attentionQueue, reduceSignal, type AgentSignal } from '../core/status';
+import { withPin } from '../core/workspaces';
 import {
   MAX_SESSIONS_PER_KIND,
   NO_LAUNCH_ARGS,
@@ -293,8 +294,17 @@ export class AgentsStore {
       const name = w['name'];
       if (typeof id !== 'string' || id === '') continue;
       if (typeof path !== 'string' || path === '') continue;
-      out.push({ id, path, name: typeof name === 'string' && name !== '' ? name : path });
+      out.push({
+        id,
+        path,
+        name: typeof name === 'string' && name !== '' ? name : path,
+        // ⚠️ 只认**真正的 `true`** —— 存储里的东西不可信，`"false"` / `1` 这种
+        // 都不该让一个目录莫名其妙排到最上面
+        ...(w['pinned'] === true ? { pinned: true } : {}),
+      });
     }
+    // ⚠️ 这里**不排序**：数组顺序永远是「用户添加的顺序」，置顶只在画的时候拎一下
+    // （排序写回数组的话，取消置顶就再也回不到原位了 —— 见 `toggleWorkspacePin`）
     return out;
   }
 
@@ -604,6 +614,26 @@ export class AgentsStore {
     this.patch({
       workspaces: this.state.workspaces.map((w) =>
         w.id === workspaceId ? { ...w, name: trimmed } : w,
+      ),
+    });
+    this.persistWorkspaces();
+  }
+
+  /**
+   * 置顶 / 取消置顶一个工作目录。
+   *
+   * ⚠️ **只改显示顺序**：`activeWorkspaceId`（当前打开的是哪个窗口）一个字节都不动 ——
+   * 用户置顶某个项目只是想让它在列表里靠上，不是想切过去。
+   *
+   * ⚠️ **数组本身不重排**（`sortWorkspaces` 只在渲染时用）：一开始是重排之后
+   * 写回 state 的，结果「取消置顶」回不到原位 —— 那时候数组已经是 `[beta, alpha]`
+   * 了，稳定排序保持原序，于是 beta 赖着不走。e2e 一跑就撞出来了。
+   * 数组顺序永远是**用户添加的顺序**，置顶只是画的时候拎一下。
+   */
+  toggleWorkspacePin(workspaceId: string): void {
+    this.patch({
+      workspaces: this.state.workspaces.map((w) =>
+        w.id === workspaceId ? withPin(w, w.pinned !== true) : w,
       ),
     });
     this.persistWorkspaces();
