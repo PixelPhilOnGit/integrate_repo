@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit-tasks"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的任务内核：SQLite 存储 + 查询（不依赖 Tauri）"
