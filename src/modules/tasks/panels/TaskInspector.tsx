@@ -15,6 +15,8 @@
  */
 
 import { useState, type ReactNode } from 'react';
+import { agentBus } from '../../../shared/agentBus';
+import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { platform } from '../../../shared/platform';
 import { formatTime } from '../core/format';
 import { STATUS_LABEL, STATUS_ORDER, type Task } from '../core/types';
@@ -27,6 +29,37 @@ interface Props {
 
 export function TaskInspector({ task, store }: Props): ReactNode {
   const [busy, setBusy] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+
+  /**
+   * 「派给某个会话…」—— **点的时候才去问有哪些会话**，不提前读。
+   *
+   * 两个原因：会话列表是**运行时**的（开着才会有），提前读就得订阅会话模块的
+   * 状态变化（那是跨模块的耦合，见 `shared/agentBus.ts` 那段）；
+   * 而且用户点这一下的时候，他要的就是「此刻能派的那些」。
+   */
+  const openDispatch = (x: number, y: number): void => {
+    const targets = agentBus.list();
+    setMenu({
+      x,
+      y,
+      items:
+        targets.length === 0
+          ? [
+              {
+                label: '现在没有开着的会话',
+                disabled: true,
+                onSelect: () => {},
+              },
+            ]
+          : targets.map((t) => ({
+              // 工作目录比标题有用：标题只是 `claude #1` 这种编号，
+              // 而用户认的是「哪个项目」
+              label: `${t.title} · ${t.workspace}`,
+              onSelect: () => void store.dispatchTo(task.id, t.sessionId),
+            })),
+    });
+  };
 
   const remove = async (): Promise<void> => {
     const ok = await platform.confirm(
@@ -80,6 +113,25 @@ export function TaskInspector({ task, store }: Props): ReactNode {
         </div>
 
         <div className="rd-task-section">
+          <h4 className="rd-task-section-title">交给会话</h4>
+          <button
+            type="button"
+            className="rd-btn"
+            data-testid="task-dispatch"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              openDispatch(r.left, r.bottom + 2);
+            }}
+          >
+            派给某个会话…
+          </button>
+          <p className="rd-hint rd-muted">
+            把标题和描述送进那个会话（就当是你自己敲的），并在进度里记一笔。
+            会话结束时还会再记一笔 —— 但**不会替你改状态**：干成没干成只有你知道。
+          </p>
+        </div>
+
+        <div className="rd-task-section">
           <h4 className="rd-task-section-title">收拾</h4>
           <button
             type="button"
@@ -108,6 +160,10 @@ export function TaskInspector({ task, store }: Props): ReactNode {
           </button>
         </div>
       </div>
+
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }

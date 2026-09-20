@@ -19,6 +19,7 @@
  * 规则一条都不写在这里 —— 那层是要被单测盖满的，散在这儿就没法审了。
  */
 
+import { attachAgentBus, type AgentBus } from '../../../shared/agentBus';
 import { newId } from '../../../shared/ids';
 import { platform } from '../../../shared/platform';
 import { createKeyValue } from '../../../shared/platform/kv';
@@ -202,12 +203,25 @@ export class AgentsStore {
   private scanners = new Map<string, OscScanner>();
   private kv = createKeyValue({ tauriFile: 'agents.json', webKey: 'devtoolkit.agents.v1' });
 
+  /**
+   * 会话退出时要通知谁（任务模块用它回写一条进度）。
+   *
+   * ⚠️ 会话 id 是**运行时**的：这份订阅只在进程活着时有意义，所以它不落库、
+   * 重启就清空（见 `shared/agentBus.ts` 那段解释）。
+   */
+  private exitListeners = new Set<(sessionId: string) => void>();
+
   constructor(private services: AgentsServices) {
     // hub 的两个出口接在这里。做成可写字段而不是构造参数，是为了避开
     // store ↔ hub 的循环依赖（hub 不认识 store，store 认识 hub）
     agentHub.onInput = (sessionId, data) => {
       void this.onUserInput(sessionId, data);
     };
+
+    // 把自己的能力挂到那个中立槽位上，别的模块（任务）就能「把一件事交给某个会话」。
+    // 接口在 `shared/agentBus.ts`：**只定义类型，不 import 任何模块**，
+    // 所以外壳和共享层依然不认识智能体会话。
+    attachAgentBus(this.asBus());
     agentHub.onResize = (sessionId, cols, rows) => {
       void this.services.client.resize(sessionId, cols, rows);
     };
@@ -479,10 +493,56 @@ export class AgentsStore {
     // 退出是**一条结果**，不是执行失败 —— 终端里显示出来就行，不弹错误条
     this.applySignal(sessionId, { kind: 'exited', code: event.code }, Date.now());
     this.scanners.delete(sessionId);
+
+    // 告诉订阅者（任务模块据此往那条任务的进度里回写一笔）
+    for (const cb of this.exitListeners) cb(sessionId);
     agentHub.note(
       sessionId,
       event.code === null ? '（进程已退出）' : `（进程已退出，退出码 ${event.code}）`,
     );
+  }
+
+  /**
+   * 对外（别的模块）暴露的那一点点能力 —— 见 `shared/agentBus.ts`。
+   *
+   * **刻意做得窄**：别处要的只是「有哪些会话能接活」和「把一句话送进去」，
+   * 分屏、状态机、事件目录那些它一个都用不上，也就不该看见。
+   */
+  private asBus(): AgentBus {
+    return {
+      list: () =>
+        this.state.sessions
+          // 已经结束的不算：把任务派给一个死掉的会话是纯粹的坑
+          .filter((s) => s.status !== 'exited')
+          .map((s) => ({
+            sessionId: s.id,
+            title: s.title,
+            workspace: this.workspaceById(s.workspaceId)?.name ?? '（未知目录）',
+            kind: s.kind,
+          })),
+
+      send: (sessionId, text) => {
+        const session = this.state.sessions.find((s) => s.id === sessionId);
+        if (session === undefined || session.status === 'exited') return false;
+
+        // ⚠️ **末尾补一个回车**：送进去的是「一句话」，不是半行按键。
+        // 不补的话它就一直躺在提示符上，用户还得自己去按一下 —— 而派任务
+        // 这个动作的语义就是「让它开始干」。
+        const bytes = new TextEncoder().encode(`${text}\r`);
+        void this.services.client.write(sessionId, bytes).catch(() => undefined);
+
+        // 当成用户敲的：它确实要开始干活了，状态点该从「空闲」变「正在工作」
+        this.applySignal(sessionId, { kind: 'user-typed' }, Date.now());
+        return true;
+      },
+
+      onExit: (cb) => {
+        this.exitListeners.add(cb);
+        return () => {
+          this.exitListeners.delete(cb);
+        };
+      },
+    };
   }
 
   /** 用户在窗格里敲了键 */

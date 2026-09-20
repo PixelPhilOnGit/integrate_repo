@@ -20,6 +20,7 @@
  * 它们得靠 props 一层层传，而且模块切走再回来就丢了。
  */
 
+import { agentBus } from '../../../shared/agentBus';
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
 import { countByStatus, filterTasks, EMPTY_FILTER, type StatusFilter, type TaskFilter } from '../core/filter';
@@ -52,6 +53,13 @@ export interface TasksState {
 
 export class TasksStore {
   private listeners = new Set<() => void>();
+  /**
+   * 「这个会话在办哪条任务」—— **只在内存里**，不落库。
+   *
+   * 会话 id 是运行时的（关掉、重启就没了），存进数据库只会让后人以为它有意义。
+   * 见 [`TasksStore.dispatchTo`]。
+   */
+  private dispatched = new Map<string, string>();
   private state: TasksState = {
     ready: false,
     tasks: [],
@@ -63,6 +71,13 @@ export class TasksStore {
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
   private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+
+  constructor() {
+    // 订上「会话结束了」那条通知（派出去的任务要往进度里回写一笔）。
+    // 放在构造函数而不是 `init()` 里：`init()` 是幂等的、而且可能压根不被调用
+    // （用户没点进任务模块），而这件事和读盘没关系。
+    this.watchAgents();
+  }
 
   attachShell(shell: ShellApi): void {
     this.shell = shell;
@@ -156,6 +171,66 @@ export class TasksStore {
       await tasksClient.addProgress(id, text);
       await this.loadProgress(id);
       // 记一笔会顶起 updated_at（列表按它排）—— 重新读一遍让顺序对上
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /**
+   * **把一条任务交给某个 agent 会话去干**（用户说的「任务接 agent」）。
+   *
+   * 干三件事：把任务内容送进那个会话（当成用户敲的）、记下「这个会话在办哪条
+   * 任务」、往任务的进度里落一笔。返回 `false` = 那个会话已经不在了。
+   *
+   * ⚠️ **这份「会话 → 任务」的映射只活在内存里，不落库。**
+   * 会话 id 是运行时的（关掉、重启就没了），存进数据库只会让后人以为它有意义。
+   * 会话没了，那条关联也就没什么可回写的了。
+   */
+  async dispatchTo(taskId: string, sessionId: string): Promise<boolean> {
+    const task = this.state.tasks.find((t) => t.id === taskId);
+    if (task === undefined) return false;
+
+    const target = agentBus.list().find((t) => t.sessionId === sessionId);
+    if (target === undefined) return false;
+
+    // 送进去的是**一段能直接开干的提示**，不是一句「去干这个活」——
+    // 会话那头是个 agent，它需要的是内容本身
+    const prompt =
+      task.body.trim() === '' ? `任务：${task.title}` : `任务：${task.title}\n\n${task.body.trim()}`;
+    if (!agentBus.send(sessionId, prompt)) return false;
+
+    this.dispatched.set(sessionId, taskId);
+    // 进度记的是**过程**（这条任务经历过什么），所以这里写事实不是结论
+    await this.addProgressTo(
+      taskId,
+      `已派给 ${target.kind} 会话「${target.title}」（${target.workspace}）`,
+    );
+    return true;
+  }
+
+  /**
+   * 会话结束时回写一笔。
+   *
+   * ⚠️ **只写「结束了」这个事实，不猜结果。** 我们只知道那个进程没了 ——
+   * 干成没干成、要不要接着做，只有用户自己知道。所以这里刻意不去改任务状态，
+   * 只是往进度里留一条线索（「它什么时候停的」正是回顾时最缺的那种信息）。
+   */
+  private watchAgents(): void {
+    agentBus.onExit((sessionId) => {
+      const taskId = this.dispatched.get(sessionId);
+      if (taskId === undefined) return; // 这个会话不是从任务派出去的
+      this.dispatched.delete(sessionId);
+      void this.addProgressTo(taskId, '派出去的那个会话已经结束了');
+    });
+  }
+
+  /** 往**指定**任务的进度里记一笔（`addProgress` 只管当前选中那条） */
+  private async addProgressTo(taskId: string, text: string): Promise<void> {
+    try {
+      await tasksClient.addProgress(taskId, text);
+      // 选中那条的话，顺手把界面上的进度也刷新一下
+      if (this.state.selectedId === taskId) await this.loadProgress(taskId);
       await this.reload();
     } catch (e) {
       this.shell.reportError(e);
