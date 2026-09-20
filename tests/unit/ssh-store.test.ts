@@ -23,6 +23,7 @@ const hub = vi.hoisted(() => ({
 
 vi.mock('../../src/modules/ssh/core/terminalHub', () => ({ terminalHub: hub }));
 
+import type { ConnectionGroup } from '../../src/shared/connections/types';
 import type { KnownHost, SshProfile } from '../../src/modules/ssh/core/types';
 import type {
   LocalClient,
@@ -74,20 +75,23 @@ interface Harness {
   local: LocalClient;
   savedProfiles: SshProfile[][];
   savedHosts: KnownHost[][];
+  savedGroups: ConnectionGroup[][];
   errors: string[];
   statuses: (string | null)[];
   ready(): void;
 }
 
 function harness(
-  options: { stored?: SshProfile[]; hosts?: KnownHost[] } = {},
+  options: { stored?: SshProfile[]; hosts?: KnownHost[]; groups?: ConnectionGroup[] } = {},
 ): Harness {
   let storedProfiles = options.stored ?? [];
   let storedHosts = options.hosts ?? [];
+  let storedGroups: ConnectionGroup[] = options.groups ?? [];
 
   const savedProfiles: SshProfile[][] = [];
   const localOpened: LocalOpenRequest[] = [];
   const savedHosts: KnownHost[][] = [];
+  const savedGroups: ConnectionGroup[][] = [];
   const errors: string[] = [];
   const statuses: (string | null)[] = [];
 
@@ -129,6 +133,13 @@ function harness(
         savedHosts.push([...next]);
       },
     },
+    groups: {
+      load: async () => storedGroups,
+      save: async (next) => {
+        storedGroups = [...next];
+        savedGroups.push([...next]);
+      },
+    },
   };
 
   const store = new SshStore(services);
@@ -145,6 +156,7 @@ function harness(
     localOpened,
     savedProfiles,
     savedHosts,
+    savedGroups,
     errors,
     statuses,
     ready() {
@@ -197,6 +209,7 @@ describe('init', () => {
         save: async () => {},
       },
       knownHosts: { load: async () => [], save: async () => {} },
+      groups: { load: async () => [], save: async () => {} },
     });
     await broken.init();
 

@@ -17,6 +17,8 @@
  * - **其它意外**（读盘失败之类）→ 才交给 `shell.reportError` 弹错误条。
  */
 
+import { newGroup, removeGroup, withGroup } from '../../../shared/connections/groups';
+import type { ConnectionGroup } from '../../../shared/connections/types';
 import { describeError } from '../../../shared/platform/types';
 import type { ShellApi } from '../../../shell/types';
 import { pushHistory, moveHistory } from '../core/history';
@@ -84,6 +86,14 @@ export interface RedisState {
   /** 连接档案是否已经从磁盘读回来了 */
   ready: boolean;
   profiles: ConnectionProfile[];
+  /**
+   * 用户自己建的分组（侧栏最上面那层）。
+   *
+   * ⚠️ 只有一层，不做嵌套 —— 见 `shared/connections/groups.ts` 的文件头。
+   * 侧栏里分组的**折叠状态**不在这里：那是纯显示状态，归组件自己管
+   * （和 `expanded` 不一样 —— 那个「哪个连接展开着看库」跨模块切换要留着）。
+   */
+  groups: ConnectionGroup[];
   /** 连接 id → 运行时状态。不持久化，每次启动从 idle 开始 */
   runtime: Record<string, ConnectionRuntime>;
   /**
@@ -134,6 +144,7 @@ export class RedisStore {
     this.state = {
       ready: false,
       profiles: [],
+      groups: [],
       runtime: {},
       selectedId: null,
       log: [],
@@ -184,12 +195,16 @@ export class RedisStore {
   private async doInit(): Promise<void> {
     try {
       const profiles = await this.services.profiles.load();
+      // 分组读不出来**不该连累连接档案**：退化成「没有分组」照样能连能查，
+      // 而连接列表读不出来才是真用不了（那一条走下面的 catch）
+      const groups = await this.services.groups.load().catch((): ConnectionGroup[] => []);
       const runtime: Record<string, ConnectionRuntime> = {};
       for (const profile of profiles) runtime[profile.id] = idleRuntime();
 
       this.set({
         ready: true,
         profiles,
+        groups,
         runtime,
         selectedId: profiles[0]?.id ?? null,
       });
@@ -321,6 +336,64 @@ export class RedisStore {
     } catch (e) {
       // 存盘失败不该让界面崩，但必须让用户知道 —— 下次启动这些改动会没
       this.shell.reportError(new Error(`连接档案保存失败：${describeError(e)}`));
+    }
+  }
+
+  // ---------------------------------------------------------------- 分组
+
+  /** 新建一个分组（名字自动去重）。返回它的 id */
+  async createGroup(): Promise<string> {
+    const group = newGroup(this.state.groups);
+    const groups = [...this.state.groups, group];
+    this.set({ groups });
+    await this.persistGroups(groups);
+    return group.id;
+  }
+
+  /** 改分组名。空名字直接忽略 —— 那会让分组在侧栏里变成一个看不见的空行 */
+  async renameGroup(id: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (trimmed === '') return;
+    const groups = this.state.groups.map((g) => (g.id === id ? { ...g, name: trimmed } : g));
+    this.set({ groups });
+    await this.persistGroups(groups);
+  }
+
+  /**
+   * 删掉一个分组。**里面的连接一条都不删**，全部落回未分组。
+   *
+   * 这条边界是分组这个功能里最要紧的一条：用户点「删除分组」十有八九是想拆掉
+   * 一层目录，不是想把自己填的连接全干掉。所以它**不带确认弹窗**也安全 ——
+   * 代价只是分组没了，数据一条没少（连接本身有确认，那是另一件事）。
+   */
+  async deleteGroup(id: string): Promise<void> {
+    const groups = this.state.groups.filter((g) => g.id !== id);
+    const hadMembers = this.state.profiles.some((p) => p.groupId === id);
+    const profiles = hadMembers ? removeGroup(this.state.profiles, id) : this.state.profiles;
+
+    this.set({ groups, profiles });
+    await this.persistGroups(groups);
+    // 没有成员就不用重写连接档案（少一次没必要的写盘）
+    if (hadMembers) await this.persist(profiles);
+  }
+
+  /** 把一个连接放进分组。`null` = 移出分组，落回未分组 */
+  async moveToGroup(profileId: string, groupId: string | null): Promise<void> {
+    const current = this.findProfile(profileId);
+    if (!current) return;
+    if ((current.groupId ?? null) === groupId) return; // 已经在那儿了
+
+    const next = withGroup(current, groupId);
+    const profiles = this.state.profiles.map((p) => (p.id === profileId ? next : p));
+    this.set({ profiles });
+    await this.persist(profiles);
+  }
+
+  private async persistGroups(groups: ConnectionGroup[]): Promise<void> {
+    try {
+      await this.services.groups.save(groups);
+    } catch (e) {
+      this.shell.reportError(new Error(`分组保存失败：${describeError(e)}`));
     }
   }
 

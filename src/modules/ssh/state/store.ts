@@ -17,7 +17,9 @@
  * 混进来的话，远端每输出一行就会把侧栏和标签栏重渲染一遍。
  */
 
+import { newGroup, removeGroup, withGroup } from '../../../shared/connections/groups';
 import { nextAvailableName } from '../../../shared/connections/profiles';
+import type { ConnectionGroup } from '../../../shared/connections/types';
 import { newId } from '../../../shared/ids';
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
@@ -114,6 +116,14 @@ export interface SshState {
    * 并排**给用户看，而字符串拼出来的东西没法再拆开。
    */
   mismatch: Record<string, { expected: string; actual: string; algorithm: string }>;
+  /**
+   * 用户自己建的分组（侧栏最上面那层）。
+   *
+   * ⚠️ 只有一层，不做嵌套 —— 见 `shared/connections/groups.ts` 的文件头。
+   * SSH 这边**没有「按引擎分」那层**（SQL 有）：SSH 连接和本地终端在用户眼里
+   * 是一回事，按类型分只会把「我常用的那几台」拆到两处。
+   */
+  groups: ConnectionGroup[];
 }
 
 export function idleRuntime(): SshRuntime {
@@ -165,6 +175,7 @@ export class SshStore {
     trustPrompt: null,
     knownHosts: [],
     mismatch: {},
+    groups: [],
   };
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
@@ -211,9 +222,11 @@ export class SshStore {
 
   private async doInit(): Promise<void> {
     try {
-      const [profiles, knownHosts] = await Promise.all([
+      const [profiles, knownHosts, groups] = await Promise.all([
         this.services.profiles.load(),
         this.services.knownHosts.load(),
+        // 分组读不出来**不该连累前两个**：退化成「没有分组」照样能连
+        this.services.groups.load().catch((): ConnectionGroup[] => []),
       ]);
 
       const runtime: Record<string, SshRuntime> = {};
@@ -226,6 +239,7 @@ export class SshStore {
         profiles,
         runtime,
         knownHosts,
+        groups,
         selectedId: profiles[0]?.id ?? null,
       });
 
@@ -380,6 +394,67 @@ export class SshStore {
     } catch (e) {
       // 存不下去（磁盘满、权限）不该让界面崩掉，但要说一声 ——
       // 用户得知道这次的改动不会留到下次启动
+      this.shell.reportError(e);
+    }
+  }
+
+  // ---------------------------------------------------------------- 分组
+
+  /** 新建一个分组（名字自动去重）。返回它的 id */
+  async createGroup(): Promise<string> {
+    const group = newGroup(this.state.groups);
+    const groups = [...this.state.groups, group];
+    this.set({ groups });
+    await this.persistGroups(groups);
+    return group.id;
+  }
+
+  /** 改分组名。空名字直接忽略 —— 那会让分组在侧栏里变成一个看不见的空行 */
+  async renameGroup(id: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (trimmed === '') return;
+    const groups = this.state.groups.map((g) => (g.id === id ? { ...g, name: trimmed } : g));
+    this.set({ groups });
+    await this.persistGroups(groups);
+  }
+
+  /**
+   * 删掉一个分组。**里面的连接一条都不删**，全部落回未分组。
+   *
+   * 这条边界是分组这个功能里最要紧的一条：用户点「删除分组」十有八九是想拆掉
+   * 一层目录，不是想把自己填的连接全干掉。所以它**不带确认弹窗**也安全 ——
+   * 代价只是分组没了，数据一条没少（连接本身有确认，那是另一件事）。
+   *
+   * ⚠️ 这里**不碰会话**：会话属于连接（`sessions` 按 profile 走），
+   * 连接还在，开着的终端一个都不会掉。
+   */
+  async deleteGroup(id: string): Promise<void> {
+    const groups = this.state.groups.filter((g) => g.id !== id);
+    const hadMembers = this.state.profiles.some((p) => p.groupId === id);
+    const profiles = hadMembers ? removeGroup(this.state.profiles, id) : this.state.profiles;
+
+    this.set({ groups, profiles });
+    await this.persistGroups(groups);
+    // 没有成员就不用重写连接档案（少一次没必要的写盘）
+    if (hadMembers) await this.persist(profiles);
+  }
+
+  /** 把一个连接放进分组。`null` = 移出分组，落回未分组 */
+  async moveToGroup(profileId: string, groupId: string | null): Promise<void> {
+    const current = this.state.profiles.find((p) => p.id === profileId);
+    if (!current) return;
+    if ((current.groupId ?? null) === groupId) return; // 已经在那儿了
+
+    const next = withGroup(current, groupId);
+    const profiles = this.state.profiles.map((p) => (p.id === profileId ? next : p));
+    this.set({ profiles });
+    await this.persist(profiles);
+  }
+
+  private async persistGroups(groups: readonly ConnectionGroup[]): Promise<void> {
+    try {
+      await this.services.groups.save(groups);
+    } catch (e) {
       this.shell.reportError(e);
     }
   }

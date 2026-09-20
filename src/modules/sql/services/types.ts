@@ -5,7 +5,7 @@
  * `shared/connections/`（三个连接类模块共用）。这里只剩 SQL 专属的部分。
  */
 
-import type { ProfileStore } from '../../../shared/connections/types';
+import type { ConnectionGroup, ProfileStore } from '../../../shared/connections/types';
 import type { ConnectParams, QueryResult, ServerInfo, SqlProfile, TableInfo } from '../core/types';
 
 export interface SqlClient {
@@ -31,4 +31,12 @@ export interface SqlClient {
 export interface SqlServices {
   client: SqlClient;
   profiles: ProfileStore<SqlProfile>;
+  /**
+   * 用户自己建的分组（连接列表那一层）。
+   *
+   * ⚠️ **是全局的，不分引擎** —— 同一个「生产库」分组在 pg 和 mysql 底下都会出现
+   * （引擎在上、分组在下，见 `ConnectionTree.tsx`）。让分组属于某个引擎的话，
+   * 用户得先想「这个组是给哪个引擎的」，而他要的只是「把这几条放一起」。
+   */
+  groups: ProfileStore<ConnectionGroup>;
 }

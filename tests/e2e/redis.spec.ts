@@ -399,3 +399,76 @@ test('侧栏搜索：按名字过滤连接，清空之后原样回来', async ({
     'connected',
   );
 });
+
+// ---------------------------------------------------------------- 分组
+
+/** 右键某一行的菜单项。菜单自己会用 `menu-<文案>` 当 testid */
+async function toggleGroupCollapse(page: Page, name: string): Promise<void> {
+  await page.locator(`[data-group-name="${name}"] button`).click();
+}
+
+test('分组：建一个、把连接移进去、折叠、再删掉（⚠️ 连接一条都不丢）', async ({ page }) => {
+  await connectNew(page);
+  const connRow = page.locator('[data-conn-name="新建连接"]');
+  await expect(connRow).toHaveCount(1);
+
+  await page.getByTestId('btn-new-group').click();
+  const group = page.locator('[data-group-name="新建分组"]');
+  await expect(group).toBeVisible();
+  await expect(group).toHaveAttribute('data-group-count', '0');
+
+  // 移进去：右键连接 → 移入「新建分组」
+  await connRow.click({ button: 'right' });
+  await page.getByTestId('menu-移入「新建分组」').click();
+  await expect(page.locator('[data-group-name="新建分组"]')).toHaveAttribute(
+    'data-group-count',
+    '1',
+  );
+
+  // 折叠：连接跟着藏起来（折叠是「先看这一组的名字」，不是删）
+  await toggleGroupCollapse(page, '新建分组');
+  await expect(connRow).toHaveCount(0);
+  await toggleGroupCollapse(page, '新建分组');
+  await expect(connRow).toHaveCount(1);
+
+  // 删除分组：⚠️ 连接**一条都不丢**，落回未分组。
+  // 用户点这个十有八九是想拆掉一层目录，不是想把自己填的连接全干掉 ——
+  // 所以它连确认弹窗都没有，这条断言就是它的安全网
+  await page.locator('[data-group-name="新建分组"]').click({ button: 'right' });
+  await page.getByTestId('menu-删除分组（连接回到未分组）').click();
+
+  await expect(page.locator('[data-group-name="新建分组"]')).toHaveCount(0);
+  await expect(connRow).toHaveCount(1);
+});
+
+test('分组：搜索时命中的连接会自动从折叠的分组里露出来', async ({ page }) => {
+  await connectNew(page);
+  await page.getByTestId('btn-new-group').click();
+
+  await page.locator('[data-conn-name="新建连接"]').click({ button: 'right' });
+  await page.getByTestId('menu-移入「新建分组」').click();
+
+  // 用户把它收起来了
+  await toggleGroupCollapse(page, '新建分组');
+  await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(0);
+
+  // 搜它 → 分组被**临时**撑开，命中的那条露出来
+  await page.getByTestId('redis-conn-search').fill('新建');
+  await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(1);
+
+  // ⚠️ 清空搜索 → 回到用户自己收起来的样子。
+  // 搜索期间的撑开是**叠加**的，不能写进折叠状态 —— 写进去的话用户手动收起来
+  // 的那一层就再也回不去了（文件树那边踩过同一个坑）
+  await page.getByTestId('redis-conn-search').fill('');
+  await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(0);
+});
+
+test('分组：名字重名时自动加序号，不会撞在一起', async ({ page }) => {
+  await connectNew(page);
+
+  await page.getByTestId('btn-new-group').click();
+  await page.getByTestId('btn-new-group').click();
+
+  await expect(page.locator('[data-group-name="新建分组"]')).toHaveCount(1);
+  await expect(page.locator('[data-group-name="新建分组 2"]')).toHaveCount(1);
+});

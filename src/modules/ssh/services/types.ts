@@ -13,7 +13,7 @@
  * 要么已经通过事件流报出来了。
  */
 
-import type { ProfileStore } from '../../../shared/connections/types';
+import type { ConnectionGroup, ProfileStore } from '../../../shared/connections/types';
 import type {
   KnownHost,
   SshAuth,
@@ -138,4 +138,11 @@ export interface SshServices {
   profiles: ProfileStore<SshProfile>;
   /** 已知主机的信任记录。和档案走同一条持久化路径 */
   knownHosts: ProfileStore<KnownHost>;
+  /**
+   * 用户自己建的分组（连接列表那一层）。
+   *
+   * SSH 这边**没有「按引擎分」那层**（SQL 有）：SSH 连接和本地终端在用户眼里
+   * 是一回事（都是「一个终端」），按类型分只会把「我常用的那几台」拆到两处。
+   */
+  groups: ProfileStore<ConnectionGroup>;
 }

@@ -12,6 +12,7 @@
 
 import { createKeyValue } from '../../../shared/platform/kv';
 import { isTauri } from '../../../shared/platform/detect';
+import { createGroupStore } from '../../../shared/connections/groups';
 import { createTauriLocalClient, createWebLocalClient } from './local';
 import { createKnownHostStore, createSshProfileStore } from './profiles';
 import { createTauriSshClient } from './tauri';
@@ -31,4 +32,7 @@ export const sshServices: SshServices = {
   local: isTauri() ? createTauriLocalClient() : createWebLocalClient(),
   profiles: createSshProfileStore(kv),
   knownHosts: createKnownHostStore(kv),
+  // 分组和档案、已知主机**共用这一份 kv、三个不同的键** —— 各自的生命周期一致
+  // （都是这个模块的用户数据），但结构完全不同，混在一个键里整形会互相牵连
+  groups: createGroupStore(kv),
 };

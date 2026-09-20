@@ -10,7 +10,10 @@
  */
 
 import { useState, type ReactNode } from 'react';
+import { ConnectionGroupRow } from '../../../shared/connections/ConnectionGroupRow';
+import { assignGroups } from '../../../shared/connections/groups';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
+import type { ConnectionGroup } from '../../../shared/connections/types';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { fuzzyBest } from '../../../shared/search';
@@ -32,6 +35,11 @@ interface OpenMenu {
 export function ConnectionTree({ state, store }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const [query, setQuery] = useState('');
+  /** 哪些分组是收起来的。**纯显示状态，不持久化** */
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  /** 正在行内改名的分组 id + 草稿（和文件树那套一样，不用弹窗） */
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
 
   const q = query.trim();
   const searching = q !== '';
@@ -47,6 +55,86 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
     if (fuzzyBest(q, [profile.name, addressOf(profile)]) !== null) return true;
     return store.sessionsOf(profile.id).some((s) => fuzzyBest(q, [s.title]) !== null);
   });
+
+  // ⚠️ 搜索时才藏空组：**平时空组必须画出来**，用户刚点「＋组」建的就是空组，
+  // 藏起来他会以为按钮坏了（见 `assignGroups` 的说明）
+  const grouped = assignGroups(visible, state.groups, searching);
+
+  /**
+   * 搜索时**强制展开**所有分组 —— 命中的那条埋在收起来的分组里等于没搜到。
+   *
+   * ⚠️ 撑开是**临时的**（叠加在这一步），`collapsedGroups` 一个字不写：写进去的话，
+   * 清空搜索之后被搜索撑开的分组会自己开着，用户手动收起来的那层就回不去了。
+   * 文件树那边踩过同一个坑，规矩是一样的。
+   */
+  const isGroupCollapsed = (id: string): boolean => !searching && collapsedGroups[id] === true;
+  const toggleGroup = (id: string): void =>
+    setCollapsedGroups((c) => ({ ...c, [id]: !isGroupCollapsed(id) }));
+
+  const commitRename = async (): Promise<void> => {
+    const id = renaming;
+    setRenaming(null);
+    if (id === null || draft.trim() === '') return;
+    await store.renameGroup(id, draft.trim());
+  };
+
+  /** 分组的右键菜单。删除分组**不需要确认弹窗**：它一条连接都不删（见 store 里那条注释） */
+  const openGroupMenu = (group: ConnectionGroup, x: number, y: number): void => {
+    setMenu({
+      x,
+      y,
+      items: [
+        {
+          label: '重命名',
+          onSelect: () => {
+            setRenaming(group.id);
+            setDraft(group.name);
+          },
+        },
+        {
+          // 把后果写在菜单里，比事后再弹一个确认框强 —— 用户点之前就该知道
+          label: '删除分组（连接回到未分组）',
+          danger: true,
+          separatorBefore: true,
+          onSelect: () => void store.deleteGroup(group.id),
+        },
+      ],
+    });
+  };
+
+  /** 分组头（或者它被改名时的输入框） */
+  const renderGroupHead = (group: ConnectionGroup, count: number): ReactNode => {
+    if (renaming === group.id) {
+      return (
+        <div className="rd-conn-group-head" data-testid={`conn-group-rename-${group.id}`}>
+          <span className="rd-agent-caret" />
+          <input
+            className="rd-rename-input"
+            autoFocus
+            value={draft}
+            aria-label="重命名分组"
+            data-testid="group-rename-input"
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => void commitRename()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void commitRename();
+              if (e.key === 'Escape') setRenaming(null);
+              e.stopPropagation();
+            }}
+          />
+        </div>
+      );
+    }
+    return (
+      <ConnectionGroupRow
+        group={group}
+        count={count}
+        collapsed={isGroupCollapsed(group.id)}
+        onToggle={() => toggleGroup(group.id)}
+        onContextMenu={(x, y) => openGroupMenu(group, x, y)}
+      />
+    );
+  };
 
   return (
     <div className="rd-panel rd-conn-list" data-testid="ssh-conn-list">
@@ -73,6 +161,14 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         >
           本地
         </button>
+        <button
+          type="button"
+          data-testid="ssh-btn-new-group"
+          title="新建分组（把连接归归类）"
+          onClick={() => void store.createGroup()}
+        >
+          ＋组
+        </button>
       </div>
 
       {/* 一个连接都没有的时候不放搜索框：搜不到任何东西的框是噪音 */}
@@ -91,7 +187,8 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         <NoMatch testId="ssh-conn-nomatch" />
       ) : (
         <div className="rd-panel-body">
-          {visible.map((profile) => (
+          {/* 未分组的在最上面（也不缩进）：新建的连接就在这儿 */}
+          {grouped.ungrouped.map((profile) => (
             <ConnectionBranch
               key={profile.id}
               profile={profile}
@@ -100,6 +197,26 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
               onMenu={setMenu}
               query={q}
             />
+          ))}
+
+          {grouped.groups.map(({ group, items }) => (
+            <div key={group.id}>
+              {renderGroupHead(group, items.length)}
+              {!isGroupCollapsed(group.id) && (
+                <div className="rd-conn-group-body">
+                  {items.map((profile) => (
+                    <ConnectionBranch
+                      key={profile.id}
+                      profile={profile}
+                      state={state}
+                      store={store}
+                      onMenu={setMenu}
+                      query={q}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -162,6 +279,26 @@ function ConnectionBranch({
             void store.closeSession(session.id);
           }
         },
+      });
+    }
+
+    // 「移入分组」：`ContextMenu` 没有子菜单，所以平铺列出来。
+    // 分组通常只有几个，平铺比多一层菜单更好点 —— 而且当前的组会打勾，
+    // 一眼看出这条连接现在在哪儿。
+    if (state.groups.length > 0) {
+      items.push(
+        ...state.groups.map((group, i) => ({
+          label: `移入「${group.name}」`,
+          checked: profile.groupId === group.id,
+          separatorBefore: i === 0,
+          onSelect: () => void store.moveToGroup(profile.id, group.id),
+        })),
+      );
+    }
+    if (profile.groupId !== undefined) {
+      items.push({
+        label: '移出分组',
+        onSelect: () => void store.moveToGroup(profile.id, null),
       });
     }
 

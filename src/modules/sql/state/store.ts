@@ -13,6 +13,8 @@
  * - **其它意外**（读盘失败之类）→ 才给 `shell.reportError`。
  */
 
+import { newGroup, removeGroup, withGroup } from '../../../shared/connections/groups';
+import type { ConnectionGroup } from '../../../shared/connections/types';
 import { describeError } from '../../../shared/platform/types';
 import { suggestMongoQuery, suggestSelect } from '../core/query';
 import type { ShellApi } from '../../../shell/types';
@@ -40,6 +42,14 @@ export type SqlTab = 'result' | 'tables';
 export interface SqlState {
   ready: boolean;
   profiles: SqlProfile[];
+  /**
+   * 用户自己建的分组 —— 侧栏里排在**引擎那层底下**的那一层。
+   *
+   * ⚠️ 是全局的、**不分引擎**：同一个「生产库」分组在 pg 和 mysql 底下都会出现。
+   * 让分组属于某个引擎的话，用户得先想「这个组是给哪个引擎的」，
+   * 而他要的只是「把这几条放一起」。
+   */
+  groups: ConnectionGroup[];
   runtime: Record<string, SqlRuntime>;
   /** 选中的连接：侧栏那一行、Inspector 编辑的那份、查询发往的那个，是同一个 */
   selectedId: string | null;
@@ -76,6 +86,7 @@ export class SqlStore {
     this.state = {
       ready: false,
       profiles: [],
+      groups: [],
       runtime: {},
       selectedId: null,
       expanded: {},
@@ -123,12 +134,16 @@ export class SqlStore {
   private async doInit(): Promise<void> {
     try {
       const profiles = await this.services.profiles.load();
+      // 分组读不出来**不该连累连接档案**：退化成「没有分组」照样能连能查，
+      // 而连接列表读不出来才是真用不了（那一条走下面的 catch）
+      const groups = await this.services.groups.load().catch((): ConnectionGroup[] => []);
       const runtime: Record<string, SqlRuntime> = {};
       for (const profile of profiles) runtime[profile.id] = idleRuntime();
 
       this.set({
         ready: true,
         profiles,
+        groups,
         runtime,
         selectedId: profiles[0]?.id ?? null,
       });
@@ -228,6 +243,64 @@ export class SqlStore {
       await this.services.profiles.save(profiles);
     } catch (e) {
       this.shell.reportError(new Error(`连接档案保存失败：${describeError(e)}`));
+    }
+  }
+
+  // ---------------------------------------------------------------- 分组
+
+  /** 新建一个分组（名字自动去重）。返回它的 id */
+  async createGroup(): Promise<string> {
+    const group = newGroup(this.state.groups);
+    const groups = [...this.state.groups, group];
+    this.set({ groups });
+    await this.persistGroups(groups);
+    return group.id;
+  }
+
+  /** 改分组名。空名字直接忽略 —— 那会让分组在侧栏里变成一个看不见的空行 */
+  async renameGroup(id: string, name: string): Promise<void> {
+    const trimmed = name.trim();
+    if (trimmed === '') return;
+    const groups = this.state.groups.map((g) => (g.id === id ? { ...g, name: trimmed } : g));
+    this.set({ groups });
+    await this.persistGroups(groups);
+  }
+
+  /**
+   * 删掉一个分组。**里面的连接一条都不删**，全部落回未分组。
+   *
+   * 这条边界是分组这个功能里最要紧的一条：用户点「删除分组」十有八九是想拆掉
+   * 一层目录，不是想把自己填的连接全干掉。所以它**不带确认弹窗**也安全 ——
+   * 代价只是分组没了，数据一条没少（连接本身有确认，那是另一件事）。
+   */
+  async deleteGroup(id: string): Promise<void> {
+    const groups = this.state.groups.filter((g) => g.id !== id);
+    const hadMembers = this.state.profiles.some((p) => p.groupId === id);
+    const profiles = hadMembers ? removeGroup(this.state.profiles, id) : this.state.profiles;
+
+    this.set({ groups, profiles });
+    await this.persistGroups(groups);
+    // 没有成员就不用重写连接档案（少一次没必要的写盘）
+    if (hadMembers) await this.persist(profiles);
+  }
+
+  /** 把一个连接放进分组。`null` = 移出分组，落回未分组 */
+  async moveToGroup(profileId: string, groupId: string | null): Promise<void> {
+    const current = this.state.profiles.find((p) => p.id === profileId);
+    if (!current) return;
+    if ((current.groupId ?? null) === groupId) return; // 已经在那儿了
+
+    const next = withGroup(current, groupId);
+    const profiles = this.state.profiles.map((p) => (p.id === profileId ? next : p));
+    this.set({ profiles });
+    await this.persist(profiles);
+  }
+
+  private async persistGroups(groups: ConnectionGroup[]): Promise<void> {
+    try {
+      await this.services.groups.save(groups);
+    } catch (e) {
+      this.shell.reportError(new Error(`分组保存失败：${describeError(e)}`));
     }
   }
 

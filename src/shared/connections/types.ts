@@ -48,6 +48,22 @@ export interface ConnectionRuntime<Info = unknown> {
  */
 export type WithoutSeq<T> = T extends unknown ? Omit<T, 'seq'> : never;
 
+/**
+ * 用户自己建的分组（「生产」「测试」「某某项目」那类）。
+ *
+ * ⚠️ **只有一层，不做嵌套** —— 2026-09-20 和用户确认过。理由：连接总数通常是
+ * 几十条，一层分组 + 搜索就够了；嵌套要带出递归渲染、折叠状态、把组拖进自己
+ * 子树这类边界，现在不值这个复杂度。真要嵌套，加个 `parentId` 就能长出来。
+ *
+ * ⚠️ 别和 SQL 模块那个「按引擎分的层」混起来：那是**系统给的**种类
+ * （pg / mysql / mongo / ck），这个是**用户自己分的**。两个维度，侧栏里
+ * 引擎在上、分组在下（也是和用户确认过的顺序）。
+ */
+export interface ConnectionGroup {
+  id: string;
+  name: string;
+}
+
 /** 所有连接档案都有的字段。各模块在这基础上加自己的（db / database / 认证方式……） */
 export interface ConnectionProfileBase {
   id: string;
@@ -55,6 +71,15 @@ export interface ConnectionProfileBase {
   host: string;
   port: number;
   username: string;
+  /**
+   * 属于哪个分组。不存在 / 指向一个已经没有的组 = **未分组**（新建的连接都是）。
+   *
+   * ⚠️ 那个「指向不存在的组也算未分组」不是为了容错，是**故意留的余地**：
+   * 删组时成员自然落回未分组那堆，不需要先要求用户把连接搬走。
+   * （删组时我们**还是会顺手清一遍** `groupId`，但那只是让数据干净 ——
+   * 渲染的正确性不依赖它。）
+   */
+  groupId?: string;
   /**
    * ⚠️ 明文密码，见 `profiles.ts` 的 TODO(security)。
    * 三个模块共用这一份读写路径，将来换系统钥匙串时一次覆盖全部。

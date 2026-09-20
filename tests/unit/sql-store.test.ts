@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetIdsForTest } from '../../src/shared/ids';
 import { SqlStore } from '../../src/modules/sql/state/store';
-import type { ProfileStore } from '../../src/shared/connections/types';
+import type { ConnectionGroup, ProfileStore } from '../../src/shared/connections/types';
 import type { SqlClient } from '../../src/modules/sql/services/types';
 import type {
   QueryResult,
@@ -24,6 +24,7 @@ const OK_RESULT: QueryResult = {
 interface Harness {
   store: SqlStore;
   saved: SqlProfile[][];
+  savedGroups: ConnectionGroup[][];
   errors: string[];
   statuses: string[];
   client: {
@@ -36,9 +37,13 @@ interface Harness {
   };
 }
 
-function harness(options: { stored?: SqlProfile[] } = {}): Harness {
+function harness(
+  options: { stored?: SqlProfile[]; groups?: ConnectionGroup[] } = {},
+): Harness {
   let stored: SqlProfile[] = options.stored ?? [];
+  let storedGroups: ConnectionGroup[] = options.groups ?? [];
   const saved: SqlProfile[][] = [];
+  const savedGroups: ConnectionGroup[][] = [];
   const errors: string[] = [];
   const statuses: string[] = [];
 
@@ -71,14 +76,22 @@ function harness(options: { stored?: SqlProfile[] } = {}): Harness {
     },
   };
 
-  const store = new SqlStore({ client: client as unknown as SqlClient, profiles });
+  const groups: ProfileStore<ConnectionGroup> = {
+    load: async () => storedGroups,
+    save: async (next) => {
+      storedGroups = [...next];
+      savedGroups.push([...next]);
+    },
+  };
+
+  const store = new SqlStore({ client: client as unknown as SqlClient, profiles, groups });
   const shell: ShellApi = {
     setStatus: (msg) => statuses.push(String(msg)),
     reportError: (e) => errors.push(String(e)),
   };
   store.attachShell(shell);
 
-  return { store, saved, errors, statuses, client };
+  return { store, saved, savedGroups, errors, statuses, client };
 }
 
 describe('SQL 档案管理', () => {

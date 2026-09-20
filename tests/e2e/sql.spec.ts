@@ -378,3 +378,36 @@ test('MongoDB：点集合生成 JSON 查询，结果是文档而不是表格', a
   await run(page, '{"collection":"不存在的集合"}');
   await expect(page.getByTestId('mongo-error')).toContainText('没有这个集合');
 });
+
+// ------------------------------------------------------------------ 分组
+
+test('分组：在引擎底下再分一层（引擎 → 分组 → 连接）', async ({ page }) => {
+  await newConnection(page, 'PostgreSQL');
+  await page.getByTestId('btn-new-group').click();
+
+  // ⚠️ 分组头必须在**引擎那个节点里面**：「引擎在上、分组在下」是跟用户确认过的
+  // 顺序。反过来的话，同一个引擎的连接会散在好几个分组里，
+  // 「新建 pg，那这个连接属于 pg」这条心智就没了
+  const groupInEngine = page
+    .getByTestId('sql-kind-postgres')
+    .locator('[data-group-name="新建分组"]');
+  await expect(groupInEngine).toBeVisible();
+  await expect(groupInEngine).toHaveAttribute('data-group-count', '0');
+
+  await page
+    .getByTestId('sql-kind-postgres')
+    .locator('.rd-conn-row')
+    .first()
+    .click({ button: 'right' });
+  await page.getByTestId('menu-移入「新建分组」').click();
+  await expect(groupInEngine).toHaveAttribute('data-group-count', '1');
+
+  // 分组是**全局的、不分引擎**：换个引擎它照样在（各是各的成员）。
+  // ⚠️ 空的也要画 —— 用户建的组不该因为「这个引擎里还没放东西」就消失
+  await newConnection(page, 'MySQL');
+  const groupInMysql = page
+    .getByTestId('sql-kind-mysql')
+    .locator('[data-group-name="新建分组"]');
+  await expect(groupInMysql).toBeVisible();
+  await expect(groupInMysql).toHaveAttribute('data-group-count', '0');
+});

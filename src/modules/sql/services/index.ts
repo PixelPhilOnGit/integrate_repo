@@ -9,6 +9,7 @@
  * 要读盘的初始化放在 store 的 `init()` 里（由 `onActivate` 惰性触发）。
  */
 
+import { createGroupStore } from '../../../shared/connections/groups';
 import { createKeyValue } from '../../../shared/platform/kv';
 import { isTauri } from '../../../shared/platform/detect';
 import { createSqlProfileStore } from './profiles';
@@ -25,4 +26,6 @@ const kv = createKeyValue({
 export const sqlServices: SqlServices = {
   client: isTauri() ? createTauriSqlClient() : createWebSqlClient(),
   profiles: createSqlProfileStore(kv),
+  // 分组和连接档案**共用这一份 kv、不同的键**（见 shared/connections/groups.ts）
+  groups: createGroupStore(kv),
 };

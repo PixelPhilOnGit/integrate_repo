@@ -10,7 +10,7 @@
  * 有了它，任何模块都能绕过抽象直接捅后端，那层抽象就白做了。
  */
 
-import type { ProfileStore } from '../../../shared/connections/types';
+import type { ConnectionGroup, ProfileStore } from '../../../shared/connections/types';
 import type {
   ConnectParams,
   ConnectionProfile,
@@ -65,4 +65,6 @@ export interface RedisClient {
 export interface RedisServices {
   client: RedisClient;
   profiles: ProfileStore<ConnectionProfile>;
+  /** 用户自己建的分组（连接列表那一层）。形状和规则在 `shared/connections/groups.ts` */
+  groups: ProfileStore<ConnectionGroup>;
 }

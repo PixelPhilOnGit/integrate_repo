@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetIdsForTest } from '../../src/shared/ids';
 import { RedisStore } from '../../src/modules/redis/state/store';
-import type { ProfileStore } from '../../src/shared/connections/types';
+import type { ConnectionGroup, ProfileStore } from '../../src/shared/connections/types';
 import type { RedisClient, RedisServices } from '../../src/modules/redis/services/types';
 import type {
   ConnectionProfile,
@@ -20,6 +20,7 @@ const OK: RedisReply = { type: 'status', text: 'OK' };
 interface Harness {
   store: RedisStore;
   saved: ConnectionProfile[][];
+  savedGroups: ConnectionGroup[][];
   errors: string[];
   /** 状态栏消息（浏览相关的失败走这里，不弹错误条） */
   statuses: string[];
@@ -35,9 +36,13 @@ interface Harness {
   };
 }
 
-function harness(options: { stored?: ConnectionProfile[] } = {}): Harness {
+function harness(
+  options: { stored?: ConnectionProfile[]; groups?: ConnectionGroup[] } = {},
+): Harness {
   let stored: ConnectionProfile[] = options.stored ?? [];
+  let storedGroups: ConnectionGroup[] = options.groups ?? [];
   const saved: ConnectionProfile[][] = [];
+  const savedGroups: ConnectionGroup[][] = [];
   const errors: string[] = [];
   const statuses: string[] = [];
 
@@ -78,9 +83,18 @@ function harness(options: { stored?: ConnectionProfile[] } = {}): Harness {
     },
   };
 
+  const groups: ProfileStore<ConnectionGroup> = {
+    load: async () => storedGroups,
+    save: async (next) => {
+      storedGroups = [...next];
+      savedGroups.push([...next]);
+    },
+  };
+
   const services: RedisServices = {
     client: client as unknown as RedisClient,
     profiles,
+    groups,
   };
 
   const store = new RedisStore(services);
@@ -93,6 +107,7 @@ function harness(options: { stored?: ConnectionProfile[] } = {}): Harness {
   return {
     store,
     saved,
+    savedGroups,
     errors,
     statuses,
     setStored: (next) => {
@@ -738,5 +753,103 @@ describe('初始化', () => {
 
     expect(store.getSnapshot().ready).toBe(true);
     expect(errors.some((e) => e.includes('读不出来'))).toBe(true);
+  });
+});
+
+/** 造一条**预置**的连接档案（id 固定，方便断言）。普通用例走 `store.createProfile()` */
+function profileOf(id: string): ConnectionProfile {
+  return {
+    id,
+    name: `连接 ${id}`,
+    host: '127.0.0.1',
+    port: 6379,
+    db: 0,
+    username: '',
+    password: '',
+  };
+}
+
+describe('分组', () => {
+  it('新建分组：进 state、也落盘', async () => {
+    const { store, savedGroups } = harness();
+    await store.init();
+
+    const id = await store.createGroup();
+
+    expect(store.getSnapshot().groups.map((g) => g.id)).toEqual([id]);
+    expect(savedGroups.at(-1)?.map((g) => g.id)).toEqual([id]);
+  });
+
+  it('把连接放进分组，再移出来', async () => {
+    const { store } = harness({ stored: [profileOf('a')] });
+    await store.init();
+    const gid = await store.createGroup();
+
+    await store.moveToGroup('a', gid);
+    expect(store.getSnapshot().profiles[0]?.groupId).toBe(gid);
+
+    await store.moveToGroup('a', null);
+    expect(store.getSnapshot().profiles[0]?.groupId).toBeUndefined();
+  });
+
+  it('⚠️ 删分组**一条连接都不删**，成员落回未分组', async () => {
+    // 用户点「删除分组」十有八九是想拆掉一层目录，不是想把连接全干掉 ——
+    // 所以这个操作不带确认弹窗也安全。这条边界要是破了，那是数据丢失级别的 bug
+    const { store, saved } = harness({ stored: [profileOf('a'), profileOf('b')] });
+    await store.init();
+    const gid = await store.createGroup();
+    await store.moveToGroup('a', gid);
+
+    const savedBefore = saved.length;
+    await store.deleteGroup(gid);
+
+    const after = store.getSnapshot();
+    expect(after.groups).toEqual([]);
+    // 两条连接都还在
+    expect(after.profiles.map((p) => p.id)).toEqual(['a', 'b']);
+    // 成员落回未分组（字段被真的删掉）
+    expect(Object.hasOwn(after.profiles[0] ?? {}, 'groupId')).toBe(false);
+    // 有成员，所以连接档案也重写过一次
+    expect(saved.length).toBeGreaterThan(savedBefore);
+  });
+
+  it('空分组被删时不重写连接档案（少一次没必要的写盘）', async () => {
+    const { store, saved } = harness({ stored: [profileOf('a')] });
+    await store.init();
+    const gid = await store.createGroup();
+
+    const before = saved.length;
+    await store.deleteGroup(gid);
+
+    expect(saved.length).toBe(before);
+  });
+
+  it('改分组名；空名字直接忽略', async () => {
+    const { store } = harness();
+    await store.init();
+    const gid = await store.createGroup();
+
+    await store.renameGroup(gid, '生产环境');
+    expect(store.getSnapshot().groups[0]?.name).toBe('生产环境');
+
+    await store.renameGroup(gid, '   ');
+    expect(store.getSnapshot().groups[0]?.name).toBe('生产环境');
+  });
+
+  it('分组读不出来时不连累连接档案', async () => {
+    const h = harness({ stored: [profileOf('a')] });
+    const broken = h.store as unknown as {
+      services: { groups: { load: () => Promise<never> } };
+    };
+    broken.services.groups.load = async () => {
+      throw new Error('分组坏了');
+    };
+
+    await h.store.init();
+
+    const state = h.store.getSnapshot();
+    expect(state.ready).toBe(true);
+    expect(state.profiles).toHaveLength(1); // 连接照样能用
+    expect(state.groups).toEqual([]);
   });
 });

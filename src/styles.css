@@ -2774,8 +2774,14 @@ textarea:focus {
   word-break: break-word;
 }
 
-/* SQL 侧栏：按引擎分的组。只是一层的分组头，不抢连接行自己的样式 */
-.rd-kind-head {
+/* SQL 侧栏：按引擎分的组。只是一层的分组头，不抢连接行自己的样式。
+   ⚠️ 「连接分组」（用户自己建的目录，`shared/connections/ConnectionGroupRow.tsx`）和它是
+   **同一种东西**，所以共用这套样式 —— 两个分组头长得不一样，只会让人以为它们不是
+   一回事。类名分开写（`rd-conn-group-*`）是为了让人一眼看出「引擎那层是系统给的，
+   分组那层是用户自己建的」。
+   ⚠️ 别叫 `.rd-group` —— 那个名字状态栏在用（见文件上方）。 */
+.rd-kind-head,
+.rd-conn-group-head {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -2786,7 +2792,8 @@ textarea:focus {
   color: var(--muted);
 }
 
-.rd-kind-name {
+.rd-kind-name,
+.rd-conn-group-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -2794,8 +2801,15 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.rd-kind-count {
+.rd-kind-count,
+.rd-conn-group-count {
   font-weight: 400;
+}
+
+/* 分组成员缩进一层。引擎头下面**不缩进**（那层只是分类，连接才是第一层实体），
+   而用户分组底下的连接缩进去 —— 一眼看出「这几条是一组的」 */
+.rd-conn-group-body {
+  padding-left: 8px;
 }
 
 /* Mongo 的文档列表：一份一块，带缩进地排开（不是网格 —— 文档是参差的） */
