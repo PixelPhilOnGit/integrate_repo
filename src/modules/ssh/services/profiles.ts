@@ -18,7 +18,13 @@ import {
 } from '../../../shared/connections/profiles';
 import type { KeyValueStore } from '../../../shared/platform/kv';
 import type { ProfileStore } from '../../../shared/connections/types';
-import { DEFAULT_SSH_PORT, type KnownHost, type SshAuthKind, type SshProfile } from '../core/types';
+import {
+  DEFAULT_SSH_PORT,
+  type KnownHost,
+  type SshAuthKind,
+  type SshProfile,
+  type SshProfileKind,
+} from '../core/types';
 import { KNOWN_HOSTS_KEY, sanitizeKnownHosts } from '../core/knownHosts';
 
 export function createSshProfileStore(kv: KeyValueStore): ProfileStore<SshProfile> {
@@ -47,6 +53,17 @@ function asAuthKind(value: unknown): SshAuthKind {
   return value === 'key' ? 'key' : 'password';
 }
 
+/**
+ * ⚠️ **只有明确写了 `local` 才是本地终端，其余一律当 SSH。**
+ *
+ * 这个默认值是整个迁移的关键：v0.4 之前的档案里根本没有这个字段，
+ * 读错的代价是「用户所有连接突然都变成本地终端」—— 那比少一个功能严重得多。
+ * 所以是**白名单**而不是「不是 ssh 就当 local」。
+ */
+function asKind(value: unknown): SshProfileKind {
+  return value === 'local' ? 'local' : 'ssh';
+}
+
 /** 把存储里的不可信数据整形成 `SshProfile[]`，坏记录丢掉而不是让整个列表消失 */
 function sanitize(raw: unknown): SshProfile[] {
   const profiles: SshProfile[] = [];
@@ -61,6 +78,8 @@ function sanitize(raw: unknown): SshProfile[] {
     profiles.push({
       id,
       name: asString(record.name) || '未命名连接',
+      kind: asKind(record.kind),
+      localShell: asString(record.localShell),
       host: asString(record.host) || '127.0.0.1',
       port: asPort(record.port, DEFAULT_SSH_PORT),
       username: asString(record.username),

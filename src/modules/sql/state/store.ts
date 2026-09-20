@@ -14,6 +14,7 @@
  */
 
 import { describeError } from '../../../shared/platform/types';
+import { suggestMongoQuery, suggestSelect } from '../core/query';
 import type { ShellApi } from '../../../shell/types';
 import {
   applyKindSwitch,
@@ -344,9 +345,25 @@ export class SqlStore {
     }
   }
 
-  /** 点侧栏里的一张表 → 在编辑器里生成一句查询 */
-  insertTableQuery(table: string): void {
-    this.set({ editor: `SELECT * FROM ${table} LIMIT 100`, tab: 'result' });
+  /**
+   * 点侧栏里的一张表 → 在编辑器里生成一句查询。
+   *
+   * ⚠️ **带 schema、带引号**：真机上报过 `relation "account_api" does not exist`
+   * —— 表在非 `public` 的 schema 里，而那会儿生成的是裸表名，PostgreSQL 解析
+   * 裸名字只看 `search_path`，必然找不到。规则和理由都在 `core/query.ts`。
+   */
+  insertTableQuery(table: TableInfo): void {
+    const profile = this.selectedProfile();
+    if (profile === null) return;
+    this.set({
+      // Mongo 那边点一个集合填的是 **JSON 查询**（它没有 SQL）—— 分流在这儿做，
+      // 因为「点侧栏一行」这个动作两边是一样的
+      editor:
+        profile.kind === 'mongodb'
+          ? suggestMongoQuery(table.name)
+          : suggestSelect(profile.kind, profile.database, table.schema, table.name),
+      tab: 'result',
+    });
   }
 
   // ---------------------------------------------------------------- 编辑器

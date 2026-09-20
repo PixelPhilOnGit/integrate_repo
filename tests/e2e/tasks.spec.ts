@@ -143,3 +143,40 @@ test('图标栏角标数的是「还没做完的」', async ({ page }) => {
   await page.getByTestId('task-set-done').click();
   await expect(page.getByTestId('tasks-badge')).toHaveText('1');
 });
+
+test('进度记录 + 归档：记几笔 → 归档 → 在归档档里连进度一起回顾', async ({ page }) => {
+  // 用户的原话：「归档后最后回顾才能知道」—— 所以这条用例的重头戏是
+  // **归档之后进度还在不在**
+  await newTask(page, '重构连接池');
+
+  await page.getByTestId('task-progress-input').fill('先看了一遍现有实现');
+  await page.getByTestId('task-progress-add').click();
+  await expect(page.getByTestId('task-progress-list')).toContainText('先看了一遍现有实现');
+
+  // 回车也能记（连续记几笔时不该每次都去点按钮）
+  await page.getByTestId('task-progress-input').fill('发现是定时器没清');
+  await page.getByTestId('task-progress-input').press('Enter');
+  await expect(page.getByTestId('task-progress-list')).toContainText('发现是定时器没清');
+  // 记完输入框该空掉，接着记下一笔
+  await expect(page.getByTestId('task-progress-input')).toHaveValue('');
+
+  await page.getByTestId('task-set-done').click();
+  await page.getByTestId('task-archive').click();
+
+  // 常规列表里收起来了
+  await expect(rows(page)).toHaveCount(0);
+  await expect(page.getByTestId('task-filter-archived')).toBeVisible();
+
+  // 归档那一档里能看到，**而且进度一笔不少**
+  await page.getByTestId('task-filter-archived').click();
+  await expect(rows(page)).toHaveCount(1);
+  await rows(page).first().click();
+  const timeline = page.getByTestId('task-progress-list');
+  await expect(timeline).toContainText('先看了一遍现有实现');
+  await expect(timeline).toContainText('发现是定时器没清');
+
+  // 取消归档 → 回到常规列表
+  await page.getByTestId('task-archive').click();
+  await page.getByTestId('task-filter-all').click();
+  await expect(rows(page)).toHaveCount(1);
+});

@@ -16,6 +16,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { platform } from '../../../shared/platform';
+import { formatTime } from '../core/format';
 import { STATUS_LABEL, STATUS_ORDER, type Task } from '../core/types';
 import type { TasksStore } from '../state/store';
 
@@ -79,6 +80,23 @@ export function TaskInspector({ task, store }: Props): ReactNode {
         </div>
 
         <div className="rd-task-section">
+          <h4 className="rd-task-section-title">收拾</h4>
+          <button
+            type="button"
+            className="rd-btn"
+            data-testid="task-archive"
+            onClick={() => void store.patch(task.id, { archived: !task.archived })}
+          >
+            {task.archived ? '取消归档' : '归档（从列表里收起来）'}
+          </button>
+          <p className="rd-hint rd-muted">
+            {task.archived
+              ? '它现在只在左侧的「归档」那一档里。取消归档就回到常规列表。'
+              : '归档不删东西：它只是从常规列表里收起来，去左侧「归档」那一档还能看到（进度记录都在）。'}
+          </p>
+        </div>
+
+        <div className="rd-task-section">
           <button
             type="button"
             className="rd-btn rd-danger"
@@ -94,15 +112,4 @@ export function TaskInspector({ task, store }: Props): ReactNode {
   );
 }
 
-/**
- * 绝对时间。
- *
- * ⚠️ 这里**刻意不用**「N 分钟前」那种相对时间：那个函数住在 agents 模块里
- * （跨模块 import 违反分层），而且「这条任务是什么时候建的」问的是**确切时刻**，
- * 相对时间反而要用户自己换算。
- */
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
+

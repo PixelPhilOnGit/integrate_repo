@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 随机拿一个空闲端口
-fn free_port() -> u16 {
+pub fn free_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("应该能绑定一个临时端口");
     listener.local_addr().expect("应该能读到端口").port()
 }
@@ -152,7 +152,7 @@ impl Drop for Server {
     }
 }
 
-fn wait_for_port(port: u16, timeout: Duration) -> bool {
+pub fn wait_for_port(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {

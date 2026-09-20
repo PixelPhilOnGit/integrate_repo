@@ -18,6 +18,10 @@ function metrics(patch: Partial<TermMetrics> = {}): TermMetrics {
     lines: 100,
     cursorLine: 0,
     cursorCol: 0,
+    // 内容的末尾。**给个真实值**（默认 100 = 整段都有内容），不然色条高度
+    // 会被算成 1 行，那些断言就全变成假的绿
+    lastContentLine: 100,
+    cols: 80,
     alt: false,
     ...patch,
   };

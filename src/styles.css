@@ -2735,3 +2735,80 @@ textarea:focus {
 .rd-tree-refresh {
   margin-left: auto;
 }
+
+/* 进度记录：一行「输入 + 记一笔」，下面一条时间线 */
+.rd-task-progress-add {
+  display: flex;
+  gap: 6px;
+}
+
+.rd-task-progress-add > input {
+  flex: 1;
+  min-width: 0;
+}
+
+.rd-task-progress-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* 时间在左、内容在右：扫的时候一眼看到「什么时候」，细读再看「干了什么」 */
+.rd-task-progress-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.rd-task-progress-time {
+  flex: none;
+  font-size: 11px;
+}
+
+.rd-task-progress-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* SQL 侧栏：按引擎分的组。只是一层的分组头，不抢连接行自己的样式 */
+.rd-kind-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px 3px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+}
+
+.rd-kind-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-kind-count {
+  font-weight: 400;
+}
+
+/* Mongo 的文档列表：一份一块，带缩进地排开（不是网格 —— 文档是参差的） */
+.rd-mongo-doc {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 420px;
+  overflow: auto;
+}

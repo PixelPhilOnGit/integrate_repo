@@ -54,7 +54,10 @@ function sameBands(a: readonly BlockBand[], b: readonly BlockBand[]): boolean {
       band.top === other.top &&
       band.height === other.height &&
       band.lane === other.lane &&
-      band.title === other.title
+      band.title === other.title &&
+      // ⚠️ **折没折也算「变了」**：折叠状态变了而几何恰好没变时，少了这一条
+      // 就不会重渲染，色条会一直显示旧状态（真机上就是「展开之后还显示折着」）
+      band.folded === other.folded
     );
   });
 }
@@ -64,13 +67,26 @@ export function BlockGutter({ sessionId, store }: Props): ReactNode {
   const [copied, setCopied] = useState<number | null>(null);
   const timer = useRef<number | null>(null);
 
+  /**
+   * 「重新画一次」。
+   *
+   * 真正的实现在下面那个 effect 里（它要订阅视口事件 ✓），这里只是把它挂出来
+   * 给**事件处理器**用 —— `schedule` 定义在 effect 内部，直接在外面的
+   * `onDoubleClick` 里调是**够不着的**（会抛 ReferenceError，而那个异常正好
+   * 发生在折叠调用之后，于是「折叠生效了、色条却没重画」）。
+   */
+  const redraw = useRef<() => void>(() => {});
+
   useEffect(() => {
     let frame: number | null = null;
 
     const draw = (): void => {
       frame = null;
       const metrics = terminalHub.metrics(sessionId);
-      const next = metrics === null ? [] : bandsOf(store.blocksOf(sessionId), metrics);
+      const next =
+        metrics === null
+          ? []
+          : bandsOf(store.blocksOf(sessionId), metrics, store.foldedBlocks(sessionId));
       // ⚠️ **没变就不 setState**：远端刷屏时这个回调每帧都来，而绝大多数帧里
       // 色条一个像素都没动（新输出还在视口下面）。照单全收的话，React 会在
       // 每个动画帧里重渲染一遍侧栏外的这一块 —— 长时间跑就是白烧 CPU。
@@ -82,9 +98,11 @@ export function BlockGutter({ sessionId, store }: Props): ReactNode {
       frame = requestAnimationFrame(draw);
     };
 
+    redraw.current = schedule;
     schedule();
     const off = terminalHub.onViewport(sessionId, schedule);
     return () => {
+      redraw.current = () => {};
       off();
       if (frame !== null) cancelAnimationFrame(frame);
     };
@@ -104,13 +122,12 @@ export function BlockGutter({ sessionId, store }: Props): ReactNode {
     timer.current = window.setTimeout(() => setCopied(null), COPIED_MS);
   };
 
-  const foldedIds = store.foldedBlocks(sessionId);
   const foldable = store.canFold(sessionId);
 
   return (
     <div className="rd-ssh-blocks" data-testid={`ssh-blocks-${sessionId}`}>
       {bands.map((band) => {
-        const isFolded = foldedIds.has(band.id);
+        const isFolded = band.folded;
         const classes = [
           'rd-ssh-band',
           `is-lane${band.lane}`,
@@ -137,7 +154,16 @@ export function BlockGutter({ sessionId, store }: Props): ReactNode {
             data-band-command={band.command}
             data-band-folded={isFolded ? 'true' : 'false'}
             onClick={() => copy(band)}
-            onDoubleClick={() => store.toggleBlockFold(sessionId, band.id)}
+            onDoubleClick={() => {
+              store.toggleBlockFold(sessionId, band.id);
+              // ⚠️ **折叠之后要自己再画一次。**
+              //
+              // `redraw` 内部会通知一次视口变化，但那次发生在**状态更新之前**
+              // （`folded` 集合和行号都还是旧的）—— 于是色条画出来的是折之前
+              // 的样子，而且之后没人再通知，它就那样停着。
+              // 表现：折叠/展开都"没反应"，点色条也对不上位置（真机上报过）。
+              redraw.current();
+            }}
           />
         );
       })}

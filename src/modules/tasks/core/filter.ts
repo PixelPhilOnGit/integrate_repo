@@ -13,8 +13,13 @@
 
 import type { Task, TaskStatus } from './types';
 
-/** `all` = 不按状态筛 */
-export type StatusFilter = TaskStatus | 'all';
+/**
+ * `all` = 不按状态筛；`archived` = **只看归档的**。
+ *
+ * 归档不是第四种状态（状态只有三档），它是「还要不要摆在眼前」——
+ * 所以它在这一层是一个**视图**，不掺进 `TaskStatus` 里。
+ */
+export type StatusFilter = TaskStatus | 'all' | 'archived';
 
 export interface TaskFilter {
   /** 在标题和描述里找（大小写不敏感的**子串**匹配）。空串 = 不筛 */
@@ -35,7 +40,17 @@ export function filterTasks(tasks: readonly Task[], filter: TaskFilter): Task[] 
   const needle = filter.query.trim().toLowerCase();
 
   return tasks.filter((task) => {
-    if (filter.status !== 'all' && task.status !== filter.status) return false;
+    // ⚠️ 归档是个**互斥的视图**：选「归档」就只看归档的，选别的就**一律不看**
+    // 归档的（它们在列表里呆着只会碍事）
+    if (filter.status === 'archived') {
+      if (!task.archived) return false;
+    } else if (task.archived) {
+      return false;
+    }
+
+    if (filter.status !== 'all' && filter.status !== 'archived' && task.status !== filter.status) {
+      return false;
+    }
     if (needle === '') return true;
 
     return (
@@ -48,11 +63,26 @@ export function filterTasks(tasks: readonly Task[], filter: TaskFilter): Task[] 
   });
 }
 
-/** 各状态几条。侧栏的筛选器上显示，也是模块角标的来源 */
+/**
+ * 各状态几条。侧栏的筛选器上显示，也是模块角标的来源。
+ *
+ * ⚠️ **归档的不计** —— 和 Rust 那边 `counts()` 一个口径：数的是「手头还有多少事」，
+ * 归档的意思是「这些不用看了」。算进去的话角标会一直挂着一个数。
+ */
 export function countByStatus(tasks: readonly Task[]): Record<TaskStatus, number> {
   const counts: Record<TaskStatus, number> = { todo: 0, doing: 0, done: 0 };
-  for (const task of tasks) counts[task.status] += 1;
+  for (const task of tasks) {
+    if (task.archived) continue;
+    counts[task.status] += 1;
+  }
   return counts;
+}
+
+/** 归档了几条（那个筛选档上显示的数字） */
+export function archivedCount(tasks: readonly Task[]): number {
+  let n = 0;
+  for (const task of tasks) if (task.archived) n += 1;
+  return n;
 }
 
 /** 「还没做完的」有几条 —— 模块角标上那个数 */

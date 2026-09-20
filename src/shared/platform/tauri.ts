@@ -9,24 +9,22 @@
 
 import type { FileNode, Platform, Prefs } from './types';
 import { EMPTY_PREFS } from './types';
+import { createSqliteKeyValue } from './kv';
 import { invoke } from './invoke';
 
 type DialogModule = typeof import('@tauri-apps/plugin-dialog');
-type StoreModule = typeof import('@tauri-apps/plugin-store');
 
 let dialogMod: Promise<DialogModule> | null = null;
-let storeMod: Promise<StoreModule> | null = null;
 
 const dialog = (): Promise<DialogModule> => (dialogMod ??= import('@tauri-apps/plugin-dialog'));
-const store = (): Promise<StoreModule> => (storeMod ??= import('@tauri-apps/plugin-store'));
 
-let prefsStore: Promise<Awaited<ReturnType<StoreModule['load']>>> | null = null;
-function prefs() {
-  if (!prefsStore) {
-    prefsStore = store().then((m) => m.load('prefs.json', { autoSave: true }));
-  }
-  return prefsStore;
-}
+/**
+ * 外壳偏好走**和模块一样的那套键值存储**（SQLite）。
+ *
+ * 老的 `prefs.json` 会在第一次读的时候被搬进来（键名沿用原来的，所以值一一对上）。
+ * 搬迁失败时它自己会退回老实现 —— 见 `kv.ts`。
+ */
+const prefsKv = createSqliteKeyValue('prefs');
 
 export function createTauriPlatform(): Platform {
   return {
@@ -117,10 +115,9 @@ export function createTauriPlatform(): Platform {
     },
 
     async getPrefs(): Promise<Prefs> {
-      const s = await prefs();
-      const recent = await s.get<string[]>('recentWorkspaces');
-      const last = await s.get<string | null>('lastWorkspace');
-      const theme = await s.get<string>('theme');
+      const recent = await prefsKv.get<string[]>('recentWorkspaces');
+      const last = await prefsKv.get<string | null>('lastWorkspace');
+      const theme = await prefsKv.get<string>('theme');
       return {
         recentWorkspaces: Array.isArray(recent) ? recent : [],
         lastWorkspace: typeof last === 'string' ? last : null,
@@ -129,13 +126,11 @@ export function createTauriPlatform(): Platform {
     },
 
     async setPrefs(patch: Partial<Prefs>): Promise<void> {
-      const s = await prefs();
       const current = await this.getPrefs();
       const next: Prefs = { ...EMPTY_PREFS, ...current, ...patch };
-      await s.set('recentWorkspaces', next.recentWorkspaces);
-      await s.set('lastWorkspace', next.lastWorkspace);
-      await s.set('theme', next.theme);
-      await s.save();
+      await prefsKv.set('recentWorkspaces', next.recentWorkspaces);
+      await prefsKv.set('lastWorkspace', next.lastWorkspace);
+      await prefsKv.set('theme', next.theme);
     },
   };
 }

@@ -17,11 +17,13 @@
  * （真持久化不归这一层管，那是 Rust 集成测试的职责）。
  */
 
-import type { Task, TaskPatch } from '../core/types';
+import type { Progress, Task, TaskPatch } from '../core/types';
 import type { TasksClient } from './types';
 
 /** 模块级的一份数据：同一页面里的多次调用共用（和真库一样） */
 let tasks: Task[] = [];
+/** 进度记录。按任务 id 分组（和真库里那张表是一个意思） */
+let progress = new Map<string, Progress[]>();
 let seq = 0;
 
 function newId(now: number): string {
@@ -54,6 +56,7 @@ export function createWebTasksClient(): TasksClient {
         createdAt: now,
         updatedAt: now,
         doneAt: null,
+        archived: false,
       };
       tasks = [...tasks, task];
       return task;
@@ -77,6 +80,7 @@ export function createWebTasksClient(): TasksClient {
         }
         next.status = patch.status;
       }
+      if (patch.archived !== undefined) next.archived = patch.archived;
       next.updatedAt = Date.now();
 
       tasks = tasks.map((t) => (t.id === id ? next : t));
@@ -86,7 +90,26 @@ export function createWebTasksClient(): TasksClient {
     async remove(id) {
       const before = tasks.length;
       tasks = tasks.filter((t) => t.id !== id);
+      // 进度跟着走（真库那边是 ON DELETE CASCADE，语义要一致）
+      progress.delete(id);
       return tasks.length !== before;
+    },
+
+    async progressOf(taskId) {
+      return [...(progress.get(taskId) ?? [])];
+    },
+
+    async addProgress(taskId, text) {
+      const trimmed = text.trim();
+      if (trimmed === '') throw new Error('这条任务存不下去：这一笔是空的');
+      if (!tasks.some((t) => t.id === taskId)) throw new Error(`没有这条任务：${taskId}`);
+
+      const now = Date.now();
+      const entry: Progress = { id: newId(now), taskId, at: now, text: trimmed };
+      progress.set(taskId, [...(progress.get(taskId) ?? []), entry]);
+      // 真库那边记一笔会顶起 updated_at（列表按它排），这边跟上
+      tasks = tasks.map((t) => (t.id === taskId ? { ...t, updatedAt: now } : t));
+      return entry;
     },
   };
 }
@@ -94,5 +117,6 @@ export function createWebTasksClient(): TasksClient {
 /** 只给测试用：把假库清空（e2e 之间互不影响） */
 export function __resetTasksForTest(): void {
   tasks = [];
+  progress = new Map();
   seq = 0;
 }

@@ -22,7 +22,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use devtoolkit_tasks::{Task, TaskCounts, TaskPatch, TaskStore};
+use devtoolkit_tasks::{Progress, Task, TaskCounts, TaskPatch, TaskStore};
 use tauri::{AppHandle, Manager, State};
 
 /// 惰性打开的库。整个应用一份。
@@ -124,4 +124,27 @@ pub async fn tasks_delete(
 ) -> Result<bool, String> {
     let state = state.inner().clone();
     blocking(move || with_store(&app, &state, |store| store.delete(&id))).await
+}
+
+/// 一条任务的进度记录（从早到晚）。
+#[tauri::command]
+pub async fn tasks_progress(
+    app: AppHandle,
+    state: State<'_, Arc<TasksState>>,
+    task_id: String,
+) -> Result<Vec<Progress>, String> {
+    let state = state.inner().clone();
+    blocking(move || with_store(&app, &state, |store| store.progress_of(&task_id))).await
+}
+
+/// 记一笔进度。时间由 Rust 侧给（不给前端传 —— 那是这条记录的意义所在）。
+#[tauri::command]
+pub async fn tasks_add_progress(
+    app: AppHandle,
+    state: State<'_, Arc<TasksState>>,
+    task_id: String,
+    text: String,
+) -> Result<Progress, String> {
+    let state = state.inner().clone();
+    blocking(move || with_store(&app, &state, |store| store.add_progress(&task_id, &text))).await
 }

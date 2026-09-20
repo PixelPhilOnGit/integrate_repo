@@ -9,7 +9,7 @@
  * 在假实现上通过、到真机上全是 bug —— 这是这个仓库反复踩过的坑。
  */
 
-import type { Task, TaskPatch } from '../core/types';
+import type { Progress, Task, TaskPatch } from '../core/types';
 
 export interface TasksClient {
   /** 全部任务（最近改过的在前）。Rust 那边排好序 */
@@ -18,4 +18,8 @@ export interface TasksClient {
   update(id: string, patch: TaskPatch): Promise<Task>;
   /** 返回「本来有没有这条」 */
   remove(id: string): Promise<boolean>;
+  /** 一条任务的进度，从早到晚 */
+  progressOf(taskId: string): Promise<Progress[]>;
+  /** 记一笔进度（时间由后端给） */
+  addProgress(taskId: string, text: string): Promise<Progress>;
 }

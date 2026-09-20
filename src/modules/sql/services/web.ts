@@ -7,8 +7,14 @@
  * 假引擎在 `core/fakeSql.ts`（纯逻辑、可单测），这里只做连接层的事。
  */
 
-import { DEMO_DATABASES, demoTables, runFakeQuery } from '../core/fakeSql';
-import type { QueryResult, ServerInfo, TableInfo } from '../core/types';
+import {
+  DEMO_DATABASES,
+  demoTables,
+  fakeCollections,
+  runFakeMongoQuery,
+  runFakeQuery,
+} from '../core/fakeSql';
+import type { QueryResult, ServerInfo, SqlKind, TableInfo } from '../core/types';
 import type { SqlClient } from './types';
 
 /**
@@ -26,6 +32,14 @@ interface Session {
   database: string;
 }
 
+/** 假版本号，编得像一点（界面上要显示） */
+const FAKE_VERSION: Record<SqlKind, string> = {
+  postgres: '16.4',
+  mysql: '8.0.46',
+  clickhouse: '24.8',
+  mongodb: '7.0',
+};
+
 export function createWebSqlClient(): SqlClient {
   const sessions = new Map<string, Session>();
 
@@ -40,7 +54,10 @@ export function createWebSqlClient(): SqlClient {
         );
       }
 
-      if (params.username.trim() === '') {
+      // ⚠️ **和真实现一个口径**：Mongo 允许空用户名（本地常常不开鉴权），
+      // 其余三种必须要 —— 假实现要是"一律要求"，浏览器里连不上而真机上能连，
+      // 那这条链路等于没验过
+      if (params.kind !== 'mongodb' && params.username.trim() === '') {
         throw new Error(`连接数据库（${address}）失败：用户名不能为空。`);
       }
 
@@ -48,7 +65,7 @@ export function createWebSqlClient(): SqlClient {
         address,
         kind: params.kind,
         // 版本号编得像一点，界面上要显示
-        version: params.kind === 'mysql' ? '8.0.46' : '16.4',
+        version: FAKE_VERSION[params.kind],
         // 没指定库就落到演示库上（真 MySQL 允许不选库，但那样什么都看不出来）
         database: params.database === '' ? (DEMO_DATABASES[0] ?? 'postgres') : params.database,
       };
@@ -67,11 +84,11 @@ export function createWebSqlClient(): SqlClient {
       sessions.delete(id);
     },
 
-    async query(id: string, sql: string): Promise<QueryResult> {
+    async query(id: string, text: string): Promise<QueryResult> {
       const session = sessionOf(id);
-      void session;
       // 假引擎是同步的，但接口是异步的（真实现要走网络）
-      return runFakeQuery(sql);
+      // Mongo 那边传的是 **JSON 查询**而不是 SQL（见 core/query.ts 的说明）
+      return session.kind === 'mongodb' ? runFakeMongoQuery(text) : runFakeQuery(text);
     },
 
     async databases(id: string): Promise<string[]> {
@@ -81,7 +98,10 @@ export function createWebSqlClient(): SqlClient {
     },
 
     async tables(id: string): Promise<TableInfo[]> {
-      return demoTables(sessionOf(id).database);
+      const session = sessionOf(id);
+      return session.kind === 'mongodb'
+        ? fakeCollections(session.database)
+        : demoTables(session.database);
     },
 
     async useDatabase(id: string, database: string): Promise<ServerInfo> {

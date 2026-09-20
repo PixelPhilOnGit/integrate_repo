@@ -10,10 +10,35 @@ import type {
   ConnectionRuntime as BaseRuntime,
 } from '../../../shared/connections/types';
 
+/**
+ * 这个连接是**远端**还是**本地**。
+ *
+ * 用户的原话：「偶尔还是要用本地 ps、cmd 的」。本地终端不是另一种协议 ——
+ * 它就是「换个地方起 shell」，所以它和 SSH 共用**同一套会话模型**（标签栏、
+ * 命令块、色条、复制粘贴全都复用），差别只在字节从哪来。
+ */
+export type SshProfileKind = 'ssh' | 'local';
+
 /** 认证方式。密码走基类那个 `password` 字段，私钥走下面两个 */
 export type SshAuthKind = 'password' | 'key';
 
 export interface SshProfile extends ConnectionProfileBase {
+  /**
+   * `ssh` = 连远端；`local` = 在本机起一个 shell。
+   *
+   * ⚠️ **旧档案没有这个字段** —— 读进来一律当 `ssh`（见 `services/profiles.ts`）。
+   * 加字段时默认值选错的代价是「用户所有连接突然指着本地」，
+   * 那比多一条迁移代码严重得多。
+   */
+  kind: SshProfileKind;
+  /**
+   * 本地终端用哪个 shell。**空串 = 平台默认**（Windows 上 `pwsh` → `powershell`
+   * → `cmd` 探测，Unix 上 `$SHELL` → `/bin/sh`）。
+   *
+   * 选项目前是 Windows 导向的（用户就是在那儿要的 cmd / PowerShell）。
+   * 在 macOS / Linux 上留空即可 —— 填了别的名字会得到一句「起不来」的明确报错。
+   */
+  localShell: string;
   authKind: SshAuthKind;
   /**
    * 私钥文件路径。
@@ -222,3 +247,23 @@ export const AUTH_LABEL: Record<SshAuthKind, string> = {
   password: '密码',
   key: '私钥文件',
 };
+
+/** 连接种类的中文名 */
+export const KIND_LABEL: Record<SshProfileKind, string> = {
+  ssh: 'SSH 连接',
+  local: '本地终端',
+};
+
+/**
+ * 本地终端能选的 shell。**空串是「平台默认」**（推荐，也是默认值）。
+ *
+ * 后面几条是 Windows 上的：`pwsh`（PowerShell 7）不一定装了，`powershell`
+ * （5.1）系统自带，`cmd` 永远在。名字交给 Rust 那边的 portable-pty 去 PATH 里找，
+ * 它自己会补 `PATHEXT`。
+ */
+export const LOCAL_SHELLS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: '', label: '平台默认（推荐）' },
+  { value: 'pwsh', label: 'PowerShell 7（pwsh）' },
+  { value: 'powershell', label: 'Windows PowerShell' },
+  { value: 'cmd', label: 'cmd' },
+];

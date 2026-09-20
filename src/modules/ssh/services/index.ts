@@ -12,6 +12,7 @@
 
 import { createKeyValue } from '../../../shared/platform/kv';
 import { isTauri } from '../../../shared/platform/detect';
+import { createTauriLocalClient, createWebLocalClient } from './local';
 import { createKnownHostStore, createSshProfileStore } from './profiles';
 import { createTauriSshClient } from './tauri';
 import { createWebSshClient } from './web';
@@ -27,6 +28,7 @@ const kv = createKeyValue({
 
 export const sshServices: SshServices = {
   client: isTauri() ? createTauriSshClient() : createWebSshClient(),
+  local: isTauri() ? createTauriLocalClient() : createWebLocalClient(),
   profiles: createSshProfileStore(kv),
   knownHosts: createKnownHostStore(kv),
 };

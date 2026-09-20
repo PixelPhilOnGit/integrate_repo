@@ -519,3 +519,78 @@ test('侧栏搜索：按连接名过滤；搜会话名时把那条连接自动�
   await page.getByTestId('ssh-conn-search-clear').click();
   await expect(page.locator('[data-conn-name]')).toHaveCount(2);
 });
+
+// ------------------------------------------------------------------ 本地终端
+
+test('本地终端：建一个、敲命令、命令块照常', async ({ page }) => {
+  await expect(page.getByTestId('ssh-conn-list')).toContainText('还没有连接');
+
+  // 「本地」是单独一个按钮 —— 「新建」那条路一个字都没变
+  await page.getByTestId('ssh-btn-new-local').click();
+
+  // 侧栏那一行说的是「本地」，不是 `127.0.0.1:22` 那种看着像远端的东西
+  const row = page.locator('[data-testid^="conn-"]').first();
+  await expect(row).toContainText('本地');
+  await expect(page.getByTestId('ssh-field-kind')).toHaveValue('local');
+
+  // 本地终端**没有信任这一步**（那台机器就是用户自己这台）
+  await page.getByTestId('ssh-btn-connect').click();
+  await expect(page.getByTestId('ssh-trust-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('ssh-status')).toContainText('已连接');
+
+  // 而且它是**真的**终端：敲一条命令，断言输出
+  await expect.poll(() => termText(page)).toContain('devtoolkit@local');
+  await type(page, 'echo 本地也要能用');
+  await expect.poll(() => termText(page)).toContain('本地也要能用');
+
+  // 命令块（色条）那套在本地终端上照常工作 —— 它只认「会话」
+  await expect(page.locator('[data-band-command="echo 本地也要能用"]')).toHaveCount(1);
+
+  // 侧栏的状态点：本地终端连着的时候也是「已连接」
+  await expect(row).toHaveAttribute('data-status', 'connected');
+});
+
+test('本地终端：切 shell 之后再开一个，用的是新 shell', async ({ page }) => {
+  await page.getByTestId('ssh-btn-new-local').click();
+  await page.getByTestId('ssh-field-local-shell').selectOption('cmd');
+
+  await page.getByTestId('ssh-btn-connect').click();
+  await expect(page.getByTestId('ssh-status')).toContainText('已连接');
+
+  // 假实现里 shell 只影响「起得起来」这件事（和真实现一样：名字交给后端去找），
+  // 所以这里验的是**参数确实传下去了** —— 真机上的差别归 Rust 那组测试
+  const requests = await page.evaluate(() => {
+    const w = window as unknown as { __sshLocalRequests?: Array<{ shell: string }> };
+    return w.__sshLocalRequests ?? [];
+  });
+  expect(requests.some((r) => r.shell === 'cmd')).toBe(true);
+});
+
+test('命令块：折叠再展开，色条要回到原来的高度', async ({ page }) => {
+  // ⚠️ 这条盯的是**几何往返**。真机上报过「折叠之后色条全乱、鼠标点哪儿都不对」，
+  // 那底下叠了六个 bug（终点算错、光标当内容末尾、sameBands 漏比 folded、
+  // 展开时 delta 现算、补偿重画的 schedule 不在作用域、write 回调早于解析）。
+  // 所以这里只断言**用户看得见的那件事**：折起来变小、展开回原样。
+  await connectAndTrust(page);
+  await expect.poll(() => termText(page)).toContain('输入 help');
+
+  await type(page, 'help');
+  await expect.poll(() => termText(page)).toContain('按子串过滤文件的每一行');
+
+  const band = page.locator('[data-band-command="help"]');
+  const heightOf = async (): Promise<number> => (await band.boundingBox())?.height ?? 0;
+
+  const before = await heightOf();
+  expect(before).toBeGreaterThan(100); // help 的输出是一大块
+
+  // 折叠：色条缩到一行左右
+  await page.waitForTimeout(500);
+  await band.dblclick();
+  await expect(band).toHaveAttribute('data-band-folded', 'true');
+  await expect.poll(heightOf).toBeLessThan(40);
+
+  // 展开：**高度必须回来**（真机上就是这一步不对）
+  await band.dblclick();
+  await expect(band).toHaveAttribute('data-band-folded', 'false');
+  await expect.poll(heightOf).toBeGreaterThan(before - 40);
+});

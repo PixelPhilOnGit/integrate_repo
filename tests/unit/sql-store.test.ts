@@ -57,8 +57,8 @@ function harness(options: { stored?: SqlProfile[] } = {}): Harness {
     query: vi.fn(async (): Promise<QueryResult> => OK_RESULT),
     databases: vi.fn(async () => ['postgres', 'demo']),
     tables: vi.fn(async (): Promise<TableInfo[]> => [
-      { name: '用户', kind: 'table' },
-      { name: '订单', kind: 'table' },
+      { name: '用户', schema: 'public', kind: 'table' },
+      { name: '订单', schema: 'public', kind: 'table' },
     ]),
     useDatabase: vi.fn(async (_id: string, database: string) => ({ ...info, database })),
   };
@@ -221,8 +221,19 @@ describe('SQL 换库', () => {
 
   it('点一张表会生成一句查询塞进编辑器', async () => {
     const { store } = await connected();
-    store.insertTableQuery('用户');
-    expect(store.getSnapshot().editor).toBe('SELECT * FROM 用户 LIMIT 100');
+    store.insertTableQuery({ name: '用户', schema: 'public', kind: 'table' });
+    // `public` 是默认 schema → 不带前缀；名字**一律加引号**
+    // （大小写混写的表名不加引号选不中，统一加省得「有时候行有时候不行」）
+    expect(store.getSnapshot().editor).toBe('SELECT * FROM "用户" LIMIT 100');
+  });
+
+  it('⚠️ 非默认 schema 的表要带上 schema —— 否则 PG 报 relation 不存在', async () => {
+    // 真机上的报错：能看到表、能连上，点一下生成的却是裸表名，
+    // 执行报 `ERROR: relation "account_api" does not exist`
+    // （PostgreSQL 解析裸表名只看 search_path，表在别的 schema 里就找不到）
+    const { store } = await connected();
+    store.insertTableQuery({ name: 'account_api', schema: 'account', kind: 'table' });
+    expect(store.getSnapshot().editor).toBe('SELECT * FROM "account"."account_api" LIMIT 100');
   });
 });
 

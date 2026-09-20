@@ -16,6 +16,7 @@
 
 import type { ReactNode } from 'react';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
+import { archivedCount } from '../core/filter';
 import { STATUS_LABEL, STATUS_ORDER } from '../core/types';
 import type { TasksState, TasksStore } from '../state/store';
 
@@ -73,6 +74,16 @@ export function TaskList({ state, store }: Props): ReactNode {
               onClick={() => store.setStatus(status)}
             />
           ))}
+          {/* 归档单独一档：它不是第四种状态，是「收起来了的那些」 */}
+          {archivedCount(state.tasks) > 0 && (
+            <FilterChip
+              label="归档"
+              count={archivedCount(state.tasks)}
+              active={state.filter.status === 'archived'}
+              testId="task-filter-archived"
+              onClick={() => store.setStatus('archived')}
+            />
+          )}
         </div>
       )}
 

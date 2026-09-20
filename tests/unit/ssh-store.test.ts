@@ -24,7 +24,12 @@ const hub = vi.hoisted(() => ({
 vi.mock('../../src/modules/ssh/core/terminalHub', () => ({ terminalHub: hub }));
 
 import type { KnownHost, SshProfile } from '../../src/modules/ssh/core/types';
-import type { SshClient, SshServices } from '../../src/modules/ssh/services/types';
+import type {
+  LocalClient,
+  LocalOpenRequest,
+  SshClient,
+  SshServices,
+} from '../../src/modules/ssh/services/types';
 import { SshStore } from '../../src/modules/ssh/state/store';
 import type { ShellApi } from '../../src/shell/types';
 import { __resetIdsForTest } from '../../src/shared/ids';
@@ -41,6 +46,9 @@ function profile(patch: Partial<SshProfile> = {}): SshProfile {
     host: '127.0.0.1',
     port: 22,
     username: 'root',
+    // 旧档案里没有这两个字段 —— 夹具也按「读进来默认是 ssh」来写
+    kind: 'ssh',
+    localShell: '',
     authKind: 'password',
     password: 'secret',
     privateKeyPath: '',
@@ -60,6 +68,10 @@ const READY = {
 interface Harness {
   store: SshStore;
   client: SshClient;
+  /** 本地终端那边收到过的 open 请求（和 savedProfiles 一个路子：记账而不是断言 mock） */
+  localOpened: LocalOpenRequest[];
+  /** 本地终端那份假 client。断言「走的是本地那条路」用它 */
+  local: LocalClient;
   savedProfiles: SshProfile[][];
   savedHosts: KnownHost[][];
   errors: string[];
@@ -74,6 +86,7 @@ function harness(
   let storedHosts = options.hosts ?? [];
 
   const savedProfiles: SshProfile[][] = [];
+  const localOpened: LocalOpenRequest[] = [];
   const savedHosts: KnownHost[][] = [];
   const errors: string[] = [];
   const statuses: (string | null)[] = [];
@@ -88,8 +101,20 @@ function harness(
     closeAll: vi.fn(async () => {}),
   };
 
+  // 本地终端那份也要**实现全**（同一条理由：少一个方法错误会被 try/catch 吞掉）
+  const local: LocalClient = {
+    open: vi.fn(async (request: LocalOpenRequest) => {
+      localOpened.push(request);
+    }),
+    write: vi.fn(async () => {}),
+    resize: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
+    closeAll: vi.fn(async () => {}),
+  };
+
   const services: SshServices = {
     client,
+    local,
     profiles: {
       load: async () => storedProfiles,
       save: async (next) => {
@@ -116,6 +141,8 @@ function harness(
   return {
     store,
     client,
+    local,
+    localOpened,
     savedProfiles,
     savedHosts,
     errors,
@@ -162,6 +189,7 @@ describe('init', () => {
     // 换一个会抛的 profiles
     const broken = new SshStore({
       client: h.client,
+      local: h.local,
       profiles: {
         load: async () => {
           throw new Error('磁盘坏了');
@@ -537,5 +565,75 @@ describe('删连接', () => {
     expect(h.store.getSnapshot().profiles).toHaveLength(0);
     expect(h.store.getSnapshot().sessions).toHaveLength(0);
     expect(h.savedProfiles.at(-1)).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------------------ 本地终端
+
+describe('本地终端', () => {
+  const localProfile = (patch: Partial<SshProfile> = {}): SshProfile =>
+    profile({ id: 'p1', name: '本地终端', kind: 'local', localShell: '', ...patch });
+
+  it('⚠️ 本地档案走 local client，**一次都不碰 SSH 那条路**', async () => {
+    const h = harness({ stored: [localProfile({ localShell: 'cmd' })] });
+    await h.store.init();
+    h.ready();
+    await h.store.connect('p1');
+
+    expect(h.localOpened).toHaveLength(1);
+    expect(h.localOpened[0]!.shell).toBe('cmd');
+    // 碰了的话会弹「这台机器没见过，要不要信任」—— 而本地终端没有那回事
+    expect(h.client.open).not.toHaveBeenCalled();
+    expect(h.store.getSnapshot().trustPrompt).toBeNull();
+    expect(h.store.statusOf('p1')).toBe('connected');
+  });
+
+  it('本地终端不写已知主机表（没有指纹可记）', async () => {
+    const h = harness({ stored: [localProfile()] });
+    await h.store.init();
+    h.ready();
+    await h.store.connect('p1');
+
+    expect(h.savedHosts).toEqual([]);
+    expect(h.store.getSnapshot().knownHosts).toEqual([]);
+  });
+
+  it('标签标题用连接名（不是 `@` 这种拼不出来的东西）', async () => {
+    const h = harness({ stored: [localProfile({ name: '随手终端' })] });
+    await h.store.init();
+    h.ready();
+    await h.store.connect('p1');
+
+    expect(h.store.getSnapshot().sessions[0]!.title).toBe('随手终端');
+  });
+
+  it('shell 起不来：会话收掉，原因写在 runtime 里', async () => {
+    const h = harness({ stored: [localProfile()] });
+    await h.store.init();
+    h.ready();
+    vi.mocked(h.local.open).mockRejectedValueOnce(new Error('启动 cmd 失败：找不到'));
+
+    await h.store.connect('p1');
+
+    expect(h.store.getSnapshot().sessions).toHaveLength(0);
+    expect(h.store.getSnapshot().runtime['p1']!.status).toBe('error');
+    expect(h.store.statusOf('p1')).toBe('error');
+  });
+
+  it('⚠️ init 时两份会话表都要收（刷新页面不留孤儿本地 shell）', async () => {
+    const h = harness();
+    await h.store.init();
+    expect(h.client.closeAll).toHaveBeenCalledTimes(1);
+    expect(h.local.closeAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('远端档案照旧走 SSH 那条路（本地这条不该抢过去）', async () => {
+    const h = harness({ stored: [profile({ id: 'p1' })] });
+    await h.store.init();
+    h.ready();
+    await h.store.connect('p1');
+
+    expect(h.client.open).toHaveBeenCalledTimes(1);
+    expect(h.localOpened).toHaveLength(0);
   });
 });

@@ -1,0 +1,22 @@
+[package]
+name = "devtoolkit-store"
+version = "0.4.2"
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的键值存储：SQLite（不依赖 Tauri，可脱离 WebKit 测试）"
+license = "MIT"
+
+[dependencies]
+# 和任务内核同一套理由：`bundled` 把 SQLite 编进去，三个平台都不需要用户装东西；
+# 同步 API，命令层丢 blocking 池就够。
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# 只用来**读老文件**（导入）。库里的值原样存 JSON 文本 —— 这一层不认识各模块的
+# 结构，那是模块自己的事。
+#
+# ⚠️ `raw_value` 是**必须的**：普通的 `Value` 会把对象的键重排（BTreeMap），
+# 于是搬迁会把用户的档案改一遍写法 ✗。"搬迁"该是原样搬家，一个字节都不动。
+serde_json = { version = "1", features = ["raw_value"] }
+
+[dev-dependencies]
+tempfile = "3"

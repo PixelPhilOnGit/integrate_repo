@@ -92,6 +92,20 @@ interface Entry {
 }
 
 /**
+ * 从缓冲区末尾往回找**最后一行有内容**的行，返回它的下一行（独占终点）。
+ *
+ * 往回找而不是从头扫：末尾的空行通常只有几行（屏幕没填满的部分），
+ * 所以平摊下来是一两次比较 —— 这个函数每帧都会被叠层问到。
+ */
+function lastContentLine(buffer: import('@xterm/xterm').IBuffer): number {
+  for (let i = buffer.length - 1; i >= 0; i -= 1) {
+    const line = buffer.getLine(i);
+    if (line !== undefined && line.translateToString(true).trim() !== '') return i + 1;
+  }
+  return 0;
+}
+
+/**
  * 量一行多高：屏幕元素的**实际高度 ÷ 行数**。
  *
  * 不用 `fontSize × lineHeight` 自己算：渲染器会取整，自己算迟早差几像素，
@@ -124,11 +138,24 @@ export interface TermMetrics {
   cellHeight: number;
   /** 视口几行 */
   rows: number;
+  /** 视口几列。折叠摘要要截到一行之内，靠它 */
+  cols: number;
   /** 缓冲区总共几行（含回滚） */
   lines: number;
   /** 光标位置（绝对行号 + 列） */
   cursorLine: number;
   cursorCol: number;
+  /**
+   * **最后一行有内容的行号 + 1**（也就是"内容到哪儿结束"的独占终点）。
+   *
+   * ⚠️ 两个都**不能用**：
+   * * `lines`（缓冲区长度）—— 它永远至少是 `rows`，后面全是空行；
+   * * `cursorLine` —— 光标可以被程序挪走、被用户滚动带走，它不代表内容的末尾。
+   *
+   * 「命令块色条」的高度全靠这个值：用错了的表现是折叠之后色条和文字完全对不上
+   * （真机上报过）。
+   */
+  lastContentLine: number;
   /** 全屏程序在跑吗（备用屏幕）。在跑的时候不该做「命令块」这类东西 */
   alt: boolean;
 }
@@ -248,7 +275,16 @@ export class TerminalHub {
     installClipboard(term);
 
     // 视口动了就叫一声：叠层（SSH 那边的命令块色条）要跟着重画。
-    // 只挂这两个事件，别用 `onRender` —— 那个每次重绘都响，滚动时一帧好几次
+    //
+    // ⚠️ **必须挂 `onWriteParsed`，不能自己想办法「等写完了」。**
+    // `term.write()` 是异步排队，而它的**回调时机不保证在解析之后**
+    // （实测：回调里 `buffer.length` 还是旧值、光标还在 0，而稍后内容明明进去了）
+    // —— 用回调去通知，叠层量到的是过期数据，画出来的位置全不对。
+    // `onWriteParsed` 是 xterm 为这件事专门发的事件：每一批写入**解析完之后**触发。
+    //
+    // 所以这里**不再从 `feed` 里通知**：那条路也是 write，会被这个事件覆盖，
+    // 两处都发等于每个字节通知两次。
+    term.onWriteParsed(() => this.notifyViewport(sessionId));
     term.onScroll(() => this.notifyViewport(sessionId));
     term.onLineFeed(() => this.notifyViewport(sessionId));
 
@@ -380,10 +416,8 @@ export class TerminalHub {
   feed(sessionId: string, bytes: Uint8Array): void {
     const entry = this.entries.get(sessionId);
     if (!entry || entry.disposed) return;
+    // 不在这儿通知：写完不等于解析完，通知由 `onWriteParsed` 发（见 `create`）
     entry.term.write(bytes);
-    // 输出也可能推动视口（在底部时每来一行就滚一行），而且叠层要等**写完**
-    // 才知道新内容落在第几行 —— 所以叫在 write 之后
-    this.notifyViewport(sessionId);
   }
 
   /** 往终端里写一行提示（会话结束时用）。会话不在了就静静地算了 */
@@ -502,9 +536,11 @@ export class TerminalHub {
       viewportLine: buffer.viewportY,
       cellHeight: entry.cellHeight,
       rows,
+      cols: entry.term.cols,
       lines: buffer.length,
       cursorLine: buffer.baseY + buffer.cursorY,
       cursorCol: buffer.cursorX,
+      lastContentLine: lastContentLine(buffer),
       alt: buffer.type === 'alternate',
     };
   }
@@ -569,9 +605,18 @@ export class TerminalHub {
       if ('bytes' in part) entry.term.write(part.bytes);
       else entry.term.write(part.text);
     }
-    entry.term.write(modes);
 
-    this.notifyViewport(sessionId);
+    // ⚠️ **通知要等这些内容真的解析完再发。**
+    //
+    // `term.write()` 是**异步**的：它只是把数据排进队列，解析发生在下一拍。
+    // 所以函数返回的那一刻，缓冲区还是**旧**的（长度没变、光标还在 0）——
+    // 这时候通知叠层去重画，它量到的是一份过期数据，画出来的位置全不对
+    // （真机上就是"折叠/展开之后色条全乱、鼠标点哪儿都对不上"）。
+    //
+    // 把通知挂在**最后一次 write 的回调**上：那时候内容已经进去了。
+    // 末尾那个转义序列（粘性模式）也算一次 write，正好当哨兵。
+    entry.term.write(modes);
+    // 通知由 `onWriteParsed` 发（它保证在解析完之后），见 `create`
     return true;
   }
 

@@ -23,6 +23,14 @@ export interface BlockBand {
   lane: 0 | 1;
   /** 命令原文。点一下复制它和输出 */
   command: string;
+  /**
+   * 这一块是不是折着的。
+   *
+   * ⚠️ 放进来是为了让「折没折」参与**要不要重渲染**的判断：折叠状态变了、
+   * 而几何恰好没变的时候（真机上出现过），没有这一条 React 会当成"没变化"，
+   * 色条就一直显示旧状态。
+   */
+  folded: boolean;
   /** 悬浮时显示的一行说明（命令 + 耗时/无输出） */
   title: string;
 }
@@ -31,8 +39,34 @@ export interface BlockBand {
  * 算出色条。只有**和视口有交集**的块才会出现 —— 滚回滚区里几千条色条全画出来
  * 是白费（而且 DOM 一多滚动就卡）。
  */
-export function bandsOf(blocks: readonly CommandBlock[], metrics: TermMetrics): BlockBand[] {
-  const { cellHeight, viewportLine, rows, lines } = metrics;
+/**
+ * 内容**真正的末尾**在第几行。
+ *
+ * ⚠️ **不能用 `metrics.lines`。** 那是 xterm 缓冲区的长度，而缓冲区**永远至少有
+ * `rows` 行**（屏幕多大就有多少行，后面全是空行）—— 用它当"内容到哪儿结束"，
+ * 最后一块色条的高度就会一直是「从它那行到屏幕底部」✗。
+ *
+ * 也不用光标：光标可以被程序挪走、被用户滚动带走 ✗（`scrollback` 里滚上去看
+ * 一眼，光标就不在内容末尾了）。用「最后一行有内容的行」。
+ *
+ * 折叠时这个错会**放大成看上去像坏了**：内容折起来之后只剩几行，而最后一块的
+ * 色条还按 52 行画 —— 色条和文字彻底对不上，鼠标点色条的位置全是错的
+ * （真机上报的现象）。光标在哪，内容就到哪。
+ */
+export function contentEnd(metrics: TermMetrics): number {
+  // ⚠️ 用 `lastContentLine`（最后一行有内容的行）而**不是光标**：
+  // 光标可以被程序挪走、被用户滚动带走，它不代表内容到哪儿结束。
+  return Math.max(1, metrics.lastContentLine);
+}
+
+const NO_FOLDED: ReadonlySet<number> = new Set();
+
+export function bandsOf(
+  blocks: readonly CommandBlock[],
+  metrics: TermMetrics,
+  folded: ReadonlySet<number> = NO_FOLDED,
+): BlockBand[] {
+  const { cellHeight, viewportLine, rows } = metrics;
   if (cellHeight <= 0 || rows <= 0) return [];
 
   const viewTop = viewportLine;
@@ -68,7 +102,8 @@ export function bandsOf(blocks: readonly CommandBlock[], metrics: TermMetrics): 
     // 这一块的输出到哪儿为止：到下一块的起点，最后一块到缓冲区末尾。
     // （这也是为什么不把范围存进块里：下一块出现之前它根本不知道）
     const next = blocks[i + 1];
-    const endLine = next === undefined ? lines : next.line;
+    // 最后一块的终点是**内容末尾**，不是缓冲区末尾 —— 见 `contentEnd`
+    const endLine = next === undefined ? Math.max(contentEnd(metrics), block.line + 1) : next.line;
 
     if (endLine <= viewTop) continue; // 整块都在视口上面
     if (block.line >= viewBottom) break; // 这块和后面的都在视口下面（按顺序的）
@@ -82,6 +117,7 @@ export function bandsOf(blocks: readonly CommandBlock[], metrics: TermMetrics): 
       height,
       lane: i % 2 === 0 ? 0 : 1,
       command: block.command,
+      folded: folded.has(block.id),
       title: bandTitle(block, next === undefined),
     });
   }

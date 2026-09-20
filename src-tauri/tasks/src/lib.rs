@@ -22,4 +22,4 @@ pub mod error;
 pub mod store;
 
 pub use error::TaskError;
-pub use store::{Task, TaskCounts, TaskPatch, TaskStatus, TaskStore};
+pub use store::{Progress, Task, TaskCounts, TaskPatch, TaskStatus, TaskStore};

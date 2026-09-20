@@ -19,14 +19,16 @@ test.beforeEach(async ({ page }) => {
 });
 
 /** 新建一个连接（不连）。点「新建」会先弹引擎选择，选完才建 */
-async function newConnection(page: Page, engine: 'PostgreSQL' | 'MySQL' = 'PostgreSQL'): Promise<void> {
+type EngineName = 'PostgreSQL' | 'MySQL' | 'ClickHouse' | 'MongoDB';
+
+async function newConnection(page: Page, engine: EngineName = 'PostgreSQL'): Promise<void> {
   await page.getByTestId('btn-new-sql-connection').click();
   await page.getByTestId(`menu-${engine}`).click();
   await expect(page.getByTestId('sql-name')).toHaveValue(`新建 ${engine} 连接`);
 }
 
 /** 新建并连上 */
-async function connectNew(page: Page, engine: 'PostgreSQL' | 'MySQL' = 'PostgreSQL'): Promise<void> {
+async function connectNew(page: Page, engine: EngineName = 'PostgreSQL'): Promise<void> {
   await newConnection(page, engine);
   await page.getByTestId('btn-sql-conn-toggle').click();
   await expect(page.getByTestId('sql-status')).toContainText('已连接');
@@ -180,7 +182,9 @@ test('点侧栏的表会生成查询，执行后看到数据', async ({ page }) 
   await connectNew(page);
 
   await page.getByTestId('sql-table-用户').click();
-  await expect(page.getByTestId('sql-editor')).toHaveValue('SELECT * FROM 用户 LIMIT 100');
+  // ⚠️ 名字**带双引号**（大小写混写的表名不加引号选不中，统一加对普通名字无害）；
+  // 表在非默认 schema 里时前面还会带 `"schema".` —— 见 `core/query.ts`
+  await expect(page.getByTestId('sql-editor')).toHaveValue('SELECT * FROM "用户" LIMIT 100');
 
   await page.getByTestId('btn-sql-run').click();
 
@@ -305,4 +309,72 @@ test('侧栏搜索：按名字/引擎过滤，清空之后原样回来', async (
 
   await page.getByTestId('sql-conn-search-clear').click();
   await expect(page.locator('[data-conn-name]')).toHaveCount(2);
+});
+
+test('侧栏按引擎分组：连接挂在它那个种类下面', async ({ page }) => {
+  // 用户要的：「新建 pg，那这个连接属于 pg，也就是连接最好有一个 tag」
+  await page.getByTestId('btn-new-sql-connection').click();
+  await page.getByTestId('menu-PostgreSQL').click();
+  await page.getByTestId('btn-new-sql-connection').click();
+  await page.getByTestId('menu-MySQL').click();
+
+  // 两个组都在，各自一个连接
+  await expect(page.getByTestId('sql-kind-postgres')).toBeVisible();
+  await expect(page.getByTestId('sql-kind-mysql')).toBeVisible();
+  await expect(page.getByTestId('sql-kind-count-postgres')).toHaveText('1');
+  await expect(page.getByTestId('sql-kind-count-mysql')).toHaveText('1');
+
+  // 折叠之后它下面的连接不画了
+  // ⚠️ 用 `.rd-conn-row` 而不是 `[data-testid^="conn-"]`：后者会把行里的
+  // 展开箭头 / 状态点 / 连接按钮（`conn-expand-` / `conn-dot-` / `conn-toggle-`）
+  // 一起算进来，一行会数成 4 个
+  await page.getByTestId('sql-kind-head-postgres').getByRole('button', { name: '收起' }).click();
+  await expect(page.getByTestId('sql-kind-postgres').locator('.rd-conn-row')).toHaveCount(0);
+  await expect(page.getByTestId('sql-kind-mysql').locator('.rd-conn-row')).toHaveCount(1);
+
+  // 组头上那个 ＋ 直接建一个**这种引擎**的连接（不用再去菜单里选一次）
+  await page.getByTestId('sql-kind-new-mysql').click();
+  await expect(page.getByTestId('sql-kind-count-mysql')).toHaveText('2');
+});
+
+
+// ------------------------------------------------------------------ 四种引擎
+
+test('新建时可以选四种引擎，端口默认值跟着引擎走', async ({ page }) => {
+  await page.getByTestId('btn-new-sql-connection').click();
+  for (const engine of ['PostgreSQL', 'MySQL', 'ClickHouse', 'MongoDB'] as const) {
+    await expect(page.getByTestId(`menu-${engine}`)).toBeVisible();
+  }
+
+  await page.getByTestId('menu-ClickHouse').click();
+  await expect(page.getByTestId('sql-port')).toHaveValue('8123'); // HTTP 口，不是 9000
+
+  await page.getByTestId('sql-kind').selectOption('mongodb');
+  await expect(page.getByTestId('sql-port')).toHaveValue('27017');
+  // ⚠️ 切换引擎时**用户没动过的字段**才跟着换（改过的不能抢方向盘）
+});
+
+test('MongoDB：点集合生成 JSON 查询，结果是文档而不是表格', async ({ page }) => {
+  await connectNew(page, 'MongoDB');
+
+  // 侧栏：连接挂在它那个引擎组下面，集合标着「集合」（不是「表」）
+  await expect(page.getByTestId('sql-kind-mongodb')).toBeVisible();
+  await expect(page.getByTestId('sql-table-用户')).toBeVisible();
+  await expect(page.getByTestId('sql-table-用户')).toContainText('集合');
+
+  // 点一个集合 → 编辑器里填的是 **JSON 查询**（Mongo 没有 SQL）
+  await page.getByTestId('sql-table-用户').click();
+  await expect(page.getByTestId('sql-editor')).toHaveValue(/"collection": "用户"/);
+
+  // 执行 → 一份份**文档**，不是结果表格
+  await page.getByTestId('btn-sql-run').click();
+  await expect(page.getByTestId('mongo-count')).toContainText('查到 2 份文档');
+  await expect(page.getByTestId('mongo-doc-0')).toContainText('zhang@example.com');
+  await expect(page.getByTestId('mongo-doc-1')).toContainText('李四');
+  // 参差是文档的本性：第二份没有 email，界面不该因此空一格（那是表格的做法）
+  await expect(page.getByTestId('sql-result-grid')).toHaveCount(0);
+
+  // 引擎报的错**显示在结果区**（那是一次成功的往返，不是外壳的错误条）
+  await run(page, '{"collection":"不存在的集合"}');
+  await expect(page.getByTestId('mongo-error')).toContainText('没有这个集合');
 });

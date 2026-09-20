@@ -40,7 +40,7 @@ export function TasksMain(): ReactNode {
     <TaskEmptyMain />
   ) : (
     // `key` 让换任务时整块重建：受控输入的草稿状态不能跨任务残留
-    <TaskDetail key={task.id} task={task} store={tasksStore} />
+    <TaskDetail key={task.id} task={task} store={tasksStore} progress={state.progress} />
   );
 }
 

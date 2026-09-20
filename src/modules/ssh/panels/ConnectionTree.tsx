@@ -59,6 +59,20 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         >
           新建
         </button>
+        {/*
+          ⚠️ **单独一个按钮，而不是把「新建」改成弹菜单选种类。**
+          一来一回多一步，而且「新建」是这里点得最多的东西；
+          二来 e2e 和用户的手感都是「点一下就是一个 SSH 连接」，
+          那种约定不该为了一个新种类去动。
+        */}
+        <button
+          type="button"
+          data-testid="ssh-btn-new-local"
+          title="在本机起一个 shell（PowerShell / cmd）"
+          onClick={() => void store.createProfile('local')}
+        >
+          本地
+        </button>
       </div>
 
       {/* 一个连接都没有的时候不放搜索框：搜不到任何东西的框是噪音 */}

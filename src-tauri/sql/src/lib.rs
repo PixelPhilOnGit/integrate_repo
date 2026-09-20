@@ -1,8 +1,9 @@
-//! SQL 内核：MySQL 和 PostgreSQL。
+//! 数据库内核：PostgreSQL / MySQL / ClickHouse / MongoDB。
 //!
 //! 分层和 `devtoolkit-core` / `devtoolkit-redis` 一致：**不依赖 Tauri**，
 //! 所以 `cargo test -p devtoolkit-sql` 能在没有 WebKit/GTK 的机器上单独跑，
-//! 集成测试可以自己拉起真的 `postgres` / `mysqld` 来打。
+//! 集成测试可以自己拉起真的服务端来打（pg / mysql 是装了跑的，
+//! ClickHouse / MongoDB 走 Docker —— 见 `tests/` 里各自的说明）。
 //!
 //! # 一条和 Redis 那边一样的语义
 //!
@@ -14,8 +15,10 @@
 //!
 //! 所有单元格**按文本传**，不做完整类型映射。理由和代价写在 `result.rs` 的模块文档里。
 
+mod clickhouse;
 mod conn;
 mod error;
+mod mongo;
 mod result;
 
 pub use conn::{ConnectionConfig, ConnectionRegistry, ServerInfo, SqlKind, TableInfo, CONNECT_TIMEOUT};

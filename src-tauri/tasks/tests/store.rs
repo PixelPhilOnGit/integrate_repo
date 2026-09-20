@@ -248,3 +248,169 @@ fn 库是更新的版本建的时_明确报错_而不是乱改它() {
     // 那句话要能告诉用户怎么办
     assert!(err.to_string().contains("更新的版本"));
 }
+
+// ------------------------------------------------------------------ 归档
+
+#[test]
+fn 新建的任务默认没归档() {
+    let (_dir, store) = open_temp();
+    let task = store.create("还没做完", "").expect("建");
+    assert!(!task.archived);
+}
+
+#[test]
+fn 能归档也能取消归档() {
+    let (_dir, store) = open_temp();
+    let task = store.create("做完了", "").expect("建");
+
+    let archived = store
+        .update(
+            &task.id,
+            &TaskPatch {
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("归档");
+    assert!(archived.archived);
+    // 归档**不动状态**：状态说的是「做没做完」，归档说的是「还要不要摆在眼前」
+    assert_eq!(archived.status, TaskStatus::Todo);
+
+    let back = store
+        .update(
+            &task.id,
+            &TaskPatch {
+                archived: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("取消归档");
+    assert!(!back.archived);
+}
+
+#[test]
+fn 归档的不算进各状态的数量() {
+    // 角标和筛选器数的是「手头还有多少事」—— 归档的意思是「这些不用看了」
+    let (_dir, store) = open_temp();
+    let a = store.create("归档掉", "").expect("建");
+    store.create("留着", "").expect("建");
+
+    store
+        .update(
+            &a.id,
+            &TaskPatch {
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("归档");
+
+    let counts = store.counts().expect("数一下");
+    assert_eq!(counts.todo, 1, "归档的那条不该还算在待办里");
+}
+
+// ------------------------------------------------------------------ 进度记录
+
+#[test]
+fn 记一笔进度_从早到晚读回来() {
+    let (_dir, store) = open_temp();
+    let task = store.create("重构连接池", "").expect("建");
+
+    store.add_progress(&task.id, "先看了一遍现有实现").expect("记");
+    store.add_progress(&task.id, "发现是定时器没清").expect("记");
+
+    let list = store.progress_of(&task.id).expect("读");
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0].text, "先看了一遍现有实现");
+    assert_eq!(list[1].text, "发现是定时器没清");
+    // 时间戳单调（同一毫秒也算过得去：不反转就行）
+    assert!(list[0].at <= list[1].at);
+    assert_eq!(list[0].task_id, task.id);
+}
+
+#[test]
+fn 空的一笔记不进去() {
+    let (_dir, store) = open_temp();
+    let task = store.create("任务", "").expect("建");
+    let err = store.add_progress(&task.id, "   ").unwrap_err();
+    assert!(matches!(err, TaskError::BadInput { .. }));
+}
+
+#[test]
+fn 给不存在的任务记进度会明确报错() {
+    let (_dir, store) = open_temp();
+    let err = store.add_progress("task_没有这条", "写点什么").unwrap_err();
+    assert!(matches!(err, TaskError::NotFound { .. }));
+}
+
+#[test]
+fn 记一笔进度会把任务顶到列表最前面() {
+    // 列表按 updated_at 排 —— 用户记完进度应该看到它冒上来，
+    // 不然「我刚记的那条呢」会很迷惑
+    let (_dir, store) = open_temp();
+    let a = store.create("第一条", "").expect("建");
+    let _b = store.create("第二条", "").expect("建");
+
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    store.add_progress(&a.id, "动了一下").expect("记");
+
+    assert_eq!(store.list().expect("列出来")[0].id, a.id);
+}
+
+#[test]
+fn 删掉任务时它的进度一起走_不留孤儿() {
+    // 外键 + ON DELETE CASCADE。这条**必须有**：不然回顾时会看到一堆
+    // 指向已经不存在的任务的记录，而且永远清不掉
+    let (_dir, store) = open_temp();
+    let task = store.create("要删的", "").expect("建");
+    store.add_progress(&task.id, "第一笔").expect("记");
+
+    assert!(store.delete(&task.id).expect("删"));
+    assert!(store.progress_of(&task.id).expect("读").is_empty());
+}
+
+// ------------------------------------------------------------------ 迁移
+
+#[test]
+fn v1_的库升到_v2_数据一条不丢_而且新字段有默认值() {
+    // ⚠️ 这条是这一版最要紧的测试：用户机器上那个 tasks.db 是 **v1** 建的
+    //（0.4.2 那次），里面可能有真数据。升级只许加列加表，不许重建表。
+    let dir = tempfile::tempdir().expect("建临时目录");
+    let path = dir.path().join("tasks.db");
+
+    // 手工造一个 v1 的库（结构就是 0.4.2 时那一版）
+    let conn = rusqlite::Connection::open(&path).expect("开库");
+    conn.execute_batch(
+        "CREATE TABLE tasks (
+             id         TEXT PRIMARY KEY,
+             title      TEXT NOT NULL,
+             body       TEXT NOT NULL DEFAULT '',
+             note       TEXT NOT NULL DEFAULT '',
+             status     TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             done_at    INTEGER
+         );
+         CREATE INDEX tasks_status_updated ON tasks(status, updated_at DESC);
+         INSERT INTO tasks (id, title, body, note, status, created_at, updated_at, done_at)
+         VALUES ('task_old', '老版本建的', '描述还在吗', '备注也还在吗', 'doing', 1000, 2000, NULL);
+         PRAGMA user_version = 1;",
+    )
+    .expect("造 v1 库");
+    drop(conn);
+
+    // 用现在的代码打开它
+    let store = TaskStore::open(&path).expect("升上来");
+
+    let task = store.get("task_old").expect("老数据还在");
+    assert_eq!(task.title, "老版本建的");
+    assert_eq!(task.body, "描述还在吗");
+    assert_eq!(task.note, "备注也还在吗");
+    assert_eq!(task.status, TaskStatus::Doing);
+    assert_eq!(task.created_at, 1000);
+    // 新列有默认值
+    assert!(!task.archived);
+    // 新表能用了
+    store.add_progress("task_old", "升级之后记的第一笔").expect("记");
+    assert_eq!(store.progress_of("task_old").expect("读").len(), 1);
+}

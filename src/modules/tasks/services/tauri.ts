@@ -7,7 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { Task, TaskPatch } from '../core/types';
+import type { Progress, Task, TaskPatch } from '../core/types';
 import type { TasksClient } from './types';
 
 export function createTauriTasksClient(): TasksClient {
@@ -26,6 +26,14 @@ export function createTauriTasksClient(): TasksClient {
 
     async remove(id) {
       return invoke<boolean>('tasks_delete', { id });
+    },
+
+    async progressOf(taskId) {
+      return invoke<Progress[]>('tasks_progress', { taskId });
+    },
+
+    async addProgress(taskId, text) {
+      return invoke<Progress>('tasks_add_progress', { taskId, text });
     },
   };
 }

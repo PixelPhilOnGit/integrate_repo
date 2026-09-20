@@ -95,8 +95,46 @@ export interface SshClient {
   closeAll(): Promise<void>;
 }
 
+/**
+ * 本地终端要的全部输入。
+ *
+ * 和 `SshOpenRequest` 相比少了什么，恰恰说明了两者的差别：没有主机、没有凭据、
+ * 没有指纹、没有「接受新主机密钥」—— 本地终端**没有信任这一层**（那台机器
+ * 就是用户自己这台）。
+ */
+export interface LocalOpenRequest {
+  /** **会话** id，不是档案 id */
+  id: string;
+  /** 空串 = 平台默认；否则是 shell 的名字（`pwsh` / `cmd`…），交给后端去 PATH 里找 */
+  shell: string;
+  cols: number;
+  rows: number;
+  /** 会话流，和 SSH 那边同一套形状（所以终端那部分一行都不用改） */
+  onEvent: (event: SshEvent) => void;
+}
+
+/**
+ * 本地终端的客户端。
+ *
+ * 只有 `open` 和 SSH 不同 —— 它**没有返回值**：本地终端不存在「连上了但
+ * 主机密钥没见过」这种中间结局，起来了就是起来了，起不来就是抛错。
+ */
+export interface LocalClient {
+  open(request: LocalOpenRequest): Promise<void>;
+  write(id: string, data: Uint8Array): Promise<void>;
+  resize(id: string, cols: number, rows: number): Promise<void>;
+  close(id: string): Promise<void>;
+  /** 收掉全部本地终端。`init()` 里调一次，把刷新页面留下的孤儿收干净 */
+  closeAll(): Promise<void>;
+}
+
 export interface SshServices {
   client: SshClient;
+  /**
+   * 本地终端。**和 `client` 分开是因为契约形状差得远**（见 `local.ts` 头注释），
+   * 而不是因为「一个是 SSH 一个是本地」这种名义上的区别。
+   */
+  local: LocalClient;
   profiles: ProfileStore<SshProfile>;
   /** 已知主机的信任记录。和档案走同一条持久化路径 */
   knownHosts: ProfileStore<KnownHost>;

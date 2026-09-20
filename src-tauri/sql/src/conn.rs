@@ -1,15 +1,23 @@
-//! 连接管理：两种引擎各一个驱动，外面套一层统一的注册表。
+//! 连接管理：每个引擎一个驱动，外面套一层统一的注册表。
 //!
 //! 结构和 `devtoolkit-redis` 的 `ConnectionRegistry` 一致（连接表的锁不能跨 await、
 //! 失败时把坏连接摘掉、同 id 重连即替换），差异全在驱动细节里。
 //!
-//! # 两种引擎的一个真实差异：换库
+//! # 换库这件事，四个引擎三种做法
 //!
 //! * **MySQL**：`USE 库名` 就换了，同一条连接接着用。
 //! * **PostgreSQL**：**一个连接绑定一个库，换不了** —— 这是服务端的模型，
 //!   不是驱动的限制。所以换库要重新建连接。
+//! * **ClickHouse / MongoDB**：库名是**客户端上的一个设置**，重建一个客户端即可
+//!   （底层连接池会复用，不贵）。
 //!
-//! 两条路都实现在 `use_database` 里，对外是同一个行为。
+//! 三种做法都收在 `use_database` 里，对外是同一个行为。
+//!
+//! # ⚠️ MongoDB 的「查询」是一段 JSON，不是 SQL
+//!
+//! 它的 `query` 收的是 [`mongo::MongoCommand`] 那个形状的 JSON。这在
+//! [`ConnectionRegistry::query`] 里按 handle 分流，前端不用关心 —— 它只管把
+//! 用户写的那段东西原样发过来。形状为什么是那样，见 `mongo.rs` 的模块文档。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,6 +37,10 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub enum SqlKind {
     Postgres,
     Mysql,
+    Clickhouse,
+    /// ⚠️ 它不是 SQL —— 归在这个模块里只是因为「它也是用户的一个数据源」。
+    /// 工作台不一样（文档浏览器），别的（连接、档案、凭据）都一样。
+    Mongodb,
 }
 
 impl SqlKind {
@@ -36,14 +48,21 @@ impl SqlKind {
         match self {
             SqlKind::Postgres => "postgres",
             SqlKind::Mysql => "mysql",
+            SqlKind::Clickhouse => "clickhouse",
+            SqlKind::Mongodb => "mongodb",
         }
     }
 
-    /// 默认端口。前端切类型时会跟着换默认值
+    /// 默认端口。前端切类型时会跟着换默认值。
+    ///
+    /// ⚠️ ClickHouse 是 **8123**（HTTP 口）不是 9000（原生协议口）——
+    /// 我们走的是 HTTP 接口，见 `clickhouse.rs` 的模块头。
     pub fn default_port(self) -> u16 {
         match self {
             SqlKind::Postgres => 5432,
             SqlKind::Mysql => 3306,
+            SqlKind::Clickhouse => 8123,
+            SqlKind::Mongodb => 27017,
         }
     }
 }
@@ -63,7 +82,9 @@ pub struct ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    fn address(&self) -> String {
+    /// `host:port`。**同 crate 的引擎文件也要用**（错误文案里要带上地址），
+    /// 所以是 `pub(crate)` 而不是私有
+    pub(crate) fn address(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 }
@@ -79,15 +100,36 @@ pub struct ServerInfo {
     pub database: String,
 }
 
-/// 一个库里的表
+/// 一个库里的表（Mongo 那边是集合）。
+///
+/// ⚠️ **`schema` 不能省。** 真机上栽过：PG 那条列表的查询把**多个 schema**
+/// 的表都列了出来，却只 select 了 `table_name` —— 而 PG 只按 `search_path`
+/// 解析裸表名，表不在 `public` 时前端生成的 `SELECT * FROM 表名` 必然报
+/// 「relation does not exist」。所以带上它，前端拼 `"schema"."表名"`。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TableInfo {
+    /// 表所在的 schema / 库。四个引擎都给：PG 和 MySQL 是 `table_schema`、
+    /// ClickHouse 是 `database`、Mongo 是库名
+    pub schema: String,
     pub name: String,
-    /// BASE TABLE / VIEW
+    /// table / view / collection
     pub kind: String,
     /// 大致行数。拿不到就是 None（Postgres 要额外查统计表，不值得每条都查）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
+}
+
+/// 引擎给回来的失败分成两类。**四个引擎共用一个**（放在这儿而不是各自的文件里，
+/// 否则 `query` 那个 match 的每个分支返回的是不同的类型，编译器直接不让过）。
+///
+/// `Debug` 是给测试用的（单测里 `parse_body(..).expect(..)` 要它）
+#[derive(Debug)]
+pub enum Failure {
+    /// 引擎拒绝了这条语句（表不存在、语法错、filter 不合法）——
+    /// 那是一次成功的往返，只是没成功执行，**是查询结果不是连接故障**
+    Sql(String),
+    /// 连接坏了
+    Broken(String),
 }
 
 enum Handle {
@@ -96,6 +138,10 @@ enum Handle {
     /// MySQL 的连接不能克隆，共享要加锁。用 **tokio 的 Mutex**：
     /// std 的 `MutexGuard` 不是 `Send`，跨 await 持有会让整个 future 不是 `Send`
     Mysql(Arc<AsyncMutex<mysql_async::Conn>>),
+    /// ClickHouse 的客户端是 HTTP 的，自己就是 `Clone` 且并发安全 —— 不用加锁
+    Clickhouse(Arc<clickhouse::Client>),
+    /// Mongo 的客户端内部有连接池，同样是 `Clone` + 并发安全
+    Mongodb(Arc<mongodb::Client>),
 }
 
 #[derive(Default)]
@@ -177,6 +223,8 @@ impl ConnectionRegistry {
         match conns.get(id) {
             Some(Handle::Postgres(client)) => Ok(HandleRef::Postgres(Arc::clone(client))),
             Some(Handle::Mysql(conn)) => Ok(HandleRef::Mysql(Arc::clone(conn))),
+            Some(Handle::Clickhouse(client)) => Ok(HandleRef::Clickhouse(Arc::clone(client))),
+            Some(Handle::Mongodb(client)) => Ok(HandleRef::Mongodb(Arc::clone(client))),
             None => Err(SqlError::NotConnected { id: id.to_string() }),
         }
     }
@@ -207,6 +255,13 @@ impl ConnectionRegistry {
                 let mut guard = conn.lock().await;
                 my_query(&mut guard, sql).await
             }
+            // ⚠️ Mongo 这条路上 `sql` 其实是**那段 JSON 命令**（见模块头），
+            // 而默认库要从这条连接的配置里拿
+            HandleRef::Mongodb(client) => {
+                let default_db = self.config(id).ok().and_then(|c| c.database);
+                crate::mongo::query(&client, sql, default_db.as_deref()).await
+            }
+            HandleRef::Clickhouse(client) => crate::clickhouse::query(&client, sql).await,
         };
 
         match result {
@@ -230,12 +285,20 @@ impl ConnectionRegistry {
 
     /// 库列表。Postgres 查 `pg_database`，MySQL 用 `SHOW DATABASES`
     pub async fn databases(&self, id: &str) -> Result<Vec<String>, SqlError> {
+        // Mongo 不走 SQL（它的库列表是驱动的一个调用），单独走一条
+        if let HandleRef::Mongodb(client) = self.handle(id)? {
+            return crate::mongo::databases(&client).await;
+        }
+
         let sql = match self.handle(id)? {
             HandleRef::Postgres(_) => {
                 "SELECT datname FROM pg_database \
                  WHERE datistemplate = false AND datallowconn = true ORDER BY 1"
             }
             HandleRef::Mysql(_) => "SHOW DATABASES",
+            // ClickHouse 的 SHOW DATABASES 同样管用（而且比查 system.databases 稳）
+            HandleRef::Clickhouse(_) => "SHOW DATABASES",
+            HandleRef::Mongodb(_) => unreachable!("上面那条 if 已经拦住了"),
         };
 
         let result = self.query(id, sql).await?;
@@ -257,17 +320,31 @@ impl ConnectionRegistry {
     /// Postgres 的 `information_schema.tables` 只覆盖**当前库**，
     /// MySQL 的要显式按 `table_schema` 过滤（否则会把所有库的表都列出来）。
     pub async fn tables(&self, id: &str) -> Result<Vec<TableInfo>, SqlError> {
+        // Mongo 的「表」是集合，也走驱动
+        if let HandleRef::Mongodb(client) = self.handle(id)? {
+            let database = self.config(id)?.database.unwrap_or_else(|| "test".to_string());
+            return crate::mongo::collections(&client, &database).await;
+        }
+
         let sql = match self.handle(id)? {
+            // ⚠️ **三列：schema 也要**（见 `TableInfo::schema` 的说明）
             HandleRef::Postgres(_) => {
-                "SELECT table_name, table_type FROM information_schema.tables \
+                "SELECT table_schema, table_name, table_type FROM information_schema.tables \
                  WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
-                 ORDER BY table_name"
+                 ORDER BY table_schema, table_name"
             }
             HandleRef::Mysql(_) => {
-                "SELECT table_name, table_type FROM information_schema.tables \
+                "SELECT table_schema, table_name, table_type FROM information_schema.tables \
                  WHERE table_schema = DATABASE() \
                  ORDER BY table_name"
             }
+            // ClickHouse 的表在 system.tables 里。`engine` 那一列顺便当"类型"用
+            // （View / MergeTree / …），前端的 kind 判据和另外两个引擎保持一致
+            HandleRef::Clickhouse(_) => {
+                "SELECT database, name, engine FROM system.tables \
+                 WHERE database = currentDatabase() ORDER BY name"
+            }
+            HandleRef::Mongodb(_) => unreachable!("上面那条 if 已经拦住了"),
         };
 
         let result = self.query(id, sql).await?;
@@ -278,16 +355,18 @@ impl ConnectionRegistry {
         Ok(result
             .rows
             .into_iter()
-            .filter_map(|mut row| {
-                if row.len() < 2 {
-                    return None;
-                }
-                let kind = row.pop()?.text?;
-                let name = row.pop()?.text?;
+            .filter_map(|row| {
+                // 三列：schema / 名字 / 类型。**按位置取**（顺序由上面那几条 SQL 定死）
+                let mut it = row.into_iter();
+                let schema = it.next()?.text?;
+                let name = it.next()?.text?;
+                let kind = it.next()?.text?;
                 Some(TableInfo {
+                    schema,
                     name,
-                    // information_schema 给的是 "BASE TABLE" / "VIEW"，换成短标签
-                    kind: if kind.contains("VIEW") { "view".into() } else { "table".into() },
+                    // PG/MySQL 给的是 "BASE TABLE" / "VIEW"；ClickHouse 给的是引擎
+                    // （MergeTree / View…）。两种写法都收成短标签
+                    kind: if kind.to_uppercase().contains("VIEW") { "view".into() } else { "table".into() },
                     rows: None,
                 })
             })
@@ -304,14 +383,8 @@ enum HandleRef {
     /// `Client` 不是 `Clone`（它内部持有连接状态），共享要套 Arc
     Postgres(Arc<tokio_postgres::Client>),
     Mysql(Arc<AsyncMutex<mysql_async::Conn>>),
-}
-
-/// 驱动失败分两类
-enum Failure {
-    /// 引擎拒绝了这条 SQL —— 是查询结果，不是连接故障
-    Sql(String),
-    /// 连接坏了
-    Broken(String),
+    Clickhouse(Arc<clickhouse::Client>),
+    Mongodb(Arc<mongodb::Client>),
 }
 
 // ------------------------------------------------------------------ 建连
@@ -320,6 +393,14 @@ async fn open(config: &ConnectionConfig) -> Result<(Handle, ServerInfo), SqlErro
     match config.kind {
         SqlKind::Postgres => open_postgres(config).await,
         SqlKind::Mysql => open_mysql(config).await,
+        SqlKind::Clickhouse => {
+            let (client, info) = crate::clickhouse::open(config).await?;
+            Ok((Handle::Clickhouse(Arc::new(client)), info))
+        }
+        SqlKind::Mongodb => {
+            let (client, info) = crate::mongo::open(config).await?;
+            Ok((Handle::Mongodb(Arc::new(client)), info))
+        }
     }
 }
 

@@ -13,6 +13,8 @@
 mod agent_commands;
 mod commands;
 mod health;
+mod kv_commands;
+mod local_commands;
 mod redis_commands;
 mod sql_commands;
 mod ssh_commands;
@@ -36,8 +38,14 @@ pub fn run() {
         // 智能体会话的 pane 表。同样包一层 Arc：读线程和等待线程要活到会话结束，
         // 而它们收尾时（转发任务里）要回头把会话从表里摘掉（`forget`）。
         .manage(std::sync::Arc::new(devtoolkit_agents::AgentRegistry::new()))
+        // 本地终端（SSH 模块里那一类「本地连接」）。**第二份** AgentRegistry：
+        // Tauri 的 state 按类型索引，同一个类型 manage 两次会 panic，而两张表
+        // 必须分开（会话 id 是各自前端生成的，撞了会互相顶掉）—— 见 local_commands.rs
+        .manage(local_commands::LocalTerminals::new())
         // 任务库。惰性打开（第一次真看任务的时候才碰磁盘）—— 见 task_commands.rs
         .manage(std::sync::Arc::new(task_commands::TasksState::new()))
+        // 键值库（各模块的档案/指纹/偏好）。同样惰性打开 —— 见 kv_commands.rs
+        .manage(std::sync::Arc::new(kv_commands::KvState::new()))
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,
@@ -77,11 +85,21 @@ pub fn run() {
             agent_commands::agent_integration_apply,
             agent_commands::agent_integration_revert,
             agent_commands::agent_probe,
+            local_commands::local_open,
+            local_commands::local_write,
+            local_commands::local_resize,
+            local_commands::local_close,
+            local_commands::local_close_all,
             task_commands::tasks_list,
             task_commands::tasks_counts,
             task_commands::tasks_create,
             task_commands::tasks_update,
             task_commands::tasks_delete,
+            task_commands::tasks_progress,
+            task_commands::tasks_add_progress,
+            kv_commands::kv_open,
+            kv_commands::kv_get,
+            kv_commands::kv_set,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
@@ -147,9 +165,18 @@ pub fn run() {
             // 我们持有的 Job Object 句柄，`KILL_ON_JOB_CLOSE` 保证那一树进程
             // 一起走。也就是说这条线程只是「尽量收拾得干净点」，不是最后一道保险
             // —— 最后一道保险一直是作业对象本身（见上面那段注释）。
+            // 本地终端也是**独立进程**（shell），同样不能留着 —— 一起收
+            let locals = handle
+                .state::<local_commands::LocalTerminals>()
+                .0
+                .clone();
+
             std::thread::Builder::new()
                 .name("agents-exit".to_string())
-                .spawn(move || registry.close_all())
+                .spawn(move || {
+                    registry.close_all();
+                    locals.close_all();
+                })
                 .ok();
         }
     });

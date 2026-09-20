@@ -23,7 +23,7 @@
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
 import { countByStatus, filterTasks, EMPTY_FILTER, type StatusFilter, type TaskFilter } from '../core/filter';
-import type { Task, TaskPatch, TaskStatus } from '../core/types';
+import type { Progress, Task, TaskPatch, TaskStatus } from '../core/types';
 import { tasksClient } from '../services';
 
 export interface TasksState {
@@ -34,6 +34,13 @@ export interface TasksState {
   filter: TaskFilter;
   /** 右侧详情面板在看哪一条。null = 没选 */
   selectedId: string | null;
+  /**
+   * **选中那条**的进度记录（从早到晚）。
+   *
+   * 只装当前这一条的：列表页不需要它，而翻每条任务都读一遍全量的进度
+   * 是白花往返。换选中的时候重新读一次就够。
+   */
+  progress: Progress[];
   /**
    * 读/写库失败的原因。
    *
@@ -50,6 +57,7 @@ export class TasksStore {
     tasks: [],
     filter: EMPTY_FILTER,
     selectedId: null,
+    progress: [],
     error: null,
   };
   private initPromise: Promise<void> | null = null;
@@ -123,8 +131,35 @@ export class TasksStore {
     this.set({ filter: EMPTY_FILTER });
   }
 
+  /** 选中一条（顺便把它的进度读出来 —— 详情卡片里要显示时间线） */
   select(id: string | null): void {
-    this.set({ selectedId: id });
+    this.set({ selectedId: id, progress: [] });
+    if (id === null) return;
+    void this.loadProgress(id);
+  }
+
+  private async loadProgress(taskId: string): Promise<void> {
+    try {
+      const progress = await tasksClient.progressOf(taskId);
+      // 读回来的时候用户可能已经切走了 —— 那就别把它塞进界面上
+      if (this.state.selectedId === taskId) this.set({ progress });
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /** 给当前选中那条记一笔进度（时间由后端给） */
+  async addProgress(text: string): Promise<void> {
+    const id = this.state.selectedId;
+    if (id === null) return;
+    try {
+      await tasksClient.addProgress(id, text);
+      await this.loadProgress(id);
+      // 记一笔会顶起 updated_at（列表按它排）—— 重新读一遍让顺序对上
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
   }
 
   // ---------------------------------------------------------------- 增删改

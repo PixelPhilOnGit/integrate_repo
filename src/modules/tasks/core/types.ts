@@ -29,6 +29,23 @@ export interface Task {
   updatedAt: number;
   /** 什么时候标成「完成」的。没完成就是 null */
   doneAt: number | null;
+  /**
+   * 归档。
+   *
+   * **和状态是两件事**：状态说「做没做完」，归档说「还要不要摆在眼前」。
+   * 归档之后默认不在列表里（有「归档」那一档专门看），但**一条都不删** ——
+   * 回顾「上次那件事是怎么解决的」全靠它们。
+   */
+  archived: boolean;
+}
+
+/** 一条进度记录：什么时候干了什么。回顾时读的就是它 */
+export interface Progress {
+  id: string;
+  taskId: string;
+  /** 毫秒时间戳。**不给用户改** —— 那是这条记录的意义所在 */
+  at: number;
+  text: string;
 }
 
 /**
@@ -41,6 +58,7 @@ export interface TaskPatch {
   body?: string;
   note?: string;
   status?: TaskStatus;
+  archived?: boolean;
 }
 
 /** 界面上只该通过这里拿文案 */

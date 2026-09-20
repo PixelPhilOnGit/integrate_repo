@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  archivedCount,
   countByStatus,
   EMPTY_FILTER,
   filterTasks,
@@ -23,6 +24,7 @@ function task(id: string, patch: Partial<Task> = {}): Task {
     createdAt: 1000,
     updatedAt: 1000,
     doneAt: null,
+    archived: false,
     ...patch,
   };
 }
@@ -83,5 +85,33 @@ describe('计数', () => {
 
   it('一条都没有时全是 0', () => {
     expect(countByStatus([])).toEqual({ todo: 0, doing: 0, done: 0 });
+  });
+});
+
+describe('归档视图', () => {
+  const withArchived: Task[] = [
+    task('a', { title: '活跃的' }),
+    task('b', { title: '做完收起来了', status: 'done', doneAt: 2000, archived: true }),
+  ];
+
+  it('常规视图里**看不到**归档的', () => {
+    expect(filterTasks(withArchived, EMPTY_FILTER).map((t) => t.id)).toEqual(['a']);
+    expect(filterTasks(withArchived, { query: '', status: 'done' }).map((t) => t.id)).toEqual([]);
+  });
+
+  it('「归档」那一档只看归档的', () => {
+    expect(filterTasks(withArchived, { query: '', status: 'archived' }).map((t) => t.id)).toEqual(['b']);
+  });
+
+  it('归档的也能搜（回顾时就是靠搜找回来的）', () => {
+    expect(
+      filterTasks(withArchived, { query: '收起来', status: 'archived' }).map((t) => t.id),
+    ).toEqual(['b']);
+  });
+
+  it('⚠️ 计数不含归档 —— 和 Rust 那边一个口径', () => {
+    expect(countByStatus(withArchived)).toEqual({ todo: 1, doing: 0, done: 0 });
+    expect(openCount(withArchived)).toBe(1);
+    expect(archivedCount(withArchived)).toBe(1);
   });
 });

@@ -3,7 +3,7 @@ name = "devtoolkit-sql"
 version = "0.4.2"
 edition = "2021"
 rust-version = "1.89"
-description = "Devtoolkit 的 SQL 内核：MySQL / PostgreSQL 的连接与查询（不依赖 Tauri，可脱离 WebKit 测试）"
+description = "Devtoolkit 的 SQL 内核：PostgreSQL / MySQL / ClickHouse / MongoDB 的连接与查询（不依赖 Tauri，可脱离 WebKit 测试）"
 license = "MIT"
 
 [dependencies]
@@ -19,9 +19,32 @@ mysql_async = { version = "0.37", default-features = false, features = ["minimal
 # mysql_async 的 QueryResult 是个 Stream，要 StreamExt 才能逐行取。
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+# ClickHouse：官方那个客户端，走 **HTTP 接口**（默认端口 8123），不是 9000 那个
+# 原生协议口 —— 原生协议要自己实现一套二进制编解码，而 HTTP 口是官方支持的
+# 正经接口，JSON 结果直接能解析（见 `clickhouse.rs`）。
+#
+# 特性只留默认的 `lz4`（响应压缩）：
+# ⚠️ **不开 TLS**，和现在的 pg / mysql 一样只跑明文 —— 那一侧的 TLS 本来就没开
+# （`NoTls` / `mysql_async` 的 minimal 特性），要补应该三个一起补，不然是
+# 「有的引擎能连云、有的不能」这种更难解释的状态。
+clickhouse = { version = "0.15", default-features = false, features = ["lz4"] }
+
+# MongoDB：官方驱动。**这里保留默认特性**（rustls-tls + dns-resolver + bson-2）——
+# 和上面 ClickHouse 的克制不一样，理由是它默认那套正是连 MongoDB Atlas 的最低要求
+# （Atlas 强制 TLS，而且给的是 `mongodb+srv://` 那种要 DNS 解析的地址）。
+# 砍掉它们会让「最常见的那个 Mongo 部署」直接连不上。
+mongodb = "3"
+
+# 二进制值按契约转成 base64 占位（`{"$binary": "…"}`）—— 见 mongo.rs。
+# 和 app crate 用同一个版本（那边解析终端输入的 base64 也是它）。
+base64 = "0.22"
+
+# ClickHouse 的 JSON 结果、MongoDB 的「查询是 JSON」这条路都要真的解析 JSON，
+# 所以它从 dev-dependencies 挪到正式依赖。
+serde_json = "1"
+
 tokio = { version = "1", features = ["rt", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-serde_json = "1"

@@ -80,6 +80,14 @@ jobs:
         working-directory: src-tauri
         run: cargo test --package devtoolkit-core --package devtoolkit-redis --locked
 
+      # 任务库和键值库：都只依赖一个临时 SQLite 文件，**不需要任何服务端**，
+      # 所以在这里跑得动（几秒钟）。
+      # ⚠️ 加新 crate 时必须同步加进某个 job —— 否则它的测试**静默不跑**，
+      # 而没人会注意到（README 里那条规矩就是这么来的）。
+      - name: 跑测试（任务库 + 键值库：纯 SQLite，无服务端）
+        working-directory: src-tauri
+        run: cargo test --package devtoolkit-tasks --package devtoolkit-store --locked
+
       # SSH：**只跑不需要 root 的那两组**。
       #
       #   session / registry —— 用 russh 自己的服务端在进程内起一个假服务器，

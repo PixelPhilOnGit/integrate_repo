@@ -12,9 +12,14 @@
 
 import type { ReactNode } from 'react';
 import { platform } from '../../../shared/platform';
-import { AUTH_LABEL, type SshAuthKind } from '../core/types';
-import { applyAuthKindSwitch, hasErrors, validateProfile } from '../core/profile';
-import type { SshProfile } from '../core/types';
+import { AUTH_LABEL, KIND_LABEL, LOCAL_SHELLS, type SshAuthKind } from '../core/types';
+import {
+  applyAuthKindSwitch,
+  applyKindSwitch,
+  hasErrors,
+  validateProfile,
+} from '../core/profile';
+import type { SshProfile, SshProfileKind } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
 
 interface Props {
@@ -53,7 +58,10 @@ function Form({
   const errors = validateProfile(profile);
   const runtime = state.runtime[profile.id];
   const mismatch = state.mismatch[profile.id];
-  const known = store.hostKeyFor(profile);
+  // ⚠️ 本地终端**没有主机密钥这回事**。不按 kind 挡住的话，它会拿着档案里
+  // 那两个没用的 host/port 去已知主机表里查 —— 查到的可能是**另一台真机器**的
+  // 记录，然后显示一句「已信任 SHA256:…」。那种话出现在本地终端上纯属误导。
+  const known = profile.kind === 'ssh' ? store.hostKeyFor(profile) : null;
   const sessions = store.sessionsOf(profile.id);
   const busy = sessions.some((s) => s.status === 'starting');
 
@@ -79,6 +87,52 @@ function Form({
           {errors.name && <p className="rd-hint is-error">{errors.name}</p>}
         </label>
 
+        <label className="rd-field">
+          <span>种类</span>
+          <select
+            value={profile.kind}
+            data-testid="ssh-field-kind"
+            onChange={(e) =>
+              void store.updateProfile(
+                profile.id,
+                // 改成「本地终端」会**清掉凭据**（密码 / 私钥），见 applyKindSwitch
+                applyKindSwitch(profile, e.target.value as SshProfileKind),
+              )
+            }
+          >
+            {(Object.keys(KIND_LABEL) as SshProfileKind[]).map((kind) => (
+              <option key={kind} value={kind}>
+                {KIND_LABEL[kind]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {profile.kind === 'local' && (
+          <label className="rd-field">
+            <span>用哪个 shell</span>
+            <select
+              value={profile.localShell}
+              data-testid="ssh-field-local-shell"
+              onChange={(e) => patch({ localShell: e.target.value })}
+            >
+              {LOCAL_SHELLS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            <p className="rd-hint rd-muted">
+              本地终端在本机起一个 shell，**不需要主机和密码**（那些字段对它是隐藏的）。
+              留「平台默认」就行；列出来的几个是 Windows 上的。
+            </p>
+          </label>
+        )}
+
+        {/* 下面这些（主机 / 端口 / 用户名 / 认证）**只对 SSH 有意义** ——
+            本地终端一个都不用，所以整块按 kind 收起来 */}
+        {profile.kind === 'ssh' && (
+          <>
         <label className="rd-field">
           <span>主机</span>
           <input
@@ -180,6 +234,8 @@ function Form({
             </label>
           </>
         )}
+          </>
+        )}
 
         <button
           type="button"
@@ -238,13 +294,20 @@ function Form({
 
         {runtime?.status === 'connected' && runtime.server !== null && (
           <div className="rd-hint" data-testid="ssh-conn-info">
-            <p>
-              已连接 {runtime.server.username}@{runtime.server.address}
-            </p>
-            <p>
-              主机密钥 <span className="rd-mono">{runtime.server.algorithm}</span>
-            </p>
-            <p className="rd-mono rd-ssh-fp-line">{runtime.server.fingerprint}</p>
+            {profile.kind === 'local' ? (
+              // 本地终端没有指纹、没有算法、没有登录用户 —— 只说它在哪儿跑
+              <p data-testid="ssh-local-info">在本机运行（{runtime.server.address}）</p>
+            ) : (
+              <>
+                <p>
+                  已连接 {runtime.server.username}@{runtime.server.address}
+                </p>
+                <p>
+                  主机密钥 <span className="rd-mono">{runtime.server.algorithm}</span>
+                </p>
+                <p className="rd-mono rd-ssh-fp-line">{runtime.server.fingerprint}</p>
+              </>
+            )}
           </div>
         )}
 

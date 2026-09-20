@@ -30,10 +30,11 @@ import {
   type BlockTracker,
   type CommandBlock,
 } from '../core/blocks';
-import { collapsedLine } from '../core/blocksView';
+import { collapsedLine, contentEnd } from '../core/blocksView';
 import { createByteLog, type ByteLog } from '../core/byteLog';
 import { findKnownHost, forgetKnownHost, rememberKnownHost } from '../core/knownHosts';
 import {
+  addressOf,
   hasErrors,
   newProfile,
   sameConnection,
@@ -45,12 +46,13 @@ import type {
   KnownHost,
   SshEvent,
   SshProfile,
+  SshProfileKind,
   SshRuntime,
   SshSession,
   TrustPrompt,
 } from '../core/types';
 import { sshServices } from '../services';
-import type { SshServices } from '../services/types';
+import type { LocalClient, SshClient, SshServices } from '../services/types';
 
 /**
  * 建会话时先按这个尺寸开 PTY，挂载之后马上会被 `fit()` 修正。
@@ -64,6 +66,23 @@ const INITIAL_ROWS = 24;
 
 /** 没有折叠时的空集合。省掉每次调用都新建一个（色条每帧都要问一次） */
 const EMPTY_IDS: ReadonlySet<number> = new Set();
+
+/**
+ * 把一行截到终端宽度之内。
+ *
+ * ⚠️ 折叠摘要**必须是恰好一行**：它是重放时的「占位」，而行号推算假定它占一行。
+ * 超宽被终端折成两行的话，从那一条往后所有色条的位置都会差一行
+ * （这种错**不报错**，只是看着不对）。
+ *
+ * 数宽度时先扣掉转义序列 —— 摘要里只有一个 `\x1b[2m`（暗色）和一个
+ * `\x1b[0m`（复位），它们不占列。
+ */
+function clampLine(text: string, cols: number): string {
+  const visible = text.replace(/\x1b\[[0-9;]*m/g, '');
+  if (visible.length <= cols) return text;
+  // 截断时把复位码补回去，免得后面所有输出都跟着变成暗色
+  return `${text.slice(0, Math.max(0, cols - 1))}…\x1b[0m`;
+}
 
 /**
  * 折叠前要求「输出停多久」。
@@ -120,6 +139,14 @@ export class SshStore {
   private logs = new Map<string, ByteLog>();
   /** 哪些块被折起来了（按会话） */
   private folded = new Map<string, Set<number>>();
+  /**
+   * 每一块**展开时占几行**（按会话）。折叠时记下来，展开时用它算 delta。
+   *
+   * ⚠️ **不能现算**：展开的那一刻这一块正折着，量出来是 1 行 —— 拿它当"展开后
+   * 的高度"就得到 `delta = 1 - 1 = 0`，于是它后面那些块永远挪不回去
+   * （真机上就是这个现象：折叠之后再展开，色条位置全错）。
+   */
+  private expandedLines = new Map<string, Map<number, number>>();
   /**
    * 这一轮里用户敲进去的**原始按键**，回车时清掉。
    *
@@ -209,7 +236,12 @@ export class SshStore {
       // 而远端那边还挂着一个登录着的 shell 和一个 PTY。
       // 这是 redis/sql「同 id 重连即替换」那个兜底的对应物：
       // 那两个模块只要重连就能自愈，会话这种东西没有「重连」可言，只能主动收。
-      await this.services.client.closeAll();
+      // ⚠️ **两份表都要收**：本地终端那张是独立的一份（见 local_commands.rs），
+      // 只收 SSH 那份的话，刷新页面之后会留下一堆用户看不见、关不掉的本地 shell
+      await Promise.all([
+        this.services.client.closeAll(),
+        this.services.local.closeAll(),
+      ]);
     } catch (e) {
       this.initPromise = null; // 允许下次重试
       this.set({ ready: true });
@@ -255,10 +287,31 @@ export class SshStore {
     return !hasErrors(validateProfile(profile));
   }
 
+  /**
+   * 这个会话该走哪条 client —— **按它所属档案的种类**。
+   *
+   * ⚠️ 所有「按会话」的操作（写、resize、关）都必须经过这里。
+   * 一开始它们一律调 `services.client.*`，结果是本地终端**收不到键盘输入**
+   * （输入全发给了 SSH 那套，而它那边没有这个会话 id，静默丢弃）——
+   * 终端起来了、提示符也在，就是打不进字。这条是 e2e 抓出来的。
+   */
+  private clientFor(sessionId: string): SshClient | LocalClient {
+    const session = this.sessionById(sessionId);
+    if (session === null) return this.services.client;
+    const profile = this.profileById(session.profileId);
+    return profile?.kind === 'local' ? this.services.local : this.services.client;
+  }
+
   // ---------------------------------------------------------------- 档案
 
-  async createProfile(): Promise<string> {
-    const profile = newProfile(this.state.profiles);
+  /**
+   * 新建一个连接档案。
+   *
+   * `kind` 默认 `ssh` —— 原来那个「新建」按钮的行为**一个字都不变**
+   * （本地终端走它自己的按钮，见 `ConnectionTree`）。
+   */
+  async createProfile(kind: SshProfileKind = 'ssh'): Promise<string> {
+    const profile = newProfile(this.state.profiles, kind);
     const profiles = [...this.state.profiles, profile];
     this.set({
       profiles,
@@ -425,6 +478,14 @@ export class SshStore {
     profile: SshProfile,
     acceptNew: boolean,
   ): Promise<void> {
+    // ⚠️ 本地终端**在信任那套之前就分叉**：它没有主机密钥、没有凭据、
+    // 也没有「这台机器没见过」这回事 —— 那台机器就是用户自己这台。
+    // 让它走下面那条路的话，会平白多一个「要不要信任」的弹窗。
+    if (profile.kind === 'local') {
+      await this.openLocal(sessionId, profile);
+      return;
+    }
+
     const known = this.hostKeyFor(profile);
 
     try {
@@ -520,6 +581,45 @@ export class SshStore {
     }
   }
 
+  /**
+   * 开一个本地终端。
+   *
+   * 和远端那条路的差别全在「没有中间结局」：本地 shell 要么起来（`ready`），
+   * 要么抛错（shell 名写错了、没装）。所以这里没有 TOFU、没有指纹，
+   * 失败了就是一句明确的错误。
+   */
+  private async openLocal(sessionId: string, profile: SshProfile): Promise<void> {
+    try {
+      await this.services.local.open({
+        id: sessionId,
+        shell: profile.localShell,
+        cols: this.sessionById(sessionId)?.cols ?? INITIAL_COLS,
+        rows: this.sessionById(sessionId)?.rows ?? INITIAL_ROWS,
+        onEvent: (event) => this.onEvent(sessionId, event),
+      });
+
+      this.patchSession(sessionId, { status: 'open', fingerprint: '' });
+      // `server` 那几个字段对本地终端是空的（没有指纹、没有算法）——
+      // 界面上按 kind 决定显示什么，见 ConnectionForm
+      this.patchRuntime(profile.id, {
+        status: 'connected',
+        error: null,
+        stale: false,
+        server: {
+          address: addressOf(profile),
+          username: '',
+          fingerprint: '',
+          algorithm: '',
+        },
+      });
+      this.shell.setStatus(null);
+    } catch (e) {
+      const message = describeError(e);
+      this.discardSession(sessionId);
+      this.patchRuntime(profile.id, { status: 'error', error: message, server: null });
+    }
+  }
+
   /** 用户在 TOFU 弹窗里点了「信任并继续」 */
   async trustAndReconnect(): Promise<void> {
     const prompt = this.state.trustPrompt;
@@ -580,7 +680,9 @@ export class SshStore {
     if (session === null) return;
 
     try {
-      await this.services.client.close(sessionId);
+      // ⚠️ 走 `clientFor`：本地终端那条是**另一份实现**（关错了的话
+      // 本地 shell 会一直挂着 —— 用户看不见也关不掉）
+      await this.clientFor(sessionId).close(sessionId);
     } catch {
       // 关不掉也要把本地状态清掉 —— 用户点了关闭，界面就该关掉。
       // 远端那边真出问题的话下次重连时会被 `closeAll` 收掉
@@ -635,7 +737,7 @@ export class SshStore {
     const session = this.sessionById(sessionId);
     if (session === null || session.status !== 'open') return;
     try {
-      await this.services.client.write(sessionId, data);
+      await this.clientFor(sessionId).write(sessionId, data);
     } catch {
       // 见上：不弹错误条
     }
@@ -649,7 +751,7 @@ export class SshStore {
     if (session.status !== 'open') return;
 
     try {
-      await this.services.client.resize(sessionId, cols, rows);
+      await this.clientFor(sessionId).resize(sessionId, cols, rows);
     } catch {
       // resize 失败不值得打断用户
     }
@@ -735,17 +837,39 @@ export class SshStore {
     const set = new Set(this.folded.get(sessionId) ?? []);
     const collapse = !set.has(blockId);
 
-    // 这一块现在占几行（到下一块的起点；最后一块到缓冲区末尾）
-    const endLine = blocks[index + 1]?.line ?? metrics.lines;
-    const lines = Math.max(1, endLine - block.line);
-    const delta = (collapse ? 1 : lines) - lines;
+    // 这一块现在占几行（到下一块的起点；最后一块到**内容末尾** ——
+    // 不是缓冲区末尾，那边永远有 rows 行空的，见 `contentEnd`）
+    const endLine = blocks[index + 1]?.line ?? contentEnd(metrics);
+    const currentLines = Math.max(1, endLine - block.line);
+
+    const sizes = this.expandedLines.get(sessionId) ?? new Map<number, number>();
+    let newLines: number;
+    if (collapse) {
+      // 折叠：**记下它展开时占几行**，展开时要用
+      sizes.set(blockId, currentLines);
+      newLines = 1; // 折起来只剩一行摘要
+    } else {
+      // 展开：用折起来之前记下的那个高度。记不到（比如换了会话、或者块是
+      // 别处折的）就退回「按现在的行数还原」—— 那种情况下还原得不准，
+      // 但总比不动强
+      newLines = sizes.get(blockId) ?? currentLines;
+      sizes.delete(blockId);
+    }
+    this.expandedLines.set(sessionId, sizes);
+    const delta = newLines - currentLines;
 
     const plan: Array<{ bytes: Uint8Array } | { text: string }> = [
       { bytes: log.preamble() },
     ];
     for (const b of blocks) {
       const folded = b.id === blockId ? collapse : set.has(b.id);
-      plan.push(folded ? { text: `${collapsedLine(b)}\r\n` } : { bytes: log.block(b.id) });
+      plan.push(
+        folded
+          ? // ⚠️ 摘要要**截到一行之内**：超宽会被终端折成两行，而下面的行号
+            // 推算假定「折起来就占一行」—— 对不上就是从这一行开始的
+            { text: `${clampLine(collapsedLine(b), metrics.cols)}\r\n` }
+          : { bytes: log.block(b.id) },
+      );
     }
 
     if (!terminalHub.redraw(sessionId, plan)) return false;
@@ -874,6 +998,7 @@ export class SshStore {
     this.typed.delete(sessionId);
     this.logs.delete(sessionId);
     this.folded.delete(sessionId);
+    this.expandedLines.delete(sessionId);
     const sessions = this.state.sessions.filter((s) => s.id !== sessionId);
     this.set({
       sessions,
@@ -892,7 +1017,14 @@ export class SshStore {
   }
 
   private titleFor(profile: SshProfile): string {
-    const base = `${profile.username.trim()}@${profile.host.trim()}`;
+    // 本地终端的标题用连接名（`本地` / 用户改过的名字）—— `user@host` 那两个
+    // 字段对它没有意义，拼出来会是 `@` 这种谁也看不懂的东西
+    const base =
+      profile.kind === 'local'
+        ? profile.name.trim() === ''
+          ? '本地终端'
+          : profile.name.trim()
+        : `${profile.username.trim()}@${profile.host.trim()}`;
     return nextAvailableName(
       this.state.sessions.map((s) => s.title),
       base,

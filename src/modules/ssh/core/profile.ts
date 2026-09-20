@@ -8,9 +8,11 @@ import { nextAvailableName } from '../../../shared/connections/profiles';
 import { newId } from '../../../shared/ids';
 import {
   DEFAULT_SSH_PORT,
+  LOCAL_SHELLS,
   type SshAuth,
   type SshAuthKind,
   type SshProfile,
+  type SshProfileKind,
 } from './types';
 
 export type ProfileField =
@@ -37,14 +39,25 @@ export const DEFAULT_HOST = '127.0.0.1';
  */
 export const DEFAULT_USER = 'root';
 
-/** 新建一个连接档案，名字自动去重 */
+/**
+ * 新建一个连接档案，名字自动去重。
+ *
+ * `kind` 决定名字的前缀：本地终端叫「新建本地终端」——列表里一眼能分出来，
+ * 而不是一串都叫「新建 SSH 连接」的东西混在一起。
+ */
 export function newProfile(
   existing: readonly SshProfile[],
+  kind: SshProfileKind = 'ssh',
   authKind: SshAuthKind = 'password',
 ): SshProfile {
   return {
     id: newId('ssh'),
-    name: nextAvailableName(existing.map((p) => p.name), '新建 SSH 连接'),
+    name: nextAvailableName(
+      existing.map((p) => p.name),
+      kind === 'local' ? '新建本地终端' : '新建 SSH 连接',
+    ),
+    kind,
+    localShell: '',
     host: DEFAULT_HOST,
     port: DEFAULT_SSH_PORT,
     username: DEFAULT_USER,
@@ -71,6 +84,11 @@ export function validateProfile(profile: SshProfile): ProfileErrors {
   } else if (profile.name.trim().length > MAX_NAME_LENGTH) {
     errors.name = `名字不能超过 ${MAX_NAME_LENGTH} 个字`;
   }
+
+  // ⚠️ 本地终端**没有主机、端口、用户名、凭据** —— 那些字段还在档案里
+  // （共用基类），但对它一个都不校验。不跳过的话，新建一个本地终端会立刻
+  // 报「主机名不能为空 / 密码不能为空」，而用户根本没见过那些输入框。
+  if (profile.kind === 'local') return errors;
 
   if (profile.host.trim() === '') {
     errors.host = '主机名不能为空';
@@ -112,8 +130,18 @@ export function toAuth(profile: SshProfile): SshAuth {
     : { kind: 'password', password: profile.password };
 }
 
-/** 侧栏那一行显示的地址 */
+/**
+ * 侧栏那一行显示的地址。
+ *
+ * 本地终端**不能拿 host:port 去拼** —— 那会显示成 `127.0.0.1:22` 这种
+ * 看着像远端连接的东西（而那些字段对本地终端根本没有意义）。
+ */
 export function addressOf(profile: SshProfile): string {
+  if (profile.kind === 'local') {
+    const shell = LOCAL_SHELLS.find((s) => s.value === profile.localShell);
+    // 空串 = 平台默认，那就只说「本地」——写「本地 · 平台默认」太啰嗦
+    return profile.localShell === '' ? '本地' : `本地 · ${shell?.label ?? profile.localShell}`;
+  }
   return `${profile.host}:${profile.port}`;
 }
 
@@ -124,6 +152,11 @@ export function addressOf(profile: SshProfile): string {
  * 改个名字不影响已经连上的会话。
  */
 export function sameConnection(a: SshProfile, b: SshProfile): boolean {
+  // 种类变了（ssh ↔ local）当然算「连接参数变了」——不比较的话，
+  // 把一个连接改成「本地终端」之后，已经开着的远端标签仍然被当成「同一套参数」
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'local') return a.localShell === b.localShell;
+
   return (
     a.host.trim() === b.host.trim() &&
     a.port === b.port &&
@@ -156,4 +189,26 @@ export function applyAuthKindSwitch(
   return authKind === 'key'
     ? { ...profile, authKind, password: '' }
     : { ...profile, authKind, privateKeyPath: '', passphrase: '' };
+}
+
+/**
+ * 换连接种类时要顺手清掉的东西。
+ *
+ * 和 [`applyAuthKindSwitch`] 同一条理由：改成「本地终端」之后，档案里那份密码
+ * 和私钥路径**再也不会被用到**，但它们仍然躺在磁盘上。用户以为「我改成本地了，
+ * 那台服务器的密码应该没了吧」而实际没有 —— 那是安全上的意外，不只是洁癖。
+ *
+ * 反过来（本地 → SSH）没有要清的：本地终端本来就没有凭据。
+ */
+export function applyKindSwitch(profile: SshProfile, kind: SshProfileKind): SshProfile {
+  if (profile.kind === kind) return profile;
+  if (kind === 'ssh') return { ...profile, kind };
+
+  return {
+    ...profile,
+    kind,
+    password: '',
+    privateKeyPath: '',
+    passphrase: '',
+  };
 }

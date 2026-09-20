@@ -10,8 +10,40 @@ import type {
   ConnectionRuntime as BaseRuntime,
 } from '../../../shared/connections/types';
 
-/** 支持哪种引擎。端口默认值跟着它走 */
-export type SqlKind = 'postgres' | 'mysql';
+/**
+ * 支持哪种引擎。端口默认值跟着它走。
+ *
+ * ⚠️ **`mongodb` 不是 SQL**，它只是**连接的一种**：侧栏、档案、凭据那些和别的
+ * 引擎共用（用户的心智是「我这里有一堆数据源」），但**工作台不一样** ——
+ * SQL 那几种是「编辑器 + 结果表格」，Mongo 是文档浏览器（库 → 集合 → 文档）。
+ * 所以有个 [`isSqlKind`] 用来分流，别到处写 `kind === 'mysql' || …`。
+ */
+export type SqlKind = 'postgres' | 'mysql' | 'clickhouse' | 'mongodb';
+
+/** 这个引擎走不走「SQL 工作台」。Mongo 不走 */
+export function isSqlKind(kind: SqlKind): boolean {
+  return kind !== 'mongodb';
+}
+
+/** 侧栏里按种类分组的**显示顺序**（也是新建时下拉里的顺序） */
+export const KIND_ORDER: readonly SqlKind[] = ['postgres', 'mysql', 'clickhouse', 'mongodb'];
+
+/** 种类的中文名。界面上只该从这里拿文案 */
+export const KIND_LABEL: Record<SqlKind, string> = {
+  postgres: 'PostgreSQL',
+  mysql: 'MySQL',
+  clickhouse: 'ClickHouse',
+  mongodb: 'MongoDB',
+};
+
+/** 默认端口。改引擎的时候表单会跟着换 */
+export const DEFAULT_PORT: Record<SqlKind, number> = {
+  postgres: 5432,
+  mysql: 3306,
+  // ClickHouse 的 HTTP 口（客户端走的就是它，不是 9000 那个原生协议口）
+  clickhouse: 8123,
+  mongodb: 27017,
+};
 
 export interface SqlProfile extends ConnectionProfileBase {
   kind: SqlKind;
@@ -73,7 +105,22 @@ export interface QueryResult {
 /** 一个库里的表 */
 export interface TableInfo {
   name: string;
-  kind: 'table' | 'view';
+  /**
+   * 它属于哪个 schema。
+   *
+   * ⚠️ **这个字段是必须的**，不是装饰：PostgreSQL 解析裸表名只看 `search_path`，
+   * 表要是不在 `public` 里，生成的 SQL 必须写成 `"schema"."表"` 才选得中。
+   * （真机上报过 `relation "account_api" does not exist` —— 就是丢了它。）
+   * MySQL / ClickHouse 那边它就是当前库名，Mongo 是库名。
+   */
+  schema: string;
+  /**
+   * 它是哪种东西。
+   *
+   * ⚠️ Mongo 给的是 `collection` —— 别把它硬塞进 table/view 里：
+   * 那不是「表」，界面上也不该按表来叫（用户看到「表」会去找表 ✗）。
+   */
+  kind: 'table' | 'view' | 'collection';
   rows?: number;
 }
 
@@ -88,13 +135,3 @@ export interface ConnectParams {
   database: string;
 }
 
-export const KIND_LABEL: Record<SqlKind, string> = {
-  postgres: 'PostgreSQL',
-  mysql: 'MySQL',
-};
-
-/** 两种引擎的默认端口 */
-export const DEFAULT_PORT: Record<SqlKind, number> = {
-  postgres: 5432,
-  mysql: 3306,
-};

@@ -69,13 +69,17 @@ devtoolkit-agents = { path = "agents" }
 # 起一个临时库文件就能跑，不需要 WebKit。
 devtoolkit-tasks = { path = "tasks" }
 
+# 键值存储（SQLite）。各模块的档案、指纹、偏好都落在这儿，
+# 替掉原来「一个模块一个 JSON 文件」那套。
+devtoolkit-store = { path = "store" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh", "agents", "tasks"]
+members = ["core", "redis", "sql", "ssh", "agents", "tasks", "store"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents", "tasks"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "tasks", "store"]
 resolver = "2"
 
 [profile.release]

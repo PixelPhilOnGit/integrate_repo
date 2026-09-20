@@ -15,7 +15,50 @@ export type ProfileErrors = Partial<Record<ProfileField, string>>;
 const MAX_NAME_LENGTH = 60;
 
 export const DEFAULT_HOST = '127.0.0.1';
-export const DEFAULT_USER = 'postgres';
+
+/**
+ * 每种引擎的默认值。
+ *
+ * ⚠️ **表驱动**，不是一串三元表达式：四个引擎之后，`kind === 'mysql' ? 'root' : …`
+ * 那种写法每加一个引擎就要改五处，漏一处**不报错**、只是默认值变得莫名其妙。
+ */
+const DEFAULT_USER: Record<SqlKind, string> = {
+  postgres: 'postgres',
+  mysql: 'root',
+  // ClickHouse 的默认用户就叫 default
+  clickhouse: 'default',
+  // Mongo 本地跑通常不开鉴权，别硬塞一个用户名进去
+  mongodb: '',
+};
+
+const DEFAULT_DATABASE: Record<SqlKind, string> = {
+  postgres: 'postgres',
+  mysql: '',
+  clickhouse: '',
+  mongodb: '',
+};
+
+const DEFAULT_NAME: Record<SqlKind, string> = {
+  postgres: '新建 PostgreSQL 连接',
+  mysql: '新建 MySQL 连接',
+  clickhouse: '新建 ClickHouse 连接',
+  mongodb: '新建 MongoDB 连接',
+};
+
+/**
+ * 哪种引擎**必须**填库名。
+ *
+ * 只有 PostgreSQL：它一个连接绑一个库，不填的话驱动会拿用户名当库名，
+ * 报出来的错跟「库名没填」毫无关系。其余几种都能连上去再选。
+ */
+const DATABASE_REQUIRED: ReadonlySet<SqlKind> = new Set<SqlKind>(['postgres']);
+
+/** 哪种引擎**必须**填用户名。Mongo 不要求（本地开发常常不开鉴权） */
+const USERNAME_REQUIRED: ReadonlySet<SqlKind> = new Set<SqlKind>([
+  'postgres',
+  'mysql',
+  'clickhouse',
+]);
 
 /** 新建一个连接档案，名字自动去重 */
 export function newProfile(existing: readonly SqlProfile[], kind: SqlKind = 'postgres'): SqlProfile {
@@ -23,13 +66,13 @@ export function newProfile(existing: readonly SqlProfile[], kind: SqlKind = 'pos
     id: newId('sql'),
     name: nextAvailableName(
       existing.map((p) => p.name),
-      kind === 'mysql' ? '新建 MySQL 连接' : '新建 PostgreSQL 连接',
+      DEFAULT_NAME[kind],
     ),
     kind,
     host: DEFAULT_HOST,
     port: DEFAULT_PORT[kind],
-    username: kind === 'mysql' ? 'root' : DEFAULT_USER,
-    database: kind === 'mysql' ? '' : 'postgres',
+    username: DEFAULT_USER[kind],
+    database: DEFAULT_DATABASE[kind],
     // ⚠️ 明文密码，见 shared/connections/profiles.ts 的 TODO(security)
     password: '',
   };
@@ -58,11 +101,11 @@ export function validateProfile(profile: SqlProfile): ProfileErrors {
     errors.port = '端口要是 1–65535 之间的整数';
   }
 
-  if (profile.username.trim() === '') {
+  if (USERNAME_REQUIRED.has(profile.kind) && profile.username.trim() === '') {
     errors.username = '用户名不能为空';
   }
 
-  if (profile.kind === 'postgres' && profile.database.trim() === '') {
+  if (DATABASE_REQUIRED.has(profile.kind) && profile.database.trim() === '') {
     errors.database = 'PostgreSQL 必须指定库名（它一个连接绑一个库）';
   }
 
@@ -110,14 +153,14 @@ export function applyKindSwitch(profile: SqlProfile, kind: SqlKind): SqlProfile 
     next.port = DEFAULT_PORT[kind];
   }
 
-  const oldDefaultUser = profile.kind === 'mysql' ? 'root' : DEFAULT_USER;
+  const oldDefaultUser = DEFAULT_USER[profile.kind];
   if (profile.username.trim() === oldDefaultUser) {
-    next.username = kind === 'mysql' ? 'root' : DEFAULT_USER;
+    next.username = DEFAULT_USER[kind];
   }
 
-  // PostgreSQL 必须有库名，空着就补一个常见的默认值
-  if (kind === 'postgres' && profile.database.trim() === '') {
-    next.database = 'postgres';
+  // 新引擎要求填库名、而旧引擎留下的值是空 → 补一个默认
+  if (DATABASE_REQUIRED.has(kind) && profile.database.trim() === '') {
+    next.database = DEFAULT_DATABASE[kind];
   }
 
   return next;
