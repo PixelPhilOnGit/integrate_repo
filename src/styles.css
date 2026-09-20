@@ -2696,3 +2696,31 @@ textarea:focus {
   display: inline-block;
   vertical-align: bottom;
 }
+
+/* 「移动到…」的目标目录列表：可能很长，给它自己的滚动 */
+.rd-move-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.rd-move-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.rd-move-item:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border: none;
+  color: var(--accent);
+}

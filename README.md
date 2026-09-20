@@ -6,7 +6,7 @@
 
 | 模块 | 状态 |
 |---|---|
-| **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树，图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库 |
+| **顺序图**（UML sequence diagram） | 可用。选一个本地文件夹当工作区，左侧显示目录树（右键可以**移动到别的目录**），图以 `.seq.json` 存在里面——和 VS Code 打开文件夹的体验类似，没有云端、没有数据库。**格式写在 [`docs/seq-format.md`](docs/seq-format.md)**：手写或让 AI 生成都照那一份，里面有能直接粘的提示词 |
 | **Redis** | 可用。左侧「连接 → 库 → key」，主区看 key 列表和值；命令台是一个页签 |
 | **数据库**（MySQL / PostgreSQL） | 可用。连接配置里选引擎，侧栏「连接 → 库 / 表」，主区写 SQL 看结果表格 |
 | **SSH 终端** | 可用。多标签的真终端（xterm.js），密码 / 私钥认证，**首次连接要核对主机密钥指纹**；终端左边**命令块色条**：一条命令一块、交替配色，单击复制命令 + 输出，双击折叠收起 |
@@ -75,6 +75,7 @@ Devtoolkit/
 │   ├── capabilities/        权限配置
 │   ├── icons/               图标（logo.svg 是源文件）
 │   └── tauri.conf.json      窗口、打包配置
+├── docs/                    格式说明（`seq-format.md` 是给人和 AI 看的图格式契约）
 ├── .github/workflows/       CI 打包
 └── package.json
 ```

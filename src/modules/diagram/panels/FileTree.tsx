@@ -150,6 +150,9 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
     store.selectTreeEntry(null);
   };
 
+  /** 「移动到…」正在给哪个条目挑目标目录。null = 没开着 */
+  const [moving, setMoving] = useState<FileNode | null>(null);
+
   /** 某个条目对应的"新建目标目录" */
   const dirFor = (node: FileNode): string =>
     node.kind === 'dir' ? node.path : dirname(node.path);
@@ -177,6 +180,9 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
     }
     items.push(
       { label: '重命名', separatorBefore: node.kind !== 'dir', onSelect: () => beginRename(node) },
+      // 移动到别的目录。用菜单而不是拖拽：**拖拽在这个树上不好使**（要处理折叠、
+      // 自动展开、落在文件夹和落在文件上的区别），而菜单在哪儿都能点、也测得住
+      { label: '移动到…', onSelect: () => setMoving(node) },
       { label: '删除', danger: true, onSelect: () => void removeEntry(node) },
     );
     return items;
@@ -363,6 +369,86 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={itemsFor(menu.node)} onClose={() => setMenu(null)} />
       )}
+
+      {moving !== null && (
+        <MoveTargetDialog
+          node={moving}
+          tree={state.tree}
+          onPick={(dir) => {
+            const path = moving.path;
+            setMoving(null);
+            void store.moveEntry(path, dir);
+          }}
+          onClose={() => setMoving(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * 「移动到…」的目标目录选择。
+ *
+ * # 为什么是「列出来点一下」而不是拖拽
+ *
+ * 拖拽在这个树上要处理一堆边界：拖到折叠着的文件夹上要不要自动展开、拖到文件上
+ * 算什么意思、拖到空白处算不算移回根目录。菜单点一下没有这些歧义，而且**测得住**
+ * （e2e 不需要模拟鼠标轨迹）。
+ *
+ * # 两个刻意的排除
+ *
+ * 1. **被移动的那个文件夹自己那棵子树整个不列** —— 移到自己里面后端会拒，
+ *    但让它在列表里出现、点了才报错是更差的体验；
+ * 2. **当前所在的那个目录仍然列出**（点了等于没动，后端会拒绝并报一句）——
+ *    与其在这里猜"它现在在哪儿"再藏起来，不如让状态栏如实说一句。
+ */
+function MoveTargetDialog({
+  node,
+  tree,
+  onPick,
+  onClose,
+}: {
+  node: FileNode;
+  tree: readonly FileNode[];
+  onPick: (dir: string) => void;
+  onClose: () => void;
+}): ReactNode {
+  const dirs: string[] = ['']; // 空串 = 工作区根目录
+  const walk = (nodes: readonly FileNode[]): void => {
+    for (const n of nodes) {
+      if (n.kind !== 'dir') continue;
+      if (n.path === node.path || n.path.startsWith(`${node.path}/`)) continue;
+      dirs.push(n.path);
+      walk(n.children ?? []);
+    }
+  };
+  walk(tree);
+
+  return (
+    <div className="rd-modal-backdrop" data-testid="tree-move-dialog">
+      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby="tree-move-title">
+        <h2 className="rd-modal-title" id="tree-move-title">
+          把「{node.name}」移动到…
+        </h2>
+        <div className="rd-move-list">
+          {dirs.map((dir) => (
+            <button
+              key={dir === '' ? '__root__' : dir}
+              type="button"
+              className="rd-move-item"
+              data-testid={`tree-move-to-${dir === '' ? '__root__' : dir}`}
+              onClick={() => onPick(dir)}
+            >
+              {dir === '' ? '工作区根目录' : dir}
+            </button>
+          ))}
+        </div>
+        <div className="rd-modal-actions">
+          <button type="button" data-testid="tree-move-cancel" onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

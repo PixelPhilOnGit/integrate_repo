@@ -1218,3 +1218,36 @@ test('文件树搜索：按名字/路径过滤，祖先跟着留下并撑开', a
   await page.getByTestId('tree-search').press('Escape');
   await expect(page.getByTestId('tree-file-示例.seq.json')).toBeVisible();
 });
+
+test('把图移动到别的目录（右键 → 移动到…）', async ({ page }) => {
+  await page.getByTestId('btn-new-diagram').click();
+  await expect(page.getByTestId('tree-file-未命名.seq.json')).toBeVisible();
+
+  // 先把目标文件夹展开（折叠着的目录里，子节点根本没渲染）
+  await page.getByTestId('tree-dir-归档').click();
+
+  await page.getByTestId('tree-file-未命名.seq.json').click({ button: 'right' });
+  await page.getByTestId('menu-移动到…').click();
+  await expect(page.getByTestId('tree-move-dialog')).toBeVisible();
+  await page.getByTestId('tree-move-to-归档').click();
+
+  // 树里的路径换了
+  await expect(page.getByTestId('tree-file-归档/未命名.seq.json')).toHaveCount(1);
+  await expect(page.getByTestId('tree-file-未命名.seq.json')).toHaveCount(0);
+  await expect(page.getByTestId('status-text')).toContainText('已移动到 归档');
+
+  // ⚠️ 而且**打开的还是它**：移动的是正在编辑的那张图，`currentPath` 要跟着走
+  // （不跟的话下一次保存会写回**旧路径** —— 那个文件已经不在了，
+  //  表现为「改了半天，重开发现没保存」）
+  await expect(page.getByTestId('current-path')).toContainText('归档/未命名.seq.json');
+});
+
+test('移动到对话框里不会出现「自己那棵子树」（移进去也放不下）', async ({ page }) => {
+  await page.getByTestId('tree-dir-归档').click({ button: 'right' });
+  await page.getByTestId('menu-移动到…').click();
+
+  await expect(page.getByTestId('tree-move-dialog')).toBeVisible();
+  // 根目录和自己之外的目录照常列出，但它自己不在里面
+  await expect(page.getByTestId('tree-move-to-__root__')).toBeVisible();
+  await expect(page.getByTestId('tree-move-to-归档')).toHaveCount(0);
+});
