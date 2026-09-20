@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit-sql"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的 SQL 内核：MySQL / PostgreSQL 的连接与查询（不依赖 Tauri，可脱离 WebKit 测试）"
