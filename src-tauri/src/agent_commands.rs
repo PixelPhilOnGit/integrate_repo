@@ -33,8 +33,10 @@ use devtoolkit_agents::integration::{self, AgentPaths, IntegrationTarget};
 use devtoolkit_agents::registry::forward;
 use devtoolkit_agents::{
     events, AgentError, AgentRegistry, EnvironmentReport, IntegrationOutcome, IntegrationStatus,
-    PtyConfig, PtyEvent, RawEvent,
+    PtyConfig, PtyEvent, RawEvent, RemoteOutcome, RemoteRegistry, RemoteSpec,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
@@ -53,9 +55,70 @@ fn paths(app: &AppHandle) -> Result<AgentPaths, String> {
     Ok(AgentPaths { home, data_dir })
 }
 
+/// `agent_open` 收的配置：**本机那套字段 + 一个可选的远端目标**。
+///
+/// ⚠️ 和 `PtyConfig` 的字段几乎一样，但没有直接复用它：`PtyConfig` 是
+/// `devtoolkit-agents` 里「起一个本机 pty 要什么」，不该认识 `RemoteSpec`
+/// （那是远端才有的东西）。这一层多出来的就是这个 `remote`。
+///
+/// ⚠️ **没用 serde 的 `flatten`**：它和 `rename_all` 一起用时字段名会出岔子
+/// （真机上踩过「Rust 里叫 `private_key_path`、前端发的是 `privateKeyPath`」那类坑），
+/// 而这里字段就那么几个，手写一遍更稳。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOpenConfig {
+    pub cwd: String,
+    #[serde(default)]
+    pub shell: Option<String>,
+    #[serde(default)]
+    pub command: String,
+    pub cols: u32,
+    pub rows: u32,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    /// 空 = **本机**（默认，也是这一版之前唯一的形态）
+    #[serde(default)]
+    pub remote: Option<RemoteSpec>,
+}
+
+impl AgentOpenConfig {
+    /// 剥掉远端那一层，剩下本机 pty 要的东西
+    fn to_pty_config(&self) -> PtyConfig {
+        PtyConfig {
+            cwd: self.cwd.clone(),
+            command: self.command.clone(),
+            cols: self.cols,
+            rows: self.rows,
+            shell: self.shell.clone(),
+            env: self.env.clone(),
+        }
+    }
+}
+
+/// `agent_open` 的结局。
+///
+/// ⚠️ 主机密钥那两种**不是错误**：前端要弹窗让用户核对指纹（和 SSH 那边
+/// 同一个道理，见 `ssh_commands` 的 `OpenOutcome`）。所以这里不能用
+/// `Result<(), String>` —— 那条路上只有一句字符串，结构化信息到不了。
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AgentOpenOutcome {
+    Ready,
+    /// 这台机器没见过。带着指纹给用户核对
+    HostKeyUnknown { algorithm: String, fingerprint: String },
+    /// 指纹变了 —— **硬停**。界面上没有「就这样继续」，用户得先去清掉那条记录
+    HostKeyMismatch { expected: String, actual: String },
+}
+
 /// 起一个窗格。
 ///
-/// `config` 是 `{ cwd, shell, command, cols, rows, env }`（见 `PtyConfig`）。
+/// `config` 是 `{ cwd, shell, command, cols, rows, env, remote? }`
+/// （见 [`AgentOpenConfig`]）。**`remote` 给了就连那台机器**，
+/// 起来的东西在那边；没给就是本机（默认，也是这一版之前唯一的形态）。
+///
+/// 命令**不在 argv 里** —— 起的是一个正常 shell，命令当初始输入敲进去，
+/// 理由见 `devtoolkit-agents/src/pty.rs` 的头注释。远端那条路一样：
+/// 连上之后先 `cd` 到那个目录、再把命令送进去（见 `agents/src/remote.rs`）。
 /// 命令**不在 argv 里** —— 起的是一个正常 shell，命令当初始输入敲进去，
 /// 理由见 `devtoolkit-agents/src/pty.rs` 的头注释。
 ///
@@ -75,10 +138,16 @@ fn paths(app: &AppHandle) -> Result<AgentPaths, String> {
 pub async fn agent_open(
     app: AppHandle,
     registry: State<'_, Arc<AgentRegistry>>,
+    remotes: State<'_, Arc<RemoteRegistry>>,
     id: String,
-    mut config: PtyConfig,
+    config: AgentOpenConfig,
     channel: Channel<PtyEvent>,
-) -> Result<(), String> {
+) -> Result<AgentOpenOutcome, String> {
+    if let Some(spec) = config.remote.clone() {
+        return open_remote(&remotes, id, config, spec, channel).await;
+    }
+
+    let mut config = config.to_pty_config();
     // ⚠️ **这两个环境变量由 Rust 说了算，前端传什么都不作数。**
     //
     // 它们决定「钩子把状态写到哪个文件、替哪个会话写」—— 整条状态链路
@@ -115,7 +184,78 @@ pub async fn agent_open(
         registry.forget(&session_id, generation);
     });
 
-    Ok(())
+    Ok(AgentOpenOutcome::Ready)
+}
+
+/// 远端那条路：连着别人的机器开会话。
+///
+/// ⚠️ **和本机那条路分开写**而不是揉在一起：本机是同步的 `registry.open`，
+/// 远端是 async 的 `remote::open`，中间还要处理主机密钥那两态 ——
+/// 硬揉的话每一行都要 match。
+///
+/// ⚠️ 远端会话**不注入那两个钩子用的环境变量**（`DEVTOOLKIT_PANE_ID` /
+/// `DEVTOOLKIT_EVENT_DIR`）：那是往**本机**的事件目录里写文件用的，
+/// 而远端机器上既没有我们的包装脚本、也不该有。
+/// 所以远端会话的状态**只靠 OSC 序列和用户的键盘**两条路（见 HANDOFF）。
+async fn open_remote(
+    remotes: &Arc<RemoteRegistry>,
+    id: String,
+    config: AgentOpenConfig,
+    spec: RemoteSpec,
+    channel: Channel<PtyEvent>,
+) -> Result<AgentOpenOutcome, String> {
+    let generation = next_generation();
+
+    // ⚠️ 事件流是**返回出来**的（和 `registry.open` 那边一个形状）——
+    // 这一层不用认识 tokio，直接拿它去喂 `forward`
+    let outcome = devtoolkit_agents::remote::open(
+        &id,
+        &spec,
+        &config.cwd,
+        &config.command,
+        config.cols,
+        config.rows,
+        generation,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let (session, events) = match outcome {
+        RemoteOutcome::Ready { session, events } => (session, events),
+        RemoteOutcome::HostKeyUnknown { algorithm, fingerprint } => {
+            return Ok(AgentOpenOutcome::HostKeyUnknown { algorithm, fingerprint });
+        }
+        RemoteOutcome::HostKeyMismatch { expected, actual } => {
+            return Ok(AgentOpenOutcome::HostKeyMismatch { expected, actual });
+        }
+    };
+
+    remotes.insert(&id, generation, session).await;
+
+    // 转发任务：和本机那条路**同一个转发器**（Channel 必须搬进来，否则函数一返回
+    // 它就被丢掉，前端那条回调立刻注销、终端一片空白还没有报错）
+    let remotes = Arc::clone(remotes);
+    let session_id = id.clone();
+    tauri::async_runtime::spawn(async move {
+        forward(events, |event| {
+            let _ = channel.send(event);
+        })
+        .await;
+        // 收尾时把它从远端表里摘掉 —— 和本机那条路一样
+        remotes.close(&session_id).await;
+    });
+
+    Ok(AgentOpenOutcome::Ready)
+}
+
+/// 远端会话的 generation —— 和本机那条路**各算各的**（两张表互不相干）。
+///
+/// 用一个模块级的计数器：只要单调递增就够，它唯一的用途是「别让上一轮的
+/// 残留顶掉新会话」。
+fn next_generation() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::SeqCst)
 }
 
 /// 往窗格里发键盘输入。
@@ -142,12 +282,20 @@ pub async fn agent_open(
 #[tauri::command]
 pub async fn agent_write(
     registry: State<'_, Arc<AgentRegistry>>,
+    remotes: State<'_, Arc<RemoteRegistry>>,
     id: String,
     bytes: String,
 ) -> Result<(), String> {
     let data = base64::engine::general_purpose::STANDARD
         .decode(bytes.as_bytes())
         .map_err(|e| format!("终端输入不是合法的 base64：{e}"))?;
+
+    // ⚠️ **远端优先**：这个 id 上挂着远端会话就走那边（它是 async 的、
+    // 不该丢进 blocking 池 —— 那边是给「会无限期阻塞的本地 pty 写」准备的）
+    if let Some(session) = remotes.get_any(&id) {
+        let _span = crate::health::span("agent_write", &id);
+        return session.write(&data).await.map_err(|e| e.to_string());
+    }
 
     // 卡住的话它会一直挂在健康日志的「在跑」那一列里（见 `health.rs`）
     let _span = crate::health::span("agent_write", &id);
@@ -164,10 +312,18 @@ pub async fn agent_write(
 #[tauri::command]
 pub async fn agent_resize(
     registry: State<'_, Arc<AgentRegistry>>,
+    remotes: State<'_, Arc<RemoteRegistry>>,
     id: String,
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
+    // 远端优先（同 `agent_write`）
+    if let Some(session) = remotes.get_any(&id) {
+        let cols = cols.clamp(1, 1000);
+        let rows = rows.clamp(1, 1000);
+        return session.resize(cols, rows).await.map_err(|e| e.to_string());
+    }
+
     // 前端那边 `clampSize` 已经把明显的垃圾挡住了；这里是第二道。
     // 夹到 u16 是因为 pty 的尺寸就是这个宽度（IPC 上是 u32，好让前端传得进来）
     let cols = cols.clamp(1, u16::MAX as u32) as u16;
@@ -190,8 +346,17 @@ pub async fn agent_resize(
 #[tauri::command]
 pub async fn agent_close(
     registry: State<'_, Arc<AgentRegistry>>,
+    remotes: State<'_, Arc<RemoteRegistry>>,
     id: String,
 ) -> Result<(), String> {
+    // 远端优先。两边都关一遍也没关系（各自的 close 都是幂等的、
+    // 而且 id 不会同时挂在两张表上）
+    if remotes.get_any(&id).is_some() {
+        let _span = crate::health::span("agent_close", &id);
+        remotes.close(&id).await;
+        return Ok(());
+    }
+
     let _span = crate::health::span("agent_close", &id);
     let registry = registry.inner().clone();
     tauri::async_runtime::spawn_blocking(move || registry.close(&id))
@@ -205,7 +370,13 @@ pub async fn agent_close(
 ///    pane 还活着，用户在新界面上**看不见也关不掉**它们；
 /// 2. 应用退出（在 `lib.rs` 的 `RunEvent::Exit` 里直接调注册表，不走这条命令）。
 #[tauri::command]
-pub async fn agent_close_all(registry: State<'_, Arc<AgentRegistry>>) -> Result<(), String> {
+pub async fn agent_close_all(
+    registry: State<'_, Arc<AgentRegistry>>,
+    remotes: State<'_, Arc<RemoteRegistry>>,
+) -> Result<(), String> {
+    // 远端那半：它是 async 的，直接 await（不占 blocking 池）
+    remotes.close_all().await;
+
     // 同上：收尾要杀树 + 拿锁，可能等很久。前端 `init()` 会同步等这个调用，
     // 堵住工作线程等于把「刚打开应用」也拖住
     let _span = crate::health::span("agent_close_all", "-");

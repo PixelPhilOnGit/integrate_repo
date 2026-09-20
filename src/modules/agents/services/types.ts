@@ -19,6 +19,42 @@
 import type { EnvironmentReport } from '../core/types';
 
 /** 开一个会话需要的全部输入 */
+/**
+ * 起会话的结局。字段名照着 Rust 侧 `agent_commands.rs` 的 `AgentOpenOutcome` 写
+ * （tag 是 `kind` + camelCase）。
+ *
+ * ⚠️ 主机密钥那两种**不只在远端才有意义** —— 只有配了 `remote` 的会话才可能返回
+ * 它们，本机那条路永远是 `ready`。
+ */
+export type AgentOpenOutcome =
+  | { kind: 'ready' }
+  | { kind: 'hostKeyUnknown'; algorithm: string; fingerprint: string }
+  | { kind: 'hostKeyMismatch'; expected: string; actual: string };
+
+/**
+ * 远端目标 —— 「在另一台机器上开这个会话」。
+ *
+ * ⚠️ 这是**运行时**才拼出来的（从工作目录上那几个拍平字段，见
+ * `core/types.ts` 的 `remoteOf`）：存的时候是 `remoteHost` / `remotePassword`……
+ * 那一组，发出去的时候是这个形状。
+ *
+ * ⚠️ **密码和口令在这一层还是明文** —— 它们是刚从系统钥匙串里取出来的，
+ * 要交给 Rust 去连。落盘那条路上它们是进钥匙串的（见 `state/store.ts`）。
+ */
+export interface RemoteTargetPayload {
+  host: string;
+  port: number;
+  username: string;
+  authKind: 'password' | 'key';
+  password: string;
+  privateKeyPath: string;
+  passphrase: string;
+  /** 上一次信任过的指纹。`null` = 从没见过这台机器 */
+  expectedFingerprint: string | null;
+  /** 用户在弹窗里点过「信任」——**只对这一次连接有效**，不落盘 */
+  acceptNewHostKey: boolean;
+}
+
 export interface PtyOpenRequest {
   /** 会话 id。同时会作为 `DEVTOOLKIT_PANE_ID` 注入进去 */
   id: string;
@@ -33,6 +69,8 @@ export interface PtyOpenRequest {
   command: string;
   cols: number;
   rows: number;
+  /** 空 = 本机（默认，也是这一版之前唯一的形态） */
+  remote?: RemoteTargetPayload;
   /**
    * 要注入的环境变量。
    *
@@ -72,7 +110,14 @@ export interface AgentsClient {
    * ⚠️ 和 SSH 一样：**每次调用都必须是一次独立的新通道**，
    * 通道对象跨调用复用会让后续事件石沉大海（见 `shared/platform/invoke.ts`）。
    */
-  open(request: PtyOpenRequest): Promise<void>;
+  /**
+   * 起一个会话。
+   *
+   * ⚠️ 返回**三态**（和 SSH 那条路一个形状）：主机密钥没见过、或者变了的时候
+   * **不是异常**，是要让用户拍板的分支 —— 异常那条路上只有一句字符串，
+   * 结构化信息（指纹）到不了。判据是 `kind === 'ready'`。
+   */
+  open(request: PtyOpenRequest): Promise<AgentOpenOutcome>;
 
   /** 往会话里发键盘输入。**调用顺序就是到达顺序**（由实现用一条 promise 链兑现） */
   write(id: string, data: Uint8Array): Promise<void>;

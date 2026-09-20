@@ -23,7 +23,7 @@
  */
 
 import type { KeyValueStore } from '../platform/kv';
-import { createSecrets } from '../platform/secrets';
+import { withSecrets } from '../platform/secrets';
 import type { ConnectionProfileBase, ProfileStore } from './types';
 
 export interface ProfileStoreOptions<P> {
@@ -47,35 +47,6 @@ export interface ProfileStoreOptions<P> {
 }
 
 const DEFAULT_KEY = 'profiles';
-
-/**
- * 把一份档案里**敏感字段摘掉** —— 存进键值表的从来是这个形状。
- *
- * 摘掉（而不是设成空串）是有意的：空串和「密码在别处」在 JSON 里长得一样，
- * 而这两件事的含义完全不同（一个是「这个连接不要密码」，一个是「密码在钥匙串里」）。
- * 字段不在了就是「不在这儿」。
- */
-function stripSecrets<P extends ConnectionProfileBase>(
-  profile: P,
-  fields: ReadonlyArray<keyof P & string>,
-): P {
-  const next: Partial<P> = { ...profile };
-  for (const field of fields) delete next[field];
-  return next as P;
-}
-
-/** 一份档案里那些敏感字段的**值**（空的不要 —— 那表示「这个连接不用它」） */
-function secretsOf<P extends ConnectionProfileBase>(
-  profile: P,
-  fields: ReadonlyArray<keyof P & string>,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const field of fields) {
-    const value: unknown = profile[field];
-    if (typeof value === 'string' && value !== '') out[field] = value;
-  }
-  return out;
-}
 
 /**
  * **连接类**模块的档案存储：密码（以及 SSH 的私钥口令）走系统钥匙串。
@@ -125,116 +96,6 @@ export function createProfileStore<P>(
 
     async save(profiles: readonly P[]): Promise<void> {
       await kv.set(key, profiles);
-    },
-  };
-}
-
-/**
- * 在「记录列表」外面套一层钥匙串。
- *
- * 泛型约束是 `P extends ConnectionProfileBase`（一定带 `password`），所以这里能
- * 放心地碰那几个敏感字段 —— 上面那个通用版就不行，它收的东西里根本没有密码。
- */
-function withSecrets<P extends ConnectionProfileBase>(
-  base: ProfileStore<P>,
-  module: string,
-  fields: ReadonlyArray<keyof P & string>,
-): ProfileStore<P> {
-  const secrets = createSecrets();
-
-  /** 读回来的那一串 JSON 解成「字段 → 值」；解不出来当没有（坏条目别连坐） */
-  const parse = (raw: string | undefined): Record<string, string> => {
-    if (raw === undefined) return {};
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed !== 'object' || parsed === null) return {};
-      const out: Record<string, string> = {};
-      for (const [k, v] of Object.entries(parsed)) {
-        if (typeof v === 'string') out[k] = v;
-      }
-      return out;
-    } catch {
-      return {};
-    }
-  };
-
-  return {
-    async load(): Promise<P[]> {
-      // ⚠️ **先 base.load()（它内部会 sanitize）、再问钥匙串**：老数据里密码还在
-      // 键值表里（迁移之前），而 sanitize 会把它读出来 —— 那正是要搬进钥匙串的
-      // 东西，在读出来之前就丢掉的话，用户的密码就真没了。
-      const rows = await base.load();
-      if (rows.length === 0) return rows;
-
-      // ⚠️ 钥匙串那一整块**包在 try 里**：它出任何事（不可用、或者实现里抛）
-      // 都不该让整个连接列表打不开。**拿不到密码是遗憾，打不开是事故。**
-      let stored: Record<string, string> | null = null;
-      try {
-        if (await secrets.available()) {
-          stored = await secrets.load(
-            module,
-            rows.map((r) => r.id),
-          );
-        }
-      } catch {
-        return rows;
-      }
-      if (stored === null) return rows; // 没有钥匙串：就用键值表里的
-
-      // 一次性搬迁：键值表里还有明文、而钥匙串里还没有的那些。
-      // 「还有明文」= 这几个敏感字段里至少有一个非空。
-      const pending = rows
-        .map((row) => ({ row, values: secretsOf(row, fields) }))
-        .filter((p) => Object.keys(p.values).length > 0 && stored[p.row.id] === undefined);
-
-      if (pending.length > 0) {
-        const ok = await secrets.store(
-          module,
-          pending.map((p) => ({ id: p.row.id, secret: JSON.stringify(p.values) })),
-        );
-        // ⚠️ **写进钥匙串成功了才从键值表里删** —— 反过来的话，
-        // 中间失败一次就是「两边都没有」，那是真的丢密码
-        if (ok) await base.save(rows.map((r) => stripSecrets(r, fields)));
-      }
-
-      // 组装最终形状：**钥匙串里的优先，缺的用键值表里读出来的兜底**。
-      //
-      // 后半句是给老数据留的 —— 搬迁没成（钥匙串写不进去）、或者那一条的存档
-      // 本来就解不出来时，用户在界面上看到的仍是自己填过的那个密码，而不是一片空白。
-      return rows.map((row) => {
-        const fromKeychain = parse(stored[row.id]);
-        // ⚠️ 走 `Record<string, unknown>` 中转：`P` 里除了这几个敏感字段还有别的
-        // 东西（端口是数字、`kind` 是枚举），而 `fields` 是运行时才知道的 ——
-        // TS 没法证明「给 P 的某个键赋一个 string」是安全的。断言就收在这一处。
-        const out: Record<string, unknown> = { ...row, ...fromKeychain };
-        for (const field of fields) {
-          if (fromKeychain[field] !== undefined) continue;
-          const value: unknown = row[field];
-          if (typeof value === 'string') out[field] = value;
-        }
-        return out as P;
-      });
-    },
-
-    async save(profiles: readonly P[]): Promise<void> {
-      let wroteToKeychain = false;
-      try {
-        if (await secrets.available()) {
-          // ⚠️ 顺序是**先钥匙串、后键值表**：反过来的话，两次写之间崩了就是
-          // 「键值表里没密码、钥匙串里也没有」—— 那是真的丢密码。这个顺序最坏
-          // 也只是「钥匙串里多存了一份没人用的」，下次 save 会覆盖掉。
-          wroteToKeychain = await secrets.store(
-            module,
-            profiles.map((p) => ({ id: p.id, secret: JSON.stringify(secretsOf(p, fields)) })),
-          );
-        }
-      } catch {
-        wroteToKeychain = false;
-      }
-
-      // ⚠️ **写进钥匙串了才把明文从键值表里摘掉。** 没写进去（没有钥匙串、
-      // 或者它这会儿不可用）就照老样子连密码一起存 —— **绝不能两个地方都没有**。
-      await base.save(wroteToKeychain ? profiles.map((p) => stripSecrets(p, fields)) : profiles);
     },
   };
 }

@@ -20,6 +20,7 @@
  */
 
 import { attachAgentBus, type AgentBus } from '../../../shared/agentBus';
+import { withSecrets } from '../../../shared/platform/secrets';
 import { newId } from '../../../shared/ids';
 import { platform } from '../../../shared/platform';
 import { createKeyValue } from '../../../shared/platform/kv';
@@ -47,6 +48,13 @@ import {
 import { createOscScanner, type OscScanner } from '../core/osc';
 import { attentionQueue, reduceSignal, type AgentSignal } from '../core/status';
 import { withPin } from '../core/workspaces';
+import {
+  hostKeyOf,
+  type RemoteAuthKind,
+  remoteOf,
+  type RemoteTarget,
+  type RemoteTargetPayload,
+} from '../core/types';
 import {
   MAX_SESSIONS_PER_KIND,
   NO_LAUNCH_ARGS,
@@ -97,6 +105,21 @@ const DEFAULT_COMMAND: Record<AgentKind, string> = {
   custom: '',
 };
 
+/**
+ * 「这台机器没见过 / 指纹变了」时等用户拍板的那一次。
+ *
+ * ⚠️ `sessionId` 要记着：用户点了信任之后**要拿它重试那次连接**——
+ * 会话这时候还没起来（进程在远端，我们连都没连上）。
+ */
+export interface TrustPrompt {
+  sessionId: string;
+  workspaceId: string;
+  algorithm: string;
+  fingerprint: string;
+  /** 指纹**变了**的时候带上旧的那个（界面上要并排显示）。没见过就是 null */
+  expected: string | null;
+}
+
 export interface AgentsState {
   ready: boolean;
   workspaces: AgentWorkspace[];
@@ -129,6 +152,22 @@ export interface AgentsState {
   /** 检查器里在看哪个会话。可以和 focused 不同（点侧栏看一眼，不动屏幕） */
   selectedId: string | null;
   /** 事件目录的绝对路径。给检查器显示 */
+  /**
+   * 首次连一台没见过的远端机器时，等用户拍板的弹窗。
+   *
+   * 形状和 SSH 模块那个一样（TOFU）：**指纹摆出来让用户核对**，
+   * 不点信任就连不上。远端会话的状态检测本来就弱（远端写不了我们的钩子），
+   * 这一道是那条路上**唯一**的安全决策，不能省。
+   */
+  trustPrompt: TrustPrompt | null;
+  /**
+   * 信任过的机器（`host:port` → 指纹）。
+   *
+   * ⚠️ **和 SSH 模块那份是两套**：同一台机器，用户先用 SSH 模块连过、
+   * 再用这里的远端会话连，会被问两次。v1 接受这个重复 —— 合起来要跨模块
+   * 共享一份「已知主机」，那是另一件事（见 HANDOFF）。
+   */
+  knownHosts: Record<string, string>;
   eventsDir: string | null;
   /** 最近一次收到状态事件的时刻。集成向导用它回答「到底通了没有」 */
   lastEventAt: number | null;
@@ -182,6 +221,8 @@ export class AgentsStore {
     focusedId: null,
     selectedId: null,
     eventsDir: null,
+    trustPrompt: null,
+    knownHosts: {},
     lastEventAt: null,
     eventsError: null,
     integration: { claude: null, codex: null },
@@ -210,6 +251,15 @@ export class AgentsStore {
    * 重启就清空（见 `shared/agentBus.ts` 那段解释）。
    */
   private exitListeners = new Set<(sessionId: string) => void>();
+
+  /**
+   * 「这一次连接允许接受没见过的密钥」—— 用户在弹窗里点过「信任」的那些会话。
+   *
+   * ⚠️ **一次性、不落盘**：那是「这一下」的授权，不是「这台机器」的。
+   * 落盘的话就等于「信任过一台机器之后永远接受任何指纹」—— 那正是 TOFU 要防的。
+   * 用完就删（见 `remotePayload`）。
+   */
+  private acceptedOnce = new Set<string>();
 
   constructor(private services: AgentsServices) {
     // hub 的两个出口接在这里。做成可写字段而不是构造参数，是为了避开
@@ -265,10 +315,13 @@ export class AgentsStore {
     // 启动参数也一起读：**新建会话时要用它拼命令**，晚读一步就可能漏掉
     const launchArgs = await this.loadLaunchArgs();
     const gitBashPath = await this.loadGitBashPath();
+    // 信任过的机器（远端会话用）。读不出来就当空 —— 大不了重连时再核对一次指纹
+    const knownHosts = await this.loadKnownHosts();
     this.patch({
       workspaces,
       launchArgs,
       gitBashPath,
+      knownHosts,
       // 起来就显示第一个窗口：一个目录都没有的话就是空的
       activeWorkspaceId: workspaces[0]?.id ?? null,
     });
@@ -293,8 +346,29 @@ export class AgentsStore {
     this.startPolling();
   }
 
-  private async loadWorkspaces(): Promise<AgentWorkspace[]> {
-    const raw = await this.kv.get<unknown>('workspaces');
+  /**
+   * 工作目录的读写 —— **外面套了钥匙串**。
+   *
+   * ⚠️ 远端工作目录里带着那台机器的**密码 / 私钥口令**（见 `core/types.ts` 的
+   * `remoteOf`），它们不该躺在键值表里。声明的就是那几个字段；
+   * 本机目录一个都没有，于是那一层对它是完全透明的。
+   *
+   * 和连接档案走的是**同一套机制**（`shared/platform/secrets.ts` 的
+   * `withSecrets`）：没有钥匙串的机器上退回老路、迁移是「写进去成功了才删」。
+   */
+  private readonly workspaceStore = withSecrets<AgentWorkspace>(
+    {
+      load: async () => this.sanitizeWorkspaces(await this.kv.get<unknown>('workspaces')),
+      save: async (rows) => {
+        await this.kv.set('workspaces', rows);
+      },
+    },
+    'agents',
+    ['remotePassword', 'remotePassphrase'],
+  );
+
+  /** 把存储里的不可信数据整形成 `AgentWorkspace[]`（纯函数，钥匙串那层在外面） */
+  private sanitizeWorkspaces(raw: unknown): AgentWorkspace[] {
     if (!Array.isArray(raw)) return [];
 
     // 按不可信输入处理：手改过的、旧版本的都要能读，
@@ -308,6 +382,10 @@ export class AgentsStore {
       const name = w['name'];
       if (typeof id !== 'string' || id === '') continue;
       if (typeof path !== 'string' || path === '') continue;
+      const str = (k: string): string | undefined => {
+        const v = w[k];
+        return typeof v === 'string' && v !== '' ? v : undefined;
+      };
       out.push({
         id,
         path,
@@ -315,10 +393,49 @@ export class AgentsStore {
         // ⚠️ 只认**真正的 `true`** —— 存储里的东西不可信，`"false"` / `1` 这种
         // 都不该让一个目录莫名其妙排到最上面
         ...(w['pinned'] === true ? { pinned: true } : {}),
+        // 远端那几个字段：**空的不写进去**（本机目录不该带着一堆空字段）
+        ...(str('remoteHost') === undefined ? {} : { remoteHost: str('remoteHost') }),
+        ...(typeof w['remotePort'] === 'number' ? { remotePort: w['remotePort'] } : {}),
+        ...(str('remoteUsername') === undefined ? {} : { remoteUsername: str('remoteUsername') }),
+        ...(w['remoteAuthKind'] === 'password' || w['remoteAuthKind'] === 'key'
+          ? { remoteAuthKind: w['remoteAuthKind'] }
+          : {}),
+        ...(str('remotePrivateKeyPath') === undefined
+          ? {}
+          : { remotePrivateKeyPath: str('remotePrivateKeyPath') }),
+        // ⚠️ 这两个是**敏感字段**，钥匙串那层会把它们摘掉再存；
+        // 读的时候它会填回来（没有钥匙串时就从键值表里读）—— 这里只管形状
+        ...(str('remotePassword') === undefined
+          ? {}
+          : { remotePassword: str('remotePassword') }),
+        ...(str('remotePassphrase') === undefined
+          ? {}
+          : { remotePassphrase: str('remotePassphrase') }),
       });
     }
     // ⚠️ 这里**不排序**：数组顺序永远是「用户添加的顺序」，置顶只在画的时候拎一下
     // （排序写回数组的话，取消置顶就再也回不到原位了 —— 见 `toggleWorkspacePin`）
+    return out;
+  }
+
+  /** 读回工作目录（整形 + 钥匙串那一层，见 `workspaceStore`） */
+  private async loadWorkspaces(): Promise<AgentWorkspace[]> {
+    return this.workspaceStore.load();
+  }
+
+  /**
+   * 读信任过的机器指纹。
+   *
+   * ⚠️ **读不出来就当空**（而不是报错）：那意味着下次连远端会重新问一遍指纹 ——
+   * 一次多出来的确认，比「远端会话整个用不了」轻得多。
+   */
+  private async loadKnownHosts(): Promise<Record<string, string>> {
+    const raw = await this.kv.get<unknown>('knownHosts');
+    if (typeof raw !== 'object' || raw === null) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (typeof v === 'string' && v !== '') out[k] = v;
+    }
     return out;
   }
 
@@ -597,6 +714,56 @@ export class AgentsStore {
   }
 
   /**
+   * 加一个**远端**工作目录（一台机器 + 那台机器上的一个目录）。
+   *
+   * ⚠️ 密码和私钥口令进系统钥匙串（`workspaceStore` 声明了那两个字段），
+   * 不只是「不写日志」那种程度的处理。
+   */
+  async addRemoteWorkspace(input: {
+    host: string;
+    port: number;
+    username: string;
+    authKind: RemoteAuthKind;
+    password: string;
+    privateKeyPath: string;
+    passphrase: string;
+    path: string;
+    name: string;
+  }): Promise<string> {
+    // 同一台机器的同一个目录不重复加（三样都一样才算同一个）
+    const exists = this.state.workspaces.find(
+      (w) =>
+        w.remoteHost === input.host && w.remotePort === input.port && w.path === input.path,
+    );
+    if (exists !== undefined) {
+      this.shell.setStatus('这个目录已经在列表里了');
+      return exists.id;
+    }
+
+    const workspace: AgentWorkspace = {
+      id: newId('ws'),
+      path: input.path,
+      name: input.name !== '' ? input.name : `${input.host}:${baseName(input.path)}`,
+      remoteHost: input.host,
+      remotePort: input.port,
+      remoteUsername: input.username,
+      remoteAuthKind: input.authKind,
+      // 空的不写进去（本机那几个字段就是一个都不写）
+      ...(input.password === '' ? {} : { remotePassword: input.password }),
+      ...(input.privateKeyPath === '' ? {} : { remotePrivateKeyPath: input.privateKeyPath }),
+      ...(input.passphrase === '' ? {} : { remotePassphrase: input.passphrase }),
+    };
+
+    this.patch({
+      workspaces: [...this.state.workspaces, workspace],
+      // 新加的目录直接切过去（和本机那条路一样）
+      activeWorkspaceId: workspace.id,
+    });
+    this.persistWorkspaces();
+    return workspace.id;
+  }
+
+  /**
    * 删掉一个工作目录。
    *
    * **连同它下面的会话一起关掉**：目录都不在列表里了，那些会话就没有地方
@@ -704,7 +871,9 @@ export class AgentsStore {
   }
 
   private persistWorkspaces(): void {
-    void this.kv.set('workspaces', this.state.workspaces).catch(() => undefined);
+    // 存不下去不该让界面崩（和以前一样静静算了）—— 上面那些字段里
+    // 没有一样是「丢了就出事」的，而这里也没法给用户一个有用的提示
+    void this.workspaceStore.save(this.state.workspaces).catch(() => undefined);
   }
 
   // ------------------------------------------------------------ 会话
@@ -818,10 +987,21 @@ export class AgentsStore {
     return created.length;
   }
 
-  /** 起进程。终端这时候已经在 hub 里了（见 `createSession` 里那段顺序说明） */
+  /**
+   * 起进程。终端这时候已经在 hub 里了（见 `createSession` 里那段顺序说明）。
+   *
+   * **两条路**：工作目录是本机的就走本机 pty（默认，也是这一版之前唯一的形态）；
+   * 配了远端就 SSH 到那台机器上起。
+   *
+   * ⚠️ 远端那条路**可能开不成** —— 主机密钥没见过、或者变了。那不是异常，
+   * 是**要用户拍板的分支**（进程在别的机器上，我们连都没连上）：
+   * 记一个 `trustPrompt` 让界面弹窗，用户点了信任再重试。
+   */
   private async spawn(session: AgentSession, workspace: AgentWorkspace): Promise<void> {
     const eventsDir = this.state.eventsDir ?? '';
-    await this.services.client.open({
+    const remote = remoteOf(workspace);
+
+    const outcome = await this.services.client.open({
       id: session.id,
       cwd: workspace.path,
       // null = 平台默认 shell。刻意**不在这里选 Git Bash / PowerShell**：
@@ -830,6 +1010,8 @@ export class AgentsStore {
       command: session.command,
       cols: INITIAL_COLS,
       rows: INITIAL_ROWS,
+      // 远端目标（本机那条路是 undefined，Rust 那边 `Option` 收到 None）
+      ...(remote === null ? {} : { remote: this.remotePayload(remote, session.id) }),
       // 状态检测整条链路挂在这两个变量上：agent 继承它们，它拉起来的
       // hook 进程再继承一次（见 services/types.ts 的 env 那段）
       env: {
@@ -844,7 +1026,88 @@ export class AgentsStore {
       onEvent: (event) => this.onPtyEvent(session.id, event),
     });
 
+    if (outcome.kind !== 'ready') {
+      // 主机密钥的事。⚠️ **不能发 `started`** —— 远端那边连都没连上，
+      // 那个会话根本没起来。用户点完信任会重试这一次（见 `trustHost`）
+      this.patch({
+        trustPrompt: {
+          sessionId: session.id,
+          workspaceId: workspace.id,
+          algorithm: outcome.kind === 'hostKeyUnknown' ? outcome.algorithm : '',
+          fingerprint: outcome.kind === 'hostKeyUnknown' ? outcome.fingerprint : outcome.actual,
+          expected: outcome.kind === 'hostKeyMismatch' ? outcome.expected : null,
+        },
+      });
+      return;
+    }
+
     this.applySignal(session.id, { kind: 'started' }, Date.now());
+  }
+
+  /**
+   * 拼给 Rust 的远端目标。
+   *
+   * ⚠️ **密码和私钥口令在这里是明文的**：它们是从系统钥匙串里刚取出来的
+   * （`workspaces` 那份存储走 `withSecrets`），要交给 Rust 去连。
+   * 落盘那条路上它们进钥匙串 —— 这一层只是过一下手。
+   */
+  private remotePayload(remote: RemoteTarget, sessionId: string): RemoteTargetPayload {
+    return {
+      host: remote.host,
+      port: remote.port,
+      username: remote.username,
+      authKind: remote.authKind,
+      password: remote.password,
+      privateKeyPath: remote.privateKeyPath,
+      passphrase: remote.passphrase,
+      // 信任过的指纹（没见过就是 null —— Rust 那边据此回 hostKeyUnknown）
+      expectedFingerprint: this.state.knownHosts[hostKeyOf(remote)] ?? null,
+      // ⚠️ 「这次就当它是对的」**只对用户刚点过信任的那一次为 true**：
+      // 它是「这一下」的授权，不是「这台机器」的。所以放在一个一次性的集合里、
+      // 不落盘 —— 落盘的话就等于「信任过一台机器之后永远接受任何指纹」✗
+      acceptNewHostKey: this.acceptedOnce.delete(sessionId),
+    };
+  }
+
+  /** 用户在那个弹窗里点了「信任」：**记下指纹、然后重试那次连接** */
+  async trustHost(): Promise<void> {
+    const prompt = this.state.trustPrompt;
+    if (prompt === null) return;
+
+    const workspace = this.workspaceById(prompt.workspaceId);
+    const remote = workspace === null ? null : remoteOf(workspace);
+    if (workspace === null || remote === null) {
+      this.patch({ trustPrompt: null });
+      return;
+    }
+
+    const knownHosts = { ...this.state.knownHosts, [hostKeyOf(remote)]: prompt.fingerprint };
+    this.patch({ knownHosts, trustPrompt: null });
+    this.persistKnownHosts(knownHosts);
+
+    // 这一次连接允许接受新密钥 —— 用户刚拍过板了
+    this.acceptedOnce.add(prompt.sessionId);
+    const session = this.state.sessions.find((s) => s.id === prompt.sessionId);
+    if (session !== undefined) await this.spawn(session, workspace);
+  }
+
+  /** 用户点了「取消」：把那次没起来的会话收掉，别在侧栏里留一个空壳 */
+  dismissTrust(): void {
+    const prompt = this.state.trustPrompt;
+    this.patch({ trustPrompt: null });
+    if (prompt !== null) void this.closeSession(prompt.sessionId);
+  }
+
+  /** 忘掉一台机器的指纹（下次连它要重新核对一遍） */
+  forgetHost(host: string, port: number): void {
+    const knownHosts = { ...this.state.knownHosts };
+    delete knownHosts[`${host}:${port}`];
+    this.patch({ knownHosts });
+    this.persistKnownHosts(knownHosts);
+  }
+
+  private persistKnownHosts(knownHosts: Record<string, string>): void {
+    void this.kv.set('knownHosts', knownHosts).catch(() => undefined);
   }
 
   /** 关掉一个会话：杀进程 + 从布局里摘掉 + 释放终端 */

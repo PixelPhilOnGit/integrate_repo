@@ -36,12 +36,53 @@ export type SessionStatus = 'starting' | 'idle' | 'working' | 'waiting' | 'done'
 /** 需要用户介入的那一个。单独抽出来是因为「谁在等我」问得太频繁了 */
 export const WAITING: SessionStatus = 'waiting';
 
+/** 远端机器的认证方式。和 SSH 模块一个口径（判别联合的 `kind` 值） */
+export type RemoteAuthKind = 'password' | 'key';
+
+/**
+ * 一台远端的机器 —— 「在另外一台机器上开 agent」要连的那个东西。
+ *
+ * ⚠️ **存储里是拍平成 `remote*` 字段的**（见 `AgentWorkspace`），不是这个对象。
+ * 拍平是因为钥匙串那一层（`shared/platform/secrets.ts` 的 `withSecrets`）
+ * 只认**顶层**字段 —— 密码和私钥口令得能被声明进去，嵌套一层的字段它看不见。
+ * 这个类型只活在代码里，用 [`remoteOf`] 从工作目录上取。
+ */
+export interface RemoteTarget {
+  host: string;
+  port: number;
+  username: string;
+  authKind: RemoteAuthKind;
+  /** 明文密码/口令只在**内存里**停一下，落盘时进系统钥匙串 */
+  password: string;
+  privateKeyPath: string;
+  passphrase: string;
+}
+
 export interface AgentWorkspace {
   id: string;
-  /** 本地目录的绝对路径 */
+  /**
+   * 目录路径。
+   *
+   * 本机目录就是绝对路径；**远端的是「那台机器上的路径」** ——
+   * 它在这台机器上压根不存在，别拿去喂 `fs`（见下面 `remoteHost`）。
+   */
   path: string;
   /** 展示名。默认取目录名，用户可改 */
   name: string;
+  /**
+   * 远端目标。**空 = 本机目录**（默认，也是这一版之前唯一的形态）。
+   *
+   * ⚠️ 这些字段是**拍平**的（不是嵌套一个对象）：钥匙串那层只认顶层字段，
+   * 而 `remotePassword` / `remotePassphrase` 是敏感的、必须能被声明进去。
+   * 用 [`remoteOf`] 取出来当对象使。
+   */
+  remoteHost?: string;
+  remotePort?: number;
+  remoteUsername?: string;
+  remoteAuthKind?: RemoteAuthKind;
+  remotePassword?: string;
+  remotePrivateKeyPath?: string;
+  remotePassphrase?: string;
   /**
    * 置顶 —— 排在别的目录前面（常驻的那两三个项目不用每次都往下找）。
    *
@@ -49,6 +90,64 @@ export interface AgentWorkspace {
    * 是两件事，别混。持久化在同一个 `workspaces` 键里。
    */
   pinned?: boolean;
+}
+
+/**
+ * 从工作目录上取下远端目标。**本机目录返回 `null`**。
+ *
+ * 判据是 `remoteHost` 非空 —— 只有它填了才算「这是个远端目录」，
+ * 别的字段单独出现没有意义（端口缺省、认证方式缺省都还能连）。
+ */
+export function remoteOf(workspace: AgentWorkspace): RemoteTarget | null {
+  const host = (workspace.remoteHost ?? '').trim();
+  if (host === '') return null;
+
+  return {
+    host,
+    // SSH 的默认端口。⚠️ 和 `devtoolkit-ssh` 的默认保持一致
+    port: workspace.remotePort ?? 22,
+    username: workspace.remoteUsername ?? '',
+    authKind: workspace.remoteAuthKind ?? 'password',
+    password: workspace.remotePassword ?? '',
+    privateKeyPath: workspace.remotePrivateKeyPath ?? '',
+    passphrase: workspace.remotePassphrase ?? '',
+  };
+}
+
+/**
+ * 一台机器在「信任记录」里的键。
+ *
+ * ⚠️ **端口要带上**：同一台机器的 22 和 2222 是两个信任对象 ——
+ * 只按 host 记的话它们会互相冒充（SSH 模块那边踩过同一个坑）。
+ */
+export function hostKeyOf(remote: { host: string; port: number }): string {
+  return `${remote.host}:${remote.port}`;
+}
+
+/**
+ * 发给 Rust 的远端目标（IPC 契约）。
+ *
+ * 和 [`RemoteTarget`] 的差别：多了两个**连接时**才有的字段
+ * （`expectedFingerprint` / `acceptNewHostKey`）。它只在**真的要连远端**的
+ * 时候才被拼出来，所以没有「本机那几个字段都空」那种形态。
+ */
+export interface RemoteTargetPayload {
+  host: string;
+  port: number;
+  username: string;
+  authKind: RemoteAuthKind;
+  password: string;
+  privateKeyPath: string;
+  passphrase: string;
+  /** 上一次信任过的指纹。`null` = 从没见过这台机器 */
+  expectedFingerprint: string | null;
+  /** 用户在弹窗里点过「信任」—— **只对这一次连接有效**，不落盘 */
+  acceptNewHostKey: boolean;
+}
+
+/** 这份工作目录要不要连远端 */
+export function isRemote(workspace: AgentWorkspace): boolean {
+  return remoteOf(workspace) !== null;
 }
 
 /** 一次状态变化。用来在检查器里给用户看「这个会话刚才在干什么」 */

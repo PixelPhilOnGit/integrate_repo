@@ -1,45 +1,44 @@
 /**
- * 连接密码走系统钥匙串那条路 —— **尤其是迁移**。
+ * 「把某些字段挪进系统钥匙串」那一层 —— **尤其是迁移**。
  *
  * 这一块的每一条都关系到「用户的密码会不会丢」，所以它不是「顺手测一下」，
- * 是这里最该被钉死的东西。三个场景：
+ * 是这里最该被钉死的东西。
  *
- * 1. **没有钥匙串**（服务器 / headless / 浏览器版）：密码照老样子存键值表里 ——
- *    那些环境里应用照样得能用，而这是它一直以来的行为。
- * 2. **有钥匙串**：密码进钥匙串，键值表里只剩能公开的字段。
- * 3. **迁移**：老数据里密码还在键值表里 → 搬进钥匙串 → 成功了才从键值表里删。
- *    ⚠️ 搬不进去的时候**一个字都不能动**（下次再试），这条比「搬迁做完」重要。
+ * # 为什么直接测 `withSecrets` 而不测 `createSecretProfileStore`
+ *
+ * 因为要**注入一个假的钥匙串**。这台开发机是 headless 容器、没有桌面会话，
+ * 「有钥匙串时」那些场景在真实现下一条都跑不到；而 `createSecretProfileStore`
+ * 内部写死了用真的那个。`withSecrets` 收一个 `secrets` 参数就是为了这个 ——
+ * 那一层薄得只剩一个参数，单独测它等于把整条路都测了。
+ *
+ * ⚠️ 真钥匙串的读写只能在 Windows / macOS 上验（`secrets.rs` 里有两条端到端
+ * 测试，跑不到时会明确打印说明）。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-/** 假的钥匙串。`available` / `store` 的返回值由各个用例自己摆 */
-const { keychain } = vi.hoisted(() => ({
-  keychain: {
-    available: vi.fn<() => Promise<boolean>>(),
-    load: vi.fn<(module: string, ids: readonly string[]) => Promise<Record<string, string>>>(),
-    store:
-      vi.fn<
-        (
-          module: string,
-          entries: ReadonlyArray<{ id: string; secret: string }>,
-        ) => Promise<boolean>
-      >(),
-  },
-}));
-
-vi.mock('../../src/shared/platform/secrets', () => ({
-  createSecrets: () => keychain,
-}));
-
-const { createSecretProfileStore } = await import('../../src/shared/connections/profiles');
-
+import { withSecrets, type SecretsStore } from '../../src/shared/platform/secrets';
 import type { KeyValueStore } from '../../src/shared/platform/kv';
-import type { ConnectionProfileBase } from '../../src/shared/connections/types';
 
-/** 带私钥口令的那种形状（SSH）—— 顺便钉住「敏感字段不止一个」 */
-interface TestProfile extends ConnectionProfileBase {
+/** 一条带两个敏感字段的记录形状（第二个用来钉「敏感字段不止一个」） */
+interface Row {
+  id: string;
+  name: string;
+  host: string;
+  password: string;
   passphrase: string;
+}
+
+const FIELDS: ReadonlyArray<keyof Row & string> = ['password', 'passphrase'];
+
+function row(patch: Partial<Row> = {}): Row {
+  return {
+    id: 'p1',
+    name: '本地',
+    host: '127.0.0.1',
+    password: 'pw-secret',
+    passphrase: 'pp-secret',
+    ...patch,
+  };
 }
 
 /** 一个够用的内存 kv */
@@ -53,64 +52,73 @@ function fakeKv(initial: Record<string, unknown> = {}): KeyValueStore {
   };
 }
 
-/** 读一眼键值表里到底存了什么（测试要断言「密码没在里面」） */
-async function rawOf(kv: KeyValueStore, key = 'profiles'): Promise<unknown[]> {
-  return (await kv.get<unknown[]>(key)) ?? [];
-}
-
-function profile(patch: Partial<TestProfile> = {}): TestProfile {
+/**
+ * 假的钥匙串：`available` / `store` 的返回值由各个用例自己摆。
+ *
+ * ⚠️ `vi.fn` 的类型参数要显式写全 —— 只写返回类型的话，参数类型会被推成空的，
+ * 于是 `mock.calls[0][1]` 这种断言拿不到东西（编译期就红）。
+ */
+function fakeKeychain() {
   return {
-    id: 'p1',
-    name: '本地',
-    host: '127.0.0.1',
-    port: 22,
-    username: 'root',
-    password: 'pw-secret',
-    passphrase: 'pp-secret',
-    ...patch,
+    available: vi.fn<() => Promise<boolean>>(async () => false),
+    load: vi.fn<(module: string, ids: readonly string[]) => Promise<Record<string, string>>>(
+      async () => ({}),
+    ),
+    store:
+      vi.fn<
+        (
+          module: string,
+          entries: ReadonlyArray<{ id: string; secret: string }>,
+        ) => Promise<boolean>
+      >(async () => true),
   };
 }
 
-function sanitize(raw: unknown): TestProfile[] {
+/** 整形（真实现里各模块自己写的那份，这里用一个最小的） */
+function sanitize(raw: unknown): Row[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .filter((r): r is Record<string, unknown> => typeof r === 'object' && r !== null)
-    .map((r) => profile({ ...(r as Partial<TestProfile>), passphrase: String(r['passphrase'] ?? '') }));
+    .map((r) => row(r as Partial<Row>));
 }
 
-const SECRET_FIELDS: ReadonlyArray<'password' | 'passphrase'> = ['password', 'passphrase'];
-
-function store(kv: KeyValueStore) {
-  return createSecretProfileStore<TestProfile>(kv, { sanitize, secretFields: SECRET_FIELDS });
+function store(kv: KeyValueStore, keychain: SecretsStore, key = 'profiles') {
+  return withSecrets(
+    {
+      load: async () => sanitize(await kv.get<unknown>(key)),
+      save: async (rows) => {
+        await kv.set(key, rows);
+      },
+    },
+    key,
+    FIELDS,
+    keychain,
+  );
 }
+
+let keychain: ReturnType<typeof fakeKeychain>;
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  keychain.load.mockResolvedValue({});
-  keychain.store.mockResolvedValue(true);
+  keychain = fakeKeychain();
 });
 
 describe('没有钥匙串时（服务器 / 浏览器版）', () => {
-  beforeEach(() => keychain.available.mockResolvedValue(false));
-
   it('密码照老样子存在键值表里 —— 那些环境里应用照样要能用', async () => {
     const kv = fakeKv();
-    await store(kv).save([profile()]);
+    await store(kv, keychain).save([row()]);
 
-    const raw = await rawOf(kv);
-    expect(raw).toHaveLength(1);
-    expect((raw[0] as Record<string, unknown>)['password']).toBe('pw-secret');
+    const raw = (await kv.get<Row[]>('profiles')) ?? [];
+    expect(raw[0]?.password).toBe('pw-secret');
 
-    // 读回来也对
-    const loaded = await store(kv).load();
+    const loaded = await store(kv, keychain).load();
     expect(loaded[0]?.password).toBe('pw-secret');
     expect(loaded[0]?.passphrase).toBe('pp-secret');
   });
 
   it('压根不去碰钥匙串', async () => {
     const kv = fakeKv();
-    await store(kv).save([profile()]);
-    await store(kv).load();
+    await store(kv, keychain).save([row()]);
+    await store(kv, keychain).load();
 
     expect(keychain.load).not.toHaveBeenCalled();
     expect(keychain.store).not.toHaveBeenCalled();
@@ -118,122 +126,137 @@ describe('没有钥匙串时（服务器 / 浏览器版）', () => {
 });
 
 describe('有钥匙串时', () => {
-  beforeEach(() => keychain.available.mockResolvedValue(true));
+  beforeEach(() => {
+    keychain.available.mockResolvedValue(true);
+  });
 
-  it('密码进钥匙串，键值表里**一个敏感字段都不留**', async () => {
+  it('敏感字段进钥匙串，键值表里**一个都不留**', async () => {
     const kv = fakeKv();
-    await store(kv).save([profile()]);
+    await store(kv, keychain).save([row()]);
 
-    const raw = (await rawOf(kv))[0] as Record<string, unknown>;
-    expect(raw['password']).toBeUndefined();
-    expect(raw['passphrase']).toBeUndefined();
+    const raw = ((await kv.get<Record<string, unknown>[]>('profiles')) ?? [])[0];
+    expect(raw?.['password']).toBeUndefined();
+    expect(raw?.['passphrase']).toBeUndefined();
     // 能公开的字段照旧在
-    expect(raw['host']).toBe('127.0.0.1');
-    expect(raw['username']).toBe('root');
+    expect(raw?.['host']).toBe('127.0.0.1');
+    expect(raw?.['name']).toBe('本地');
 
-    // 两个敏感字段打包成**一个**条目（一个连接一条，好管理也好删）
-    const call = keychain.store.mock.calls.at(-1);
-    expect(call?.[0]).toBe('profiles');
-    const entry = call?.[1]?.[0];
-    expect(entry?.id).toBe('p1');
-    expect(JSON.parse(entry?.secret ?? '{}')).toEqual({
+    // 两个字段打包成**一条**（一条记录一条，好管理也好删）
+    const entry = keychain.store.mock.calls[0]?.[1]?.[0] as { id: string; secret: string };
+    expect(entry.id).toBe('p1');
+    expect(JSON.parse(entry.secret)).toEqual({
       password: 'pw-secret',
       passphrase: 'pp-secret',
     });
   });
 
   it('读的时候从钥匙串取回来', async () => {
-    const kv = fakeKv({
-      profiles: [{ id: 'p1', name: '本地', host: '127.0.0.1', port: 22, username: 'root' }],
-    });
+    const kv = fakeKv({ profiles: [{ id: 'p1', name: '本地', host: '127.0.0.1' }] });
     keychain.load.mockResolvedValue({
       p1: JSON.stringify({ password: '从钥匙串来的', passphrase: '也是' }),
     });
 
-    const loaded = await store(kv).load();
+    const loaded = await store(kv, keychain).load();
     expect(loaded[0]?.password).toBe('从钥匙串来的');
     expect(loaded[0]?.passphrase).toBe('也是');
+  });
+
+  it('一条记录的存档解不出来时，退回键值表里的那个（不连坐）', async () => {
+    const kv = fakeKv({ profiles: [row()] });
+    keychain.load.mockResolvedValue({ p1: '不是合法 JSON' });
+
+    const loaded = await store(kv, keychain).load();
+    expect(loaded[0]?.password).toBe('pw-secret');
   });
 });
 
 describe('老数据的迁移', () => {
-  beforeEach(() => keychain.available.mockResolvedValue(true));
+  beforeEach(() => {
+    keychain.available.mockResolvedValue(true);
+  });
 
   it('键值表里还有明文、钥匙串里没有 → 搬过去，然后从键值表里删', async () => {
-    const kv = fakeKv({ profiles: [profile()] });
+    const kv = fakeKv({ profiles: [row()] });
 
-    const loaded = await store(kv).load();
+    const loaded = await store(kv, keychain).load();
 
-    // 搬进钥匙串了
     expect(keychain.store).toHaveBeenCalledTimes(1);
-    const entry = keychain.store.mock.calls[0]?.[1]?.[0];
-    expect(JSON.parse(entry?.secret ?? '{}')).toEqual({
+    const entry = keychain.store.mock.calls[0]?.[1]?.[0] as { secret: string };
+    expect(JSON.parse(entry.secret)).toEqual({
       password: 'pw-secret',
       passphrase: 'pp-secret',
     });
 
     // 键值表里的明文没了
-    const raw = (await rawOf(kv))[0] as Record<string, unknown>;
-    expect(raw['password']).toBeUndefined();
+    const raw = ((await kv.get<Record<string, unknown>[]>('profiles')) ?? [])[0];
+    expect(raw?.['password']).toBeUndefined();
 
     // 而用户读到的密码一点没变
     expect(loaded[0]?.password).toBe('pw-secret');
   });
 
   it('⚠️ 搬不进钥匙串时**一个字都不动**（下次再试，用户不丢密码）', async () => {
-    const kv = fakeKv({ profiles: [profile()] });
+    const kv = fakeKv({ profiles: [row()] });
     keychain.store.mockResolvedValue(false); // 写不进去
 
-    const loaded = await store(kv).load();
+    const loaded = await store(kv, keychain).load();
 
-    // 键值表原样：明文还在（下次启动还能再试一次）
-    const raw = (await rawOf(kv))[0] as Record<string, unknown>;
-    expect(raw['password']).toBe('pw-secret');
+    const raw = ((await kv.get<Record<string, unknown>[]>('profiles')) ?? [])[0];
+    expect(raw?.['password']).toBe('pw-secret');
 
-    // 而这次用户照样能读到自己的密码（从键值表里兜底）
+    // 这次用户照样读得到（从键值表里兜底）
     expect(loaded[0]?.password).toBe('pw-secret');
     expect(loaded[0]?.passphrase).toBe('pp-secret');
   });
 
-  it('钥匙串里已经有了就不搬（避免每次启动都写一遍）', async () => {
-    const kv = fakeKv({ profiles: [profile()] });
-    keychain.load.mockResolvedValue({
-      p1: JSON.stringify({ password: '在钥匙串里' }),
-    });
+  it('钥匙串里已经有了就不搬（免得每次启动都写一遍）', async () => {
+    const kv = fakeKv({ profiles: [row()] });
+    keychain.load.mockResolvedValue({ p1: JSON.stringify({ password: '在钥匙串里' }) });
 
-    const loaded = await store(kv).load();
+    const loaded = await store(kv, keychain).load();
 
     expect(keychain.store).not.toHaveBeenCalled();
     expect(loaded[0]?.password).toBe('在钥匙串里');
   });
 
-  it('本来就是空的敏感字段不搬（那是「这个连接不用密码」，不是待迁移的数据）', async () => {
-    const kv = fakeKv({ profiles: [profile({ password: '', passphrase: '' })] });
+  it('本来就是空的敏感字段不搬（那是「这条记录不用它」，不是待迁移的数据）', async () => {
+    const kv = fakeKv({ profiles: [row({ password: '', passphrase: '' })] });
 
-    await store(kv).load();
+    await store(kv, keychain).load();
 
     expect(keychain.store).not.toHaveBeenCalled();
   });
 });
 
-describe('钥匙串中途掉线', () => {
-  it('读的时候整个不可用 → 退回键值表，而不是报错', async () => {
-    const kv = fakeKv({ profiles: [profile()] });
+describe('钥匙串中途出问题', () => {
+  it('读的时候它抛了 → 退回键值表，而不是让整份列表打不开', async () => {
+    const kv = fakeKv({ profiles: [row()] });
     keychain.available.mockResolvedValue(true);
     keychain.load.mockRejectedValue(new Error('桌面会话锁了'));
 
-    // `secrets.ts` 的实现里那条路是 catch 成 {}；这里直接验 store 的行为：
-    // 掉线不该把 load 变成异常
-    await expect(store(kv).load()).resolves.toBeDefined();
+    // **拿不到密码是遗憾，打不开是事故**
+    const loaded = await store(kv, keychain).load();
+    expect(loaded[0]?.password).toBe('pw-secret');
   });
 
-  it('写的时候不可用 → 密码留在键值表里（不能写丢）', async () => {
+  it('写的时候它抛了 → 密码留在键值表里（不能写丢）', async () => {
+    const kv = fakeKv();
+    keychain.available.mockResolvedValue(true);
+    keychain.store.mockRejectedValue(new Error('写不进去'));
+
+    await store(kv, keychain).save([row()]);
+
+    const raw = ((await kv.get<Record<string, unknown>[]>('profiles')) ?? [])[0];
+    expect(raw?.['password']).toBe('pw-secret');
+  });
+
+  it('写的时候它整个不可用 → 同样留在键值表里', async () => {
     const kv = fakeKv();
     keychain.available.mockResolvedValue(false);
 
-    await store(kv).save([profile()]);
+    await store(kv, keychain).save([row()]);
 
-    const raw = (await rawOf(kv))[0] as Record<string, unknown>;
-    expect(raw['password']).toBe('pw-secret');
+    const raw = ((await kv.get<Record<string, unknown>[]>('profiles')) ?? [])[0];
+    expect(raw?.['password']).toBe('pw-secret');
   });
 });

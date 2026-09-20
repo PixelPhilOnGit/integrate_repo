@@ -23,6 +23,8 @@
 
 import { useState, type ReactNode } from 'react';
 import { FilterChip } from '../../../shared/ui/FilterChip';
+import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog';
+import { TrustDialog } from './TrustDialog';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { fuzzyBest } from '../../../shared/search';
@@ -61,6 +63,8 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   /** 「新建会话」对话框是给哪个工作目录开的。null = 没开着 */
   const [newFor, setNewFor] = useState<AgentWorkspace | null>(null);
   const [query, setQuery] = useState('');
+  /** 「加一个远端目录」那个表单开着没有 */
+  const [addingRemote, setAddingRemote] = useState(false);
 
   const q = query.trim();
   const searching = q !== '';
@@ -112,6 +116,15 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
             onClick={() => void store.addWorkspace()}
           >
             添加
+          </button>
+          <button
+            type="button"
+            className="rd-btn"
+            data-testid="agent-add-remote"
+            title="连另一台机器，在那边开 agent"
+            onClick={() => setAddingRemote(true)}
+          >
+            远端
           </button>
         </div>
 
@@ -211,6 +224,14 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+
+      {state.trustPrompt !== null && (
+        <TrustDialog prompt={state.trustPrompt} store={store} />
+      )}
+
+      {addingRemote && (
+        <RemoteWorkspaceDialog store={store} onClose={() => setAddingRemote(false)} />
       )}
 
       {newFor !== null && (
@@ -454,6 +475,15 @@ function workspaceMenu(
     { label: '新开 Codex', onSelect: () => void store.createSession(workspace.id, 'codex') },
     { label: '新开终端', onSelect: () => void store.createSession(workspace.id, 'shell') },
   ];
+
+  // 远端目录才有「忘记指纹」：那是出现「指纹变了」之后**唯一**的解信任路径
+  // （和 SSH 模块一致 —— 界面上刻意没有「就这样继续」那个按钮）
+  if (workspace.remoteHost !== undefined) {
+    items.push({
+      label: '忘记这台机器的指纹',
+      onSelect: () => store.forgetHost(workspace.remoteHost ?? '', workspace.remotePort ?? 22),
+    });
+  }
 
   // 置顶只改**列表顺序**，不影响「当前打开的是哪个窗口」——
   // 常驻的那两三个项目不用每次都往下找

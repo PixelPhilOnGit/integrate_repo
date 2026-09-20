@@ -1361,6 +1361,7 @@ name = "devtoolkit-agents"
 version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
+ "devtoolkit-ssh",
  "libc",
  "portable-pty",
  "serde",

@@ -734,3 +734,45 @@ test('工作目录能置顶 —— 常驻的那几个项目排到上面', async 
   await page.getByTestId('menu-取消置顶').click();
   await expect(heads.first()).toHaveAttribute('data-testid', 'agent-ws-head-ws_alpha');
 });
+
+// ---------------------------------------------------- 远端工作目录
+
+test('加一个远端工作目录：表单填完能出现在侧栏里', async ({ page }) => {
+  // ⚠️ 浏览器版**连不了远端**（没有 SSH 能力），所以这条只验「配置这一路
+  // 走得通」—— 表单、去重、侧栏渲染。真正的连接归桌面版 + 真机（见 HANDOFF）。
+  await page.getByTestId('agent-add-remote').click();
+  await expect(page.getByTestId('agent-remote-dialog')).toBeVisible();
+
+  // 什么都没填时「添加」是灰的（别让用户建出一个连不上的空目录）
+  await expect(page.getByTestId('remote-confirm')).toBeDisabled();
+
+  await page.getByTestId('remote-host').fill('10.0.0.9');
+  await page.getByTestId('remote-username').fill('root');
+  await page.getByTestId('remote-password').fill('pw');
+  await page.getByTestId('remote-path').fill('/home/me/project');
+  await expect(page.getByTestId('remote-confirm')).toBeEnabled();
+  await page.getByTestId('remote-confirm').click();
+
+  await expect(page.getByTestId('agent-remote-dialog')).toHaveCount(0);
+
+  const head = page.locator('[data-testid^="agent-ws-head-"]');
+  await expect(head).toHaveCount(1);
+  // 显示名默认是「主机:目录名」—— 用户一眼看出这是哪台机器上的哪个目录
+  await expect(head.first()).toContainText('10.0.0.9');
+  await expect(head.first()).toContainText('project');
+});
+
+test('同一个远端目录加两次只会有一条（不会堆出两个一样的）', async ({ page }) => {
+  const add = async (): Promise<void> => {
+    await page.getByTestId('agent-add-remote').click();
+    await page.getByTestId('remote-host').fill('10.0.0.9');
+    await page.getByTestId('remote-username').fill('root');
+    await page.getByTestId('remote-path').fill('/home/me/project');
+    await page.getByTestId('remote-confirm').click();
+  };
+
+  await add();
+  await add();
+
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
+});

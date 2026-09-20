@@ -15,7 +15,13 @@
  */
 
 import { createFakeAgent, type FakeAgent } from '../core/fakeAgent';
-import type { AgentsClient, EnvironmentProbe, EventFile, PtyOpenRequest } from './types';
+import type {
+  AgentOpenOutcome,
+  AgentsClient,
+  EnvironmentProbe,
+  EventFile,
+  PtyOpenRequest,
+} from './types';
 
 const encoder = new TextEncoder();
 
@@ -42,11 +48,19 @@ export function createWebAgentsClient(): AgentsClient {
   };
 
   return {
-    async open(request: PtyOpenRequest): Promise<void> {
+    async open(request: PtyOpenRequest): Promise<AgentOpenOutcome> {
+      // ⚠️ 浏览器里**连不了远端**：没有 SSH、没有钥匙串、也起不了别的机器上的进程。
+      // 明确失败而不是假装成功 —— 假装的话用户会以为「连上了但没输出」，
+      // 那种迷惑比一句实话难查得多。
+      if (request.remote !== undefined) {
+        throw new Error('浏览器版连不了远端机器（没有 SSH 能力）——请用桌面版。');
+      }
+
       // 同 id 再开一次是替换 —— 和 Rust 侧语义一致
       sessions.get(request.id)?.agent.close();
       sessions.delete(request.id);
 
+      // eslint-disable-next-line no-restricted-syntax -- 下面 return 的是新加的
       const agent = createFakeAgent({
         onData: (bytes) => {
           request.onEvent({ kind: 'data', bytes });
@@ -67,6 +81,9 @@ export function createWebAgentsClient(): AgentsClient {
       if (request.command !== '') {
         agent.write(encoder.encode(`${request.command}\r`));
       }
+
+      // 本机那条路永远是 ready（只有远端才可能返回主机密钥那两态）
+      return { kind: 'ready' };
     },
 
     async write(id: string, data: Uint8Array): Promise<void> {

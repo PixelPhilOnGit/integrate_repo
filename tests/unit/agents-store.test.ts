@@ -31,7 +31,7 @@ const fakePlatform = vi.hoisted(() => ({
 }));
 vi.mock('../../src/shared/platform', () => ({ platform: fakePlatform }));
 
-import type { EventFile } from '../../src/modules/agents/services/types';
+import type { AgentOpenOutcome, EventFile } from '../../src/modules/agents/services/types';
 import type {
   AgentsClient,
   AgentsServices,
@@ -78,10 +78,12 @@ class FakeClient implements AgentsClient {
    */
   onWrite: ((id: string) => void) | null = null;
 
-  async open(request: PtyOpenRequest): Promise<void> {
+  async open(request: PtyOpenRequest): Promise<AgentOpenOutcome> {
     if (this.failOpen !== null) throw this.failOpen;
     log.push(`开进程:${request.id}`);
     this.opened.push(request);
+    // 本机那条路永远是 ready（主机密钥那两态只有远端才可能返回）
+    return { kind: 'ready' };
   }
   async write(id: string, data: Uint8Array): Promise<void> {
     this.written.push({ id, text: new TextDecoder().decode(data) });

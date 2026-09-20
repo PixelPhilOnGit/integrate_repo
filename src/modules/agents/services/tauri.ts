@@ -11,7 +11,13 @@
 
 import { createChannel, invoke } from '../../../shared/platform/invoke';
 import type { EnvironmentReport, PtyChannelEvent } from '../core/types';
-import type { AgentsClient, EnvironmentProbe, EventFile, PtyOpenRequest } from './types';
+import type {
+  AgentOpenOutcome,
+  AgentsClient,
+  EnvironmentProbe,
+  EventFile,
+  PtyOpenRequest,
+} from './types';
 
 export function createTauriAgentsClient(): AgentsClient {
   /**
@@ -26,7 +32,7 @@ export function createTauriAgentsClient(): AgentsClient {
   let writes: Promise<unknown> = Promise.resolve();
 
   return {
-    async open(request: PtyOpenRequest): Promise<void> {
+    async open(request: PtyOpenRequest): Promise<AgentOpenOutcome> {
       // ⚠️ **每次 open 都新建一个通道。** Rust 侧把通道丢掉时会往 JS 发一条
       // `{end: true}`，JS 收到就把 `onmessage` 注销 —— 复用通道对象的话，
       // 第二次开会话时终端会一片空白**而且不报错**（见 shared/platform/invoke.ts）
@@ -34,7 +40,7 @@ export function createTauriAgentsClient(): AgentsClient {
         request.onEvent(decode(event));
       });
 
-      await invoke<void>('agent_open', {
+      return await invoke<AgentOpenOutcome>('agent_open', {
         id: request.id,
         config: {
           cwd: request.cwd,
@@ -43,6 +49,9 @@ export function createTauriAgentsClient(): AgentsClient {
           cols: request.cols,
           rows: request.rows,
           env: request.env,
+          // ⚠️ 远端目标**整块**发过去（Rust 那边 `Option<RemoteSpec>`）——
+          // 空的时候别发一个 `{}`：那会让它以为「要连远端」而缺字段
+          ...(request.remote === undefined ? {} : { remote: request.remote }),
         },
         channel,
       });

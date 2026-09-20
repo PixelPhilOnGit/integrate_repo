@@ -33,6 +33,7 @@ mod job;
 pub mod integration;
 pub mod pty;
 pub mod registry;
+pub mod remote;
 
 /// IPC 契约测试。`#[cfg(test)]` 但**单独一个文件**：它测的不是某个模块的
 /// 内部逻辑，而是**前端和 Rust 之间那条缝**（详见文件头）。
@@ -47,3 +48,4 @@ pub use integration::{
 };
 pub use pty::{PtyConfig, PtyEvent, PtySession};
 pub use registry::AgentRegistry;
+pub use remote::{RemoteOutcome, RemoteRegistry, RemoteSession, RemoteSpec};

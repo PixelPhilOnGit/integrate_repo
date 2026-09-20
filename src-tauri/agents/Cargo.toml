@@ -54,6 +54,14 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # （每个字节三四个字符），而按字符串传会在多字节 UTF-8 被块边界切断时变成 U+FFFD。
 base64 = "0.22"
 
+# 远端会话要的那一整套（连接、认证、主机密钥、PTY）SSH 内核里全都有，
+# 而且被真机磨过 —— 不重写一遍。
+#
+# ⚠️ 这是两个内核**第一次互相依赖**。理由是它们服务的是同一个应用的同一件事
+# （「在这个窗格里跑一个 agent」，只是那个进程在别处），而不是两个通用库。
+# 拆成中间 crate 只会多一份版本号和一层转发。
+devtoolkit-ssh = { path = "../ssh" }
+
 # 事件出口是一条异步 mpsc（Tauri 那层把它适配成 Channel）。
 # 只声明用得到的能力：sync 是通道，测试另外要 macros/rt。
 # **不需要 rt-multi-thread** —— 读线程是 std::thread，不占 tokio 的线程池。

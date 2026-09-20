@@ -39,6 +39,10 @@ pub fn run() {
         // 智能体会话的 pane 表。同样包一层 Arc：读线程和等待线程要活到会话结束，
         // 而它们收尾时（转发任务里）要回头把会话从表里摘掉（`forget`）。
         .manage(std::sync::Arc::new(devtoolkit_agents::AgentRegistry::new()))
+        // 远端会话（连别的机器开 agent）。**单独一张表**：本机那两个注册表
+        // 装的是同步的 `Arc<PtySession>`，这个装的是 async 的远端会话 ——
+        // 合并的话每个方法都要 match 两种（见 `agents/src/remote.rs` 的说明）
+        .manage(std::sync::Arc::new(devtoolkit_agents::RemoteRegistry::new()))
         // 本地终端（SSH 模块里那一类「本地连接」）。**第二份** AgentRegistry：
         // Tauri 的 state 按类型索引，同一个类型 manage 两次会 panic，而两张表
         // 必须分开（会话 id 是各自前端生成的，撞了会互相顶掉）—— 见 local_commands.rs
@@ -176,6 +180,17 @@ pub fn run() {
                 .state::<local_commands::LocalTerminals>()
                 .0
                 .clone();
+
+            // 远端会话（连别的机器那几个）：收拾它是**锦上添花**而不是保险 ——
+            // 它是 SSH 连接，进程一退 socket 就断，远端那个 shell 自己会结束。
+            // 所以这里丢给异步运行时就行，不占上面那个线程（`close_all` 是 async）
+            let remotes = handle
+                .state::<std::sync::Arc<devtoolkit_agents::RemoteRegistry>>()
+                .inner()
+                .clone();
+            tauri::async_runtime::spawn(async move {
+                remotes.close_all().await;
+            });
 
             std::thread::Builder::new()
                 .name("agents-exit".to_string())
