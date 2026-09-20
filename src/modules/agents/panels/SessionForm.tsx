@@ -72,6 +72,14 @@ export function SessionForm({ state, store, now }: Props): ReactNode {
                 <dd className="rd-mono" data-testid="agent-env-bash">
                   {state.environment.bash ?? '（找不到）'}
                 </dd>
+                <dt>PATH 上的 bash</dt>
+                <dd className="rd-mono" data-testid="agent-env-bash-on-path">
+                  {state.environment.bashOnPath ?? '（找不到）'}
+                  {/* Windows 上这里大概率是 System32 那个 —— 提醒一句，
+                      免得用户以为「有 bash 啊，怎么还说找不到」 */}
+                  {state.environment.bashOnPath?.toLowerCase().includes('system32') === true &&
+                    ' ⚠️ 这是 WSL 的，claude 不认它'}
+                </dd>
                 <dt>Git Bash 设置</dt>
                 <dd className="rd-mono">
                   {state.environment.gitBashSetting ?? '（没设）'}

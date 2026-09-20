@@ -550,7 +550,16 @@ SSH 的标签栏图省事复用了 `rd-tabs`，结果**标签和那个 × 各占
   claude / git / bash / PATH 摊开给用户看。以后这类「两边不一样」的问题不用再猜 ——
   用户拿它和 VS Code 里的 `where.exe claude` 一比就知道差在哪。
 
-  Git Bash 本身那条路仍然是三代演进的老规矩：**用户填的优先、只设验证过的路径、
+  **WSL 的 bash 是这里最大的一个坑（2026-09-20 真机确认）**：用户机器上
+  `where.exe bash` 给的是 `C:\Windows\System32\bash.exe` —— 那是 **WSL 的**
+  启动器，**永远在 PATH 上**，而它不是 Git Bash、claude 也不认它。所以：
+  **任何"去 PATH 里找 bash"的做法都会先撞上它**（我们的探测代码注释里早写了这条，
+  现在自检卡上也会直接把这一条显示出来并标注）。
+  同一天还确认了另一条：**`<Git>\bin\bash.exe` 是包装器，`<Git>\usr\bin\bash.exe`
+  才是本体** —— 用户那个 `bin\bash.exe` 明明存在（`Test-Path` 为 True），
+  claude 拿着它照样报「找不到」。候选顺序因此改成**先 `usr\bin` 再 `bin`**。
+
+  Git Bash 本身那条路仍然是老规矩：**用户填的优先、只设验证过的路径、
   找不到不报错**（见下一条）。
 
 ### 前端

@@ -174,7 +174,7 @@ function harness(): Harness {
     // 环境自检在单测里不重要（它读的是**本机**环境）——给个固定的假报告
     probe: { probe: async () => ({
       shell: '/bin/sh', pathCount: 0, pathHead: [],
-      claude: null, git: null, bash: null, gitBashSetting: null,
+      claude: null, git: null, bash: null, bashOnPath: null, gitBashSetting: null,
     }) },
   };
   const store = new AgentsStore(services);

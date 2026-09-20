@@ -184,6 +184,14 @@ export interface EnvironmentReport {
   git: string | null;
   /** 我们替 claude 找的 bash。**null 就是「窗格里跑不起来」的原因** */
   bash: string | null;
+  /**
+   * PATH 上第一个 `bash.exe`。
+   *
+   * ⚠️ Windows 上大概率是 `C:\Windows\System32\bash.exe` —— **那是 WSL 的**，
+   * 不是 Git Bash，claude 也不认它。单独列出来是因为「claude 说找不到 bash」
+   * 的常见原因就是它（真机上就是这么栽的）。
+   */
+  bashOnPath: string | null;
   /** `CLAUDE_CODE_GIT_BASH_PATH` 当前的值 */
   gitBashSetting: string | null;
 }

@@ -404,9 +404,13 @@ fn find_git_bash() -> Option<PathBuf> {
     // 每个根试两个位置：`bin\bash.exe` 是包装器，`usr\bin\bash.exe` 是本体 ——
     // 有些安装（精简的）只有后者
     for root in roots {
+        // ⚠️ **先 `usr\bin\bash.exe`**（Msys 的本体），再 `bin\bash.exe`（包装器）。
+        // 反过来的话会把包装器交出去 —— 真机上 Claude Code 拿着它报「找不到」，
+        // 而那个文件明明存在（用户那台：`Git\bin\bash.exe` 存在但 claude 不认，
+        // `usr\bin\bash.exe` 才是它要的）。
         for candidate in [
-            root.join("bin").join("bash.exe"),
             root.join("usr").join("bin").join("bash.exe"),
+            root.join("bin").join("bash.exe"),
         ] {
             if is_usable_bash(&candidate) {
                 return Some(candidate);
@@ -1129,15 +1133,22 @@ pub fn probe_environment() -> EnvironmentReport {
     // ⚠️ 两个平台分开取：`resolve_program` / `find_git_bash` / `GIT_BASH_ENV`
     // 都是 Windows 专属的，无条件引用会让 Linux 那边编不过
     #[cfg(windows)]
-    let (claude, git, bash, git_bash_setting) = (
+    let (claude, git, bash, bash_on_path, git_bash_setting) = (
         resolve_program("claude.cmd").or_else(|| resolve_program("claude.exe")),
         resolve_program("git.exe"),
         find_git_bash().map(|p| p.display().to_string()),
+        // PATH 上第一个 bash.exe —— Windows 上大概率是 WSL 那个
+        resolve_program("bash.exe"),
         std::env::var(GIT_BASH_ENV).ok(),
     );
     #[cfg(not(windows))]
-    let (claude, git, bash, git_bash_setting): (Option<String>, Option<String>, Option<String>, Option<String>) =
-        (None, None, None, None);
+    let (claude, git, bash, bash_on_path, git_bash_setting): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = (None, None, None, None, None);
 
     let path_entries: Vec<String> = std::env::var_os("PATH")
         .map(|p| {
@@ -1155,6 +1166,7 @@ pub fn probe_environment() -> EnvironmentReport {
         claude,
         git,
         bash,
+        bash_on_path,
         git_bash_setting,
     }
 }
@@ -1172,6 +1184,9 @@ pub struct EnvironmentReport {
     pub git: Option<String>,
     /// 我们替 claude 找的 bash（找不到就是 None，那正是「窗格里跑不起来」的原因）
     pub bash: Option<String>,
+    /// PATH 上第一个 `bash.exe`。⚠️ Windows 上大概率是 WSL 那个
+    /// （`C:\Windows\System32\bash.exe`）—— **它不是 Git Bash，claude 也不认**
+    pub bash_on_path: Option<String>,
     /// `CLAUDE_CODE_GIT_BASH_PATH` 在当前环境里是什么值
     pub git_bash_setting: Option<String>,
 }

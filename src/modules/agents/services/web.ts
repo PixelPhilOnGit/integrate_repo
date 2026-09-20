@@ -116,6 +116,7 @@ export function createWebProbe(): EnvironmentProbe {
         claude: null,
         git: null,
         bash: null,
+        bashOnPath: null,
         gitBashSetting: null,
       };
     },
