@@ -411,3 +411,39 @@ test('分组：在引擎底下再分一层（引擎 → 分组 → 连接）', a
   await expect(groupInMysql).toBeVisible();
   await expect(groupInMysql).toHaveAttribute('data-group-count', '0');
 });
+
+test('结果表格列多时，滚的是表格自己，不是整个页面（回归）', async ({ page }) => {
+  // 用户报的：「查询出的结果列多的情况下为啥是全局滑轮」。根因是外壳那三层
+  // （`.rd-body` / `.rd-content` / `.rd-main`）只写了 `min-height: 0` ——
+  // 它们是 **row 方向**的 flex，子项默认 `min-width: auto` 不会收缩，
+  // 于是宽表格一路把它们撑开，滚的就不是小窗格而是整个页面。
+  await connectNew(page);
+  await run(page, 'SELECT * FROM 用户');
+  await expect(page.getByTestId('sql-table')).toBeVisible();
+
+  // 塞几十个宽列进去，把「一张很宽的表」造出来
+  await page.evaluate(() => {
+    const header = document.querySelector('.rd-sql-table tr');
+    if (header === null) throw new Error('没有结果表格');
+    for (let i = 0; i < 40; i += 1) {
+      const th = document.createElement('th');
+      th.textContent = `很宽很宽的列 ${i} ${'x'.repeat(30)}`;
+      header.appendChild(th);
+    }
+  });
+
+  // ⚠️ 表格那个小窗格**要能自己横向滚**
+  const wrap = await page.evaluate(() => {
+    const el = document.querySelector('.rd-sql-table-wrap');
+    return el === null ? null : { scroll: el.scrollWidth, client: el.clientWidth };
+  });
+  expect(wrap).not.toBeNull();
+  expect(wrap?.scroll ?? 0).toBeGreaterThan(wrap?.client ?? 0);
+
+  // ⚠️ 而**整个文档不许被撑出横向滚动条** —— 那正是用户看到的「全局滑轮」
+  const doc = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }));
+  expect(doc.scroll).toBeLessThanOrEqual(doc.client);
+});

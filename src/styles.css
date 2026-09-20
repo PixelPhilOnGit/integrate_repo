@@ -170,24 +170,37 @@ textarea:focus {
 .rd-body {
   display: flex;
   flex: 1;
+  /* ⚠️ 横向也要能收缩，理由见 `.rd-content` 那段 */
+  min-width: 0;
   min-height: 0;
 }
 
 /**
  * 模块内容区：外壳和模块之间的那一层。
- * 必须做成"布局透明"（flex:1 + 纵向 flex + min-height:0），
+ * 必须做成"布局透明"（flex:1 + 纵向 flex + min-width/min-height:0），
  * 否则会改变工具栏和主区域的尺寸 —— 那属于无意的视觉改动。
+ *
+ * ⚠️⚠️ **`min-width: 0` 和 `min-height: 0` 一样重要，别只写后者。**
+ * flex 子项的 `min-width` 默认是 `auto` —— 意思是「不许比内容更窄」，
+ * 于是里面有个宽东西（比如列很多的结果表格）就能把整条链一路撑开，
+ * 一路撑到最外层去，滚的就不是那个小窗格而是整个页面了。
+ * 真机上报过：数据库查出一张几十列的表，滚轮滚的是整个应用 ✗
  */
 .rd-content {
   display: flex;
   flex-direction: column;
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
 .rd-main {
   display: flex;
   flex: 1;
+  /* ⚠️ **这一条就是「列多的时候滚整个页面」的元凶**：它是 row 方向的 flex，
+     子项（模块内容）默认 `min-width: auto` —— 宽表格撑开它、再撑开外面那两层，
+     最后变成全局横向滚动。见 `.rd-content` 那段。 */
+  min-width: 0;
   min-height: 0;
 }
 

@@ -287,7 +287,7 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 ```bash
 npm run typecheck    # 类型检查
 npm test             # 998 个纯逻辑单测（秒级）
-npm run test:e2e     # 188 个端到端测试（真实 Chromium，这台机器上跑 6 分半）
+npm run test:e2e     # 189 个端到端测试（真实 Chromium，这台机器上跑 6 分半）
 cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 328 条（agents 那套是 79 条）
 ```
 
@@ -767,7 +767,15 @@ SSH 的标签栏图省事复用了 `rd-tabs`，结果**标签和那个 × 各占
 - **`Omit<联合类型, K>` 会把各分支的独有字段全丢掉**，要写
   `T extends unknown ? Omit<T, K> : never`（见 `WithoutSeq`）。
 - **`justify-content: space-between` 是个陷阱**：子元素个数一变，排布就变。
-- **`.rd-content` / `.rd-body` 必须是"布局透明"的**（`flex: 1; min-height: 0`）。
+- **`.rd-content` / `.rd-body` / `.rd-main` 必须是"布局透明"的** ——
+  `flex: 1; `**`min-width: 0;`**` min-height: 0`。
+  > ⚠️⚠️ **`min-width: 0` 和 `min-height: 0` 一样要紧，别只写后者**（原来就只写了后者）。
+  > flex 子项的 `min-width` 默认是 **`auto`** —— 意思是「不许比内容更窄」。
+  > 于是里面有个宽东西，就能**一路把链条撑开、撑到最外层**，滚的就不是那个小窗格
+  > 而是整个页面。真机上报过：数据库查出一张几十列的表，滚轮滚的是整个应用
+  > （e2e 量出来那个 `.rd-sql-table-wrap` 被撑到 13906px 宽、`scrollWidth`
+  > 和 `clientWidth` 一样 —— 它**自己**当然就滚不动了）。
+  > 回归测试在 `sql.spec.ts`「结果表格列多时，滚的是表格自己，不是整个页面」。
 - **`FitAddon` 在容器没布局时会给 `undefined` 或者个位数的尺寸**，直接拿去
   `ssh_resize` 会让远端按 2 列换行。`core/fit.ts` 的 `clampSize` 负责兜住
   （拿不准就返回 null，宁可尺寸停在旧值上）。
@@ -903,9 +911,14 @@ tauri-plugin-store 用的是 `app_data_dir`）。那份 `*.json` 可以直接预
    那节）。用户拍板的「两边都要」都在了。
    > 唯一没做的是**工作目录的分组**（只做了置顶）。当时是二选一，选了更轻的那个 ——
    > 真需要归类的话，连接分组那套（`shared/connections/groups.ts`）整套都能搬过来。
-3. **Codex 换 hooks**：补上「需要你」那一态（v1 走 `notify` 拿不到，见上面那一行）。
+3. **智能体会话支持远程会话**（用户 2026-09-20 提的，明确说「优先级低一点，但也要做」）。
+   现在窗格只能跑**本机**进程；要能连远端跑，形状大概和 SSH 那条路一样
+   （russh + PTY + Channel），但状态检测那套（事件文件、钩子）在远端得另想办法 ——
+   **远端写不了我们的包装脚本**，可能要靠 OSC 序列，或者让用户在远端自己装一次钩子。
+   动手前先和用户确认「远程」指的是**连自己的另一台机器**还是**容器/云开发机**。
+4. **Codex 换 hooks**：补上「需要你」那一态（v1 走 `notify` 拿不到，见上面那一行）。
    动手前必须先确认两件事：配置写哪个文件、信任怎么落盘 —— 只能真机确认。
-4. **任务接 agent**：把任务派给某个会话、把执行结果回写。外键位置已经留好了。
+5. **任务接 agent**：把任务派给某个会话、把执行结果回写。外键位置已经留好了。
 
 ### ⚠️ 上生产之前必须解决的：凭据存储
 
