@@ -597,10 +597,28 @@ export class TerminalHub {
     if (!entry || entry.disposed) return false;
     if (entry.term.buffer.active.type === 'alternate') return false;
 
-    // 先量一份粘性模式出来：reset 会把它们清成默认值
+    // 先量一份粘性模式出来：下面那句 RIS 会把它们清成默认值
     const modes = stickyModes(entry.term);
 
-    entry.term.reset();
+    // ⚠️ **用转义序列 `\x1bc`（RIS）清场。**
+    //
+    // 它是「全量复位」：清屏、光标归零、模式回默认 —— 正是重放要的起点。
+    // 走的是和内容同一条 write 队列，顺序有保证。
+    //
+    // ⚠️ 别改成 `term.reset()`：那个是**同步**的，会插到 write 队列**外面**去
+    // （试过，光标照样回左上角，见下面那条）。
+    entry.term.write('\x1bc');
+
+    // ⚠️⚠️ **粘性模式必须在内容之前写回去 —— 这一行是这块最要命的。**
+    //
+    // 那串里有 `\x1b[?6h` / `\x1b[?6l`（原点模式），而按 DECOM 的规矩，
+    // **切换它会顺手把光标送回原点**。原来它是垫在最后当「通知哨兵」的，于是：
+    // 重放出来的内容明明已经把光标带到了末尾，这一下又给打回左上角。
+    //
+    // 表现：折叠之后光标跑回最上面，用户一打字就插在历史中间，特别难看
+    // （真机上报过；e2e 里量出来折叠前后 `cursorLine` 从 19 掉到 0）。
+    entry.term.write(modes);
+
     for (const part of parts) {
       if ('bytes' in part) entry.term.write(part.bytes);
       else entry.term.write(part.text);
@@ -613,10 +631,8 @@ export class TerminalHub {
     // 这时候通知叠层去重画，它量到的是一份过期数据，画出来的位置全不对
     // （真机上就是"折叠/展开之后色条全乱、鼠标点哪儿都对不上"）。
     //
-    // 把通知挂在**最后一次 write 的回调**上：那时候内容已经进去了。
-    // 末尾那个转义序列（粘性模式）也算一次 write，正好当哨兵。
-    entry.term.write(modes);
-    // 通知由 `onWriteParsed` 发（它保证在解析完之后），见 `create`
+    // 通知由 `onWriteParsed` 发（它保证在解析完之后，见 `create`）——
+    // 每次 write 解析完都会触发一次，所以最后那段内容之后必然会有。
     return true;
   }
 

@@ -594,3 +594,48 @@ test('命令块：折叠再展开，色条要回到原来的高度', async ({ pa
   await expect(band).toHaveAttribute('data-band-folded', 'false');
   await expect.poll(heightOf).toBeGreaterThan(before - 40);
 });
+
+test('⚠️ 折叠之后光标要跟着内容走，不能跑回左上角（回归）', async ({ page }) => {
+  // 折叠是靠「重放整段缓冲」实现的（xterm 删不掉缓冲区中间几行），而重放的
+  // 最后一步原来会把**粘性模式**写回去 —— 那串里有 `\x1b[?6h` / `\x1b[?6l`
+  // （原点模式），按 DECOM 的规矩**切换它会把光标送回原点**。
+  // 于是折叠之后光标跑到最上面，用户一打字就插在历史中间，特别难看。
+  // 这条量的是光标位置：重放的内容明明把光标带到了末尾，它不许被那一下打回去。
+  await connectAndTrust(page);
+  await expect.poll(() => termText(page)).toContain('输入 help');
+  await type(page, 'help');
+  await expect.poll(() => termText(page)).toContain('按子串过滤文件的每一行');
+  // 折叠有「输出停下来 250ms 才做」的闸（见 store 的 REDRAW_QUIET_MS）
+  await page.waitForTimeout(500);
+
+  const cursorOf = async (): Promise<{ line: number; content: number }> =>
+    page.evaluate(
+      (id) => {
+        const hub = (
+          window as unknown as {
+            __sshHub?: {
+              metrics: (i: string) => { cursorLine: number; lastContentLine: number } | null;
+            };
+          }
+        ).__sshHub;
+        const m = hub?.metrics(id);
+        return { line: m?.cursorLine ?? -1, content: m?.lastContentLine ?? -1 };
+      },
+      await activeTerminalId(page),
+    );
+
+  const before = await cursorOf();
+  expect(before.line).toBeGreaterThan(0);
+
+  await page.locator('[data-band-command="help"]').dblclick();
+  await expect(page.locator('[data-band-command="help"]')).toHaveAttribute(
+    'data-band-folded',
+    'true',
+  );
+
+  // ⚠️ 折起来之后内容短了，但光标仍然要**贴着内容末尾** —— 不是钉在 0
+  await expect.poll(async () => (await cursorOf()).line).toBeGreaterThan(0);
+  const after = await cursorOf();
+  expect(after.line).toBeGreaterThan(0);
+  expect(Math.abs(after.line - after.content)).toBeLessThanOrEqual(1);
+});
