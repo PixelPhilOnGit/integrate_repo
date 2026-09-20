@@ -32,9 +32,12 @@ jobs:
       #
       # 放在这个 job 里是因为 **publish-tauri 的 needs 是它** —— 红在这儿就出不了包，
       # 而不是等三个平台都构建完才发现名字不对。
-      # 版本号散在 9 处：package.json、package-lock.json（根包那两行）、
-      # tauri.conf.json，以及 app crate + 六个内核 crate 的 Cargo.toml。
+      # 版本号散在 12 处：package.json、package-lock.json（**根包那两行都要改**）、
+      # tauri.conf.json，以及 app crate + 七个内核 crate 的 Cargo.toml
+      # （加 `store` 之后从 9 变成 10 个文件了 —— 这个数字每加一个 crate 就涨）。
       # 最后一个循环用通配符，**以后加 crate 不用回来改这里**。
+      # ⚠️ 下面查 package-lock 的 awk 只取**第一行**，所以漏改第二行这道关卡不会红 ——
+      # 但包里带上两个不同的版本号迟早坑人，改的时候两行一起。
       - name: 版本号必须和标签一致
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
