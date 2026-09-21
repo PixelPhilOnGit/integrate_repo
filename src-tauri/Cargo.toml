@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit"
-version = "0.7.0"
+version = "0.8.0"
 description = "Devtoolkit —— 开发者工作台：顺序图 / 数据库 / SSH"
 authors = ["Devtoolkit"]
 edition = "2021"
@@ -13,7 +13,7 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
-exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "target/**"]
+exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
@@ -73,13 +73,21 @@ devtoolkit-tasks = { path = "tasks" }
 # 替掉原来「一个模块一个 JSON 文件」那套。
 devtoolkit-store = { path = "store" }
 
+# 助手内核（自研 LLM agent：ReAct 循环 / 两套 provider / 工具注册表 / 上下文策略）。
+# 同样不依赖 tauri，事件出口是 mpsc、由 `assistant_commands.rs` 适配成 Channel。
+#
+# 和 `devtoolkit-agents` 的区别值得写清楚，否则后来人一定会混：
+#   * agents 驱动的是**别人的 CLI**（claude / codex），上下文由那些 CLI 自己管；
+#   * assistant 跑的是**我们自己的循环** —— 这正是「上下文策略可配」能成立的原因。
+devtoolkit-assistant = { path = "assistant" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh", "agents", "tasks", "store"]
+members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents", "tasks", "store"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
 resolver = "2"
 
 [profile.release]

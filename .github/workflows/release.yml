@@ -91,6 +91,15 @@ jobs:
         working-directory: src-tauri
         run: cargo test --package devtoolkit-tasks --package devtoolkit-store --locked
 
+      # 助手内核：**整个 crate 都不需要服务端、也不需要 API key**。
+      #
+      # 循环、上下文组装、审批闸门那些纯逻辑是毫秒级的；provider 那几条
+      # 打的是**自己起的假 HTTP 服务器**（手写 HTTP/1.1 + chunked SSE），
+      # 所以在这里跑得动。真 API 的连通性验证归真机，不归 CI。
+      - name: 跑测试（助手内核）
+        working-directory: src-tauri
+        run: cargo test --package devtoolkit-assistant --locked
+
       # SSH：**只跑不需要 root 的那两组**。
       #
       #   session / registry —— 用 russh 自己的服务端在进程内起一个假服务器，

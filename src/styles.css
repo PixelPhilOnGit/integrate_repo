@@ -2855,3 +2855,27 @@ textarea:focus {
   cursor: help;
   font-size: 12px;
 }
+
+/* --- 助手 ---------------------------------------------------------------- */
+
+/* 表单里的一行按钮。`rd-form` 那一套是竖向排的，按钮要横着放 */
+.rd-assistant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 配置和 API key 是两件事（一个进 KV、一个进钥匙串），视觉上分开 */
+.rd-assistant-sep {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+/* 助手侧栏里那行「模型 / key」。比 rd-field 紧凑 —— 侧栏是概览不是表单 */
+.rd-assistant-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}

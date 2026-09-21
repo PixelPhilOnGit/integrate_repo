@@ -9,6 +9,7 @@
  */
 
 import { agentsModule } from '../modules/agents';
+import { assistantModule } from '../modules/assistant';
 import { diagramModule } from '../modules/diagram';
 import { devPlaceholderModule } from '../modules/devplaceholder';
 import { redisModule } from '../modules/redis';
@@ -24,6 +25,7 @@ export const MODULES: readonly Module[] = [
   sshModule,
   agentsModule,
   tasksModule,
+  assistantModule,
   devPlaceholderModule,
 ];
 

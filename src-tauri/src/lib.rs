@@ -11,6 +11,7 @@
 //! `tauri-plugin-store`，两者都在前端通过 JS 插件调用，这里只负责注册。
 
 mod agent_commands;
+mod assistant_commands;
 mod commands;
 mod health;
 mod kv_commands;
@@ -110,6 +111,10 @@ pub fn run() {
             secret_commands::secret_load,
             secret_commands::secret_store,
             secret_commands::secret_available,
+
+            // 助手的凭据。**只写不读** —— 理由见 assistant_commands.rs
+            assistant_commands::assistant_api_key_status,
+            assistant_commands::assistant_set_api_key,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

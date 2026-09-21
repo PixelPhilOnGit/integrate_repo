@@ -66,6 +66,7 @@ Devtoolkit/
 │       ├── ssh/             SSH 终端模块（多标签 + 本地终端）
 │       ├── agents/          智能体会话模块（一屏多个 agent）
 │       ├── tasks/           任务模块（SQLite）
+│       ├── assistant/       助手模块（自研 LLM agent —— 和 agents 不是一回事）
 │       └── devplaceholder/  占位模块（验证「加模块 = 一个目录 + 一行」）
 ├── src-tauri/               Rust 后端
 │   ├── src/
@@ -288,6 +289,11 @@ src/
     │   ├── core/       纯逻辑：筛选、排序、格式化
     │   ├── services/   平台桥：tauri 走 invoke，web 走内存假实现
     │   ├── panels/     卡片列表、详情卡、检查器
+    │   └── state/      模块自己的 store
+    ├── assistant/      助手（自研 LLM agent —— 和上面那个不是一回事）
+    │   ├── core/       纯逻辑：配置、校验（不 import React / DOM / Tauri）
+    │   ├── services/   平台桥：tauri 走 invoke，web 走内存假实现
+    │   ├── panels/     检查器（模型配置）
     │   └── state/      模块自己的 store
     └── devplaceholder/ 占位模块
 ```

@@ -1,0 +1,90 @@
+[package]
+name = "devtoolkit-assistant"
+version = "0.8.0"
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的助手内核：自研 LLM agent（ReAct 循环 / 两套 provider / 工具 / 上下文策略），不依赖 Tauri"
+license = "MIT"
+
+[dependencies]
+# 中立的对话模型要能序列化（走 IPC、也要落盘）。
+serde = { version = "1", features = ["derive"] }
+
+# 两处用途，都不是可有可无：
+#
+# 1. **消息 content 用 `RawValue` 原样透传**。provider 会发回来我们不认识的块
+#    （thinking / compaction / server_tool_use 之类），**丢掉它们会静默改变行为** ——
+#    官方对多轮的要求是「把完整的 response.content 追加回去」。解析成 `Value` 再
+#    序列化会让字节变样（键序、浮点格式），那既可能丢信息、也会打乱 prompt 缓存。
+#
+# 2. 工具的 JSON Schema 与参数都要过它。
+#
+# `preserve_order` 的理由和 agents 那边一样（它是不开就会「每写一次就把用户文件的键
+# 按字母重排」）：这里是**同一个坑的另一个后果** —— 键序变了前缀字节就变了，
+# 而 prompt 缓存是逐字节比对前缀的。代价是多一个 indexmap，本来就在依赖树里。
+#
+# `raw_value` 是**必须显式开的**（不开编译就过不去）：认不出来的内容块要靠
+# `RawValue` 逐字节原样带回历史。用 `Value` 中转会重排键序、改写转义和浮点格式 ——
+# 那既可能丢信息，也会让 prompt 缓存的前缀对不上。
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
+
+# 文件工具的路径闸门**只能有一份**。
+#
+# `Workspace::resolve()` 是整个后端唯一的安全闸门（字面检查 + canonicalize 解符号链接
+# + 归属确认），模型给的路径是不可信输入，必须走它。
+# 自己再写一份路径解析 = 多一个会漏的地方，而且是**在安全边界上**漏。
+devtoolkit-core = { path = "../core" }
+
+# 这个内核是 async 的（流式 HTTP + 审批要挂起等用户点确认），
+# 但**运行时由调用方提供** —— Tauri 那边已经有一个（`tauri::async_runtime`），
+# 自己再起一个是在运行时里套运行时的坑，`ssh` 那一轮记过。
+#
+# 只声明用得到的能力：
+# * `sync` —— 审批闸门的 oneshot、取消信号
+# * `macros` —— `tokio::select!`（审批要同时等「用户回答」和「取消」两件事）
+#
+# 工具执行要的 `rt`（spawn_blocking）等真写工具时再加，现在不需要就不引。
+tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt", "time"] }
+
+# ---------------------------------------------------------------- HTTP / TLS
+#
+# ⚠️ **这一批不是新增包** —— 版本全部对上 `Cargo.lock` 里已有的那一份
+# （它们本来是 `devtoolkit-sql` 的 mongodb 拉进来的，走 `rustls/ring` 那条路）。
+# 实测过：`reqwest` 在桌面端**一次都没编译过**（它只挂在 tauri 的 Android/iOS
+# 那个 cfg 下面），所以「用 reqwest 不新增依赖」是个误判；手写这一层才是。
+#
+# 只声明用得到的能力，别蹭 feature union（别人改了 feature 你会莫名编译失败）。
+hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"] }
+# `TokioIo` 这个适配器在 `tokio` feature 下面（不是 `rt` —— 那个名字是 tokio 自己的）。
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+http-body-util = "0.1.5"
+bytes = "1.12.1"
+
+# TLS。用 rustls 而**不是** native-tls：后者会把 openssl 拖进来（系统依赖、
+# 跨平台版本差异、Windows 上还要装），而 rustls 是纯 Rust 且已经在树里。
+tokio-rustls = "0.26.5"
+#
+# ⚠️ **provider 必须显式钉住，而且要把 feature 也开出来。** 两个坑叠在一起：
+#
+# 1. rustls 的加密后端是按 crate feature 自动挑的。**同时开着 `ring` 和
+#    `aws-lc-rs` 时那个自动挑会返回 `None`**，然后在第一次真正发 HTTPS 请求时
+#    panic —— 编译期完全看不出来。
+# 2. 而 feature **在"单独构建这个 crate"和"整个工作区构建"时不一样**：
+#    mongodb（devtoolkit-sql 拉的）会开 `rustls/ring`，可 `-p devtoolkit-assistant`
+#    的依赖图里根本没有 mongodb。同一份代码两种构建方式行为不同，是最难查的一类。
+#
+# 所以这里 `default-features = false`，自己把要用的能力列全。
+#
+# ⚠️ **但它挡不住 aws-lc-rs** —— feature 是叠加的，别的 workspace 成员
+# （mongodb / tauri）照样会把它拉进来（实测过：构建产物里两个后端都在）。
+# 它只能保证「单独构建这个 crate 时不去编译那个 C 依赖」。
+# 真正的保险是**代码里显式指定**：`builder_with_provider(ring)`。
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# 根证书。用打包进来的那一份，**不读系统的证书库** —— 读系统的话
+# 行为会跟着用户机器变（企业 MITM 代理、自签证书），而失败的样子
+# 是"我这儿好好的，他那儿连不上"。
+webpki-roots = "1.0.9"
+
+[dev-dependencies]
+# 测试要 #[tokio::test]（循环是 async 的）；被测代码自己不起运行时。
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "io-util"] }
