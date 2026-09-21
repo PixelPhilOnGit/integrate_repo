@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit-assistant"
-version = "0.8.0"
+version.workspace = true
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的助手内核：自研 LLM agent（ReAct 循环 / 两套 provider / 工具 / 上下文策略），不依赖 Tauri"
@@ -42,9 +42,11 @@ devtoolkit-core = { path = "../core" }
 # 只声明用得到的能力：
 # * `sync` —— 审批闸门的 oneshot、取消信号
 # * `macros` —— `tokio::select!`（审批要同时等「用户回答」和「取消」两件事）
-#
-# 工具执行要的 `rt`（spawn_blocking）等真写工具时再加，现在不需要就不引。
-tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt", "time"] }
+# * `rt` —— `spawn_blocking`：工具的文件读写是同步 IO，不能在 async 里直接做
+# * `process` —— `run_command` 起子进程（`tokio::process`，带超时和 kill）
+# * `io-util` —— 读子进程的管道
+# * `time` / `net` —— 超时、传输层
+tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt", "time", "process"] }
 
 # ---------------------------------------------------------------- HTTP / TLS
 #
@@ -88,3 +90,6 @@ webpki-roots = "1.0.9"
 [dev-dependencies]
 # 测试要 #[tokio::test]（循环是 async 的）；被测代码自己不起运行时。
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "io-util"] }
+# 工具测试要一个真目录当工作区。和 `store` / `tasks` 用的是同一个包，
+# 本来就在依赖树里（不新增要编译的东西）。
+tempfile = "3"

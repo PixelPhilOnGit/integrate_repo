@@ -48,7 +48,18 @@ mod wiring {
     #[test]
     fn crate_is_wired_into_the_workspace() {
         assert_eq!(env!("CARGO_PKG_NAME"), "devtoolkit-assistant");
-        // 版本号必须和其他 crate 一致：CI 用 `src-tauri/*/Cargo.toml` 那个 glob 做一致性检查。
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.7.0");
+        // ⚠️ 这里**曾经**有一条 `assert_eq!(env!("CARGO_PKG_VERSION"), "0.7.0")`，
+        // 理由是「版本号必须和其他 crate 一致」。
+        //
+        // 它是个反例，值得留着说：那个字符串**自己**就成了不一致的来源 ——
+        // 发版到 0.8.0 时其他九处都改了、漏了它，而 CI 的一致性关卡查的是
+        // `src-tauri/*/Cargo.toml` 这个 glob，**扫不到 .rs 里的字面量**，
+        // 于是这条测试一路红到有人手动跑 `cargo test` 才发现。
+        //
+        // 现在版本号继承自 `[workspace.package]`（见 `src-tauri/Cargo.toml`），
+        // `CARGO_PKG_VERSION` 由 cargo 从那一处填进来 ——
+        // 「本 crate 的版本和 workspace 一致」不再需要**任何人**去维持。
+        // 所以这里刻意不断言版本：再写死一个数字，就是把这个坑重挖一遍。
+        assert!(!env!("CARGO_PKG_VERSION").is_empty());
     }
 }

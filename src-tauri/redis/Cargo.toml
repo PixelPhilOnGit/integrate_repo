@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit-redis"
-version = "0.8.0"
+version.workspace = true
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的 Redis 内核：连接管理、命令执行、回复解析（不依赖 Tauri，可脱离 WebKit 快速测试）"

@@ -1,6 +1,7 @@
 [package]
 name = "devtoolkit"
-version = "0.8.0"
+# 版本号继承自下面的 `[workspace.package]`，别在这儿写死（理由见那一节）。
+version.workspace = true
 description = "Devtoolkit —— 开发者工作台：顺序图 / 数据库 / SSH"
 authors = ["Devtoolkit"]
 edition = "2021"
@@ -84,6 +85,23 @@ devtoolkit-assistant = { path = "assistant" }
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
 members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
+
+# ⚠️ **Rust 侧的版本号只有这一处。** 各个 crate 一律写 `version.workspace = true`。
+#
+# 2026-09-21 改的，起因是一次真的漂移：发版到 0.8.0 时漏改了
+# `assistant/src/lib.rs` 里那条断言（它把 `"0.7.0"` 写死在自己身上），
+# 而 CI 那个一致性关卡查的是 `src-tauri/*/Cargo.toml` 这个 glob ——
+# **扫不到 .rs 里的字符串**，于是它一路红到有人手动跑 `cargo test` 才发现。
+#
+# 根因不是「漏改了一处」，是**同一个数字被手抄了十遍**：抄的人越多越会漏，
+# 而漏的那处往往躲在 CI 扫不到的地方。交给 cargo 之后，这个数字在 Rust 侧
+# 只有一个来源，漂移变成了编译期就不成立的事。
+#
+# 还剩三处手写的（前端那三个，不归 cargo 管）：
+# `package.json`、`package-lock.json`（根包那两行）、`tauri.conf.json`。
+# CI 的关卡照旧盯着它们。
+[workspace.package]
+version = "0.8.0"
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。

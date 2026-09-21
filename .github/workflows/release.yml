@@ -32,10 +32,15 @@ jobs:
       #
       # 放在这个 job 里是因为 **publish-tauri 的 needs 是它** —— 红在这儿就出不了包，
       # 而不是等三个平台都构建完才发现名字不对。
-      # 版本号散在 12 处：package.json、package-lock.json（**根包那两行都要改**）、
-      # tauri.conf.json，以及 app crate + 七个内核 crate 的 Cargo.toml
-      # （加 `store` 之后从 9 变成 10 个文件了 —— 这个数字每加一个 crate 就涨）。
-      # 最后一个循环用通配符，**以后加 crate 不用回来改这里**。
+      # 版本号现在的分布：**Rust 侧只剩一处**（`src-tauri/Cargo.toml` 的
+      # `[workspace.package]`），各 crate 一律 `version.workspace = true` 继承。
+      # 在此之前是每个 crate 手抄一遍（加一个 crate 就多一处），2026-09-21 真的
+      # 漂了一次：`assistant/src/lib.rs` 里那条断言把版本写死在自己身上，漏改了，
+      # 而**这个关卡扫的是 Cargo.toml，压根看不到 .rs 里的字面量** ——
+      # 它红到有人手动跑 `cargo test` 才发现。交给 cargo 之后这类漂移不再成立。
+      #
+      # 前端那三处仍然手抄：package.json、package-lock.json（**根包那两行都要改**）、
+      # tauri.conf.json。
       # ⚠️ 下面查 package-lock 的 awk 只取**第一行**，所以漏改第二行这道关卡不会红 ——
       # 但包里带上两个不同的版本号迟早坑人，改的时候两行一起。
       - name: 版本号必须和标签一致
@@ -53,12 +58,31 @@ jobs:
           # cut 会直接报错、值全成空串，于是**每个标签都会被判不一致**
           # （一个永远红的关卡比没有关卡还糟）。awk 这样写没有转义问题。
           json_version() { awk -F'"' '/"version"/ { print $4; exit }' "$1"; }
-          cargo_version() { awk -F'"' '/^version = / { print $2; exit }' "$1"; }
+          # 只在 `[workspace.package]` 这一段里找 version。
+          #
+          # ⚠️ 别图省事写 `awk '/^version = /'` 就完事：`version.workspace = true`
+          # 不匹配那个模式（`version` 后面是 `.` 不是空格），所以今天它恰好取得到，
+          # 但那是**碰巧** —— 哪天别处多一行行首的 `version = `，取到的就是别人。
+          workspace_version() {
+            awk -F'"' '
+              /^\[workspace\.package\]/ { in_sec = 1; next }
+              /^\[/                     { in_sec = 0 }
+              in_sec && /^version = /   { print $2; exit }
+            ' "$1"
+          }
           check package.json "$(json_version package.json)"
           check package-lock.json "$(json_version package-lock.json)"
           check tauri.conf.json "$(json_version src-tauri/tauri.conf.json)"
-          for f in src-tauri/Cargo.toml src-tauri/*/Cargo.toml; do
-            check "$f" "$(cargo_version "$f")"
+          check src-tauri/Cargo.toml "$(workspace_version src-tauri/Cargo.toml)"
+
+          # 每个内核 crate 必须**真的继承**。漏写的话它会有自己的版本号、
+          # 和 workspace 脱钩 —— 那正是上面那个坑重新长出来的样子。
+          # 通配符，**以后加 crate 不用回来改这里**（但记得加进 workspace 的 members）。
+          for f in src-tauri/*/Cargo.toml; do
+            if ! grep -q '^version\.workspace = true$' "$f"; then
+              echo "::error::$f 里没有 version.workspace = true —— 它会带上自己的版本号，和 workspace 脱钩"
+              fail=1
+            fi
           done
           exit $fail
 
