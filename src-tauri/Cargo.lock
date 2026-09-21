@@ -1338,10 +1338,11 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "devtoolkit-agents",
+ "devtoolkit-assistant",
  "devtoolkit-core",
  "devtoolkit-redis",
  "devtoolkit-sql",
@@ -1358,7 +1359,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-agents"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "devtoolkit-ssh",
@@ -1372,8 +1373,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "devtoolkit-assistant"
+version = "0.8.0"
+dependencies = [
+ "bytes",
+ "devtoolkit-core",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots",
+]
+
+[[package]]
 name = "devtoolkit-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1381,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-redis"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "redis",
  "serde",
@@ -1391,7 +1409,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-sql"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "clickhouse",
@@ -1406,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-ssh"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.8",
@@ -1418,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-store"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "keyring",
  "rusqlite",
@@ -1428,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-tasks"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -4974,6 +4992,7 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
+ "aws-lc-rs",
  "log",
  "once_cell",
  "ring",
@@ -4998,6 +5017,7 @@ version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted 0.9.0",

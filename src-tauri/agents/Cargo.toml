@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit-agents"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的智能体会话内核：本地 PTY、状态事件目录、集成配置读写（不依赖 Tauri）"
