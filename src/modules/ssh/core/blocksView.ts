@@ -36,8 +36,9 @@ export interface BlockBand {
 }
 
 /**
- * 算出色条。只有**和视口有交集**的块才会出现 —— 滚回滚区里几千条色条全画出来
- * 是白费（而且 DOM 一多滚动就卡）。
+ * 算出色条。只有**和视口有交集**、而且**内容还在**的块才会出现 —— 滚回滚区里
+ * 几千条色条全画出来是白费（而且 DOM 一多滚动就卡），内容没了的那些画出来
+ * 是错的（`clear` 之后那一片残留色条就是它，见函数体里 `contentEndLine` 那一段）。
  */
 /**
  * 内容**真正的末尾**在第几行。
@@ -69,8 +70,33 @@ export function bandsOf(
   const { cellHeight, viewportLine, rows } = metrics;
   if (cellHeight <= 0 || rows <= 0) return [];
 
+  // 全屏程序（vim / less / htop）在跑：**一条色条都不画**。
+  //
+  // 这不是新规矩 —— `TermMetrics.alt` 那行的注释原话就是「在跑的时候不该做
+  // 『命令块』这类东西」，只是这个函数一直没照做。不照做的后果实测过：
+  // 刚连上就跑 vim 时（块行号还都小于 rows，绕不过下面那两条 break），
+  // 色条会**画在 vim 的画面上**，几何还是按备用屏幕的内容末尾算的，和那几块
+  // 真正的内容毫无关系。成熟会话看着没事纯属**碰巧对**：备用屏幕 `viewportY = 0`、
+  // 只有几十行，块的行号（几百上千）撞上了下面那条 break —— 是行号量纲撞运气，
+  // 不是设计。
+  //
+  // 备用屏幕有自己的缓冲区，正常缓冲区在切走期间原样留着（切回来行号/内容都对得上），
+  // 所以这里直接返回空、切回来自动恢复，不需要在别处记状态。
+  if (metrics.alt) return [];
+
   const viewTop = viewportLine;
   const viewBottom = viewportLine + rows;
+
+  /**
+   * 内容到哪儿结束。**这是「这一行还在不在」的唯一判据**。
+   *
+   * ⚠️ 块的 `line` 是绝对行号，它「指得住同一处内容」的前提是那处内容还在。
+   * 而 `clear`（`ESC[2J`）是**原地**擦掉视口那几行：绝对行号不变、`viewportY`
+   * 不变，只是那几行变成空白 —— 行号全都还"有效"，内容却没了。所以「这块还在
+   * 不在」只能问内容末尾，不能看行号（真机上报过：`clear` 之后旧色条继续挂在
+   * 空行上，点它还会从缓冲区里读出空的）。
+   */
+  const contentEndLine = contentEnd(metrics);
   const out: BlockBand[] = [];
 
   // ⚠️ **从哪一块开始扫**：二分找「最后一块起点在视口之上」的那一块。
@@ -99,11 +125,21 @@ export function bandsOf(
     const block = blocks[i];
     if (block === undefined) continue;
 
-    // 这一块的输出到哪儿为止：到下一块的起点，最后一块到缓冲区末尾。
+    // 命令行已经被擦掉（掉到内容末尾之后）→ 不画。**这会连带停掉后面所有块**，
+    // 和下面那条「视口下面」的 break 一样靠「块按 line 有序」这一条 ——
+    // 后面的块行号只会更大，没有例外
+    if (block.line >= contentEndLine) break;
+
+    // 这一块的输出到哪儿为止：到下一块的起点，最后一块到内容末尾。
     // （这也是为什么不把范围存进块里：下一块出现之前它根本不知道）
     const next = blocks[i + 1];
-    // 最后一块的终点是**内容末尾**，不是缓冲区末尾 —— 见 `contentEnd`
-    const endLine = next === undefined ? Math.max(contentEnd(metrics), block.line + 1) : next.line;
+    // ⚠️ 终点要**夹在内容末尾之内**。下一块被擦掉时它自己的行号还很大，不夹的话
+    // 这一块的色条会一路伸进空白区（`clear` 之后的另一条残留色条就是它）。
+    // 最后一块的终点本来就用内容末尾，不是缓冲区末尾 —— 见 `contentEnd`
+    const endLine = Math.max(
+      Math.min(next === undefined ? contentEndLine : next.line, contentEndLine),
+      block.line + 1,
+    );
 
     if (endLine <= viewTop) continue; // 整块都在视口上面
     if (block.line >= viewBottom) break; // 这块和后面的都在视口下面（按顺序的）

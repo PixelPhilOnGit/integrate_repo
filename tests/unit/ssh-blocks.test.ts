@@ -192,6 +192,66 @@ describe('命令块：重算行号（折叠之后）', () => {
   });
 });
 
+describe('命令块：清屏之后丢掉已经被擦掉的块', () => {
+  it('行号 >= 新块的那些全丢，新块自己留着 —— 数组重新有序', () => {
+    const t = createBlockTracker();
+    // 三条命令停在旧坐标系的大行号上（清屏把回滚区剪掉之前记的）
+    for (const [i, cmd] of ['a', 'b', 'c'].entries()) {
+      t.begin(4000 + i * 3, 0, i);
+      t.submit(cmd, 4000 + i * 3, 1, i + 1);
+    }
+    // 清屏之后的第一条命令：行号从 0 重新数
+    t.begin(0, 0, 99);
+    t.submit('d', 0, 1, 100);
+
+    expect(t.pruneFrom(0)).toEqual([1, 2, 3]);
+    expect(t.blocks().map((b) => b.command)).toEqual(['d']);
+    // ⚠️ 这条不变式是二分查找和渲染那两条 break 的前提（清屏会把它破坏掉）
+    expect(t.blocks().map((b) => b.line)).toEqual([0]);
+  });
+
+  it('⚠️ 回滚区里还剩内容的块一个都不动（`ESC[2J` 只擦视口那几行）', () => {
+    const t = createBlockTracker();
+    t.begin(2, 0, 1);
+    t.submit('cat big.log', 2, 1, 2); // 在回滚区，内容还在
+    t.begin(5, 0, 3);
+    t.submit('clear', 5, 1, 4); // 在视口里，会被擦掉
+    t.begin(5, 0, 5);
+    t.submit('pwd', 5, 1, 6); // 清屏后第一条：行号回到视口第一行
+
+    // 只丢 `clear` 那一块：新提示符正好落在它那一行，但回滚区那块（行号更小）
+    // 一点没碰 —— 这正是「不能用『比上一块小就全清』」那条规则的原因
+    expect(t.pruneFrom(5)).toEqual([2]);
+    expect(t.blocks().map((b) => b.command)).toEqual(['cat big.log', 'pwd']);
+  });
+
+  it('没清过屏（行号一路往后走）：一个都不丢', () => {
+    const t = createBlockTracker();
+    t.begin(0, 0, 1);
+    t.submit('ls', 0, 1, 2);
+    t.begin(4, 0, 3);
+    t.submit('pwd', 4, 1, 4);
+    t.begin(9, 0, 5);
+    t.submit('top', 9, 1, 6);
+
+    expect(t.pruneFrom(9)).toEqual([]);
+    expect(t.blocks().map((b) => b.command)).toEqual(['ls', 'pwd', 'top']);
+  });
+
+  it('剪完输出仍然记在最后提交的那一块上（它没被剪掉）', () => {
+    const t = createBlockTracker();
+    t.begin(900, 0, 1);
+    t.submit('old', 900, 1, 2);
+    t.begin(0, 0, 3);
+    t.submit('new', 0, 1, 4);
+
+    t.pruneFrom(0);
+    t.output(777);
+
+    expect(t.blocks()[0]!.lastOutputAt).toBe(777);
+  });
+});
+
 describe('输入拆分与清洗', () => {
   it('普通按键：没有回车', () => {
     expect(splitInput('ls -l')).toEqual({ text: 'ls -l', submit: false });

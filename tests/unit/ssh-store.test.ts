@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *
  * 替身只需要**如实记账**：谁被创建、谁被销毁、往谁那里灌了字节。
  * 「终端真的画出来了吗」那类问题归 e2e（真实 Chromium）。
+ *
+ * 命令块那几条路还要多问它两句（量视口、读缓冲区里的一段）—— 真值同样要有
+ * 真实布局。默认「量不到」，测试要哪一帧就自己 `mockReturnValue` 摆出来。
  */
 const hub = vi.hoisted(() => ({
   create: vi.fn(async () => {}),
@@ -17,6 +20,11 @@ const hub = vi.hoisted(() => ({
   has: vi.fn(() => true),
   size: vi.fn(() => 0),
   snapshot: vi.fn(() => null),
+  /** 量不到（还没挂上、尺寸是 0）—— 那一帧长什么样由测试自己摆 */
+  metrics: vi.fn((): TermMetrics | null => null),
+  /** 读不出东西时调用方会退回「用户敲的那些键」，正是要测的那条退路 */
+  textBetween: vi.fn(() => ''),
+  redraw: vi.fn((_id: string, _parts: readonly RedrawPart[]) => true),
   onInput: (() => {}) as (id: string, data: Uint8Array) => void,
   onResize: (() => {}) as (id: string, cols: number, rows: number) => void,
 }));
@@ -24,7 +32,9 @@ const hub = vi.hoisted(() => ({
 vi.mock('../../src/modules/ssh/core/terminalHub', () => ({ terminalHub: hub }));
 
 import type { ConnectionGroup } from '../../src/shared/connections/types';
+import { bandsOf } from '../../src/modules/ssh/core/blocksView';
 import type { KnownHost, SshProfile } from '../../src/modules/ssh/core/types';
+import type { RedrawPart, TermMetrics } from '../../src/shared/terminal/hub';
 import type {
   LocalClient,
   LocalOpenRequest,
@@ -648,5 +658,144 @@ describe('本地终端', () => {
 
     expect(h.client.open).toHaveBeenCalledTimes(1);
     expect(h.localOpened).toHaveLength(0);
+  });
+});
+
+/**
+ * 清屏（`clear`）之后命令块的坐标系重置。
+ *
+ * ⚠️ 真机上报的「clear 之后旧色条还在」根子在**模型**，不在渲染：块的 `line`
+ * 是绝对行号，而清屏**不改绝对行号**（`ESC[2J` 原地擦视口那几行）或者只把它们
+ * 推回小数（`ESC[3J` 把回滚区一剪）—— 于是留下「行号看着还有效、内容已经没了」
+ * 的块。这里测的就是立新块那一刻把它们收走。
+ */
+describe('清屏之后：命令块的坐标系重置', () => {
+  /** 命令块要的那几个数。真值要有真实布局才量得出（见文件头），这里自己摆 */
+  function view(patch: Partial<TermMetrics> = {}): TermMetrics {
+    return {
+      viewportLine: 0,
+      cellHeight: 16,
+      rows: 24,
+      cols: 80,
+      lines: 200,
+      cursorLine: 0,
+      cursorCol: 20,
+      lastContentLine: 200,
+      alt: false,
+      ...patch,
+    };
+  }
+
+  /** 敲一条命令并回车 —— 走真机那条路：hub.onInput → store 记账 → client 写出去 */
+  function typeLine(sessionId: string, command: string): void {
+    const enc = new TextEncoder();
+    hub.onInput(sessionId, enc.encode(command)); // 逐字敲：块的起点在第一个键那一刻
+    hub.onInput(sessionId, enc.encode('\r'));
+  }
+
+  it('ESC[3J（连回滚区一起清）：旧块全丢、数组重新有序，新命令的色条画得出来', async () => {
+    const h = harness({ stored: [profile()] });
+    const sessionId = await connected(h);
+
+    // 清屏之前：两条命令停在旧坐标系的大行号上
+    hub.metrics.mockReturnValue(view({ cursorLine: 4000, lastContentLine: 5000 }));
+    typeLine(sessionId, 'ls');
+    hub.metrics.mockReturnValue(view({ cursorLine: 4006, lastContentLine: 5000 }));
+    typeLine(sessionId, 'pwd');
+    expect(h.store.blocksOf(sessionId).map((b) => b.line)).toEqual([4000, 4006]);
+
+    // `tput clear`（`ESC[H ESC[2J ESC[3J`）：缓冲区被剪到 rows 行，行号从 0 重数
+    hub.metrics.mockReturnValue(view({ cursorLine: 0, cursorCol: 6, lastContentLine: 1 }));
+    typeLine(sessionId, 'ls');
+    hub.metrics.mockReturnValue(view({ cursorLine: 3, cursorCol: 6, lastContentLine: 9 }));
+    typeLine(sessionId, 'pwd');
+
+    const blocks = h.store.blocksOf(sessionId);
+    expect(blocks.map((b) => b.command)).toEqual(['ls', 'pwd']);
+    // 「块按 line 有序」回来了 —— 二分查找和那两条 break 全靠它
+    expect(blocks.map((b) => b.line)).toEqual([0, 3]);
+    // 而且新命令的色条真的画得出来：旧块那些大行号留着的话，扫描会在它们那里
+    // 提前 break 掉，clear 之后**一条新色条都不会出现**
+    const shown = bandsOf(blocks, view({ cursorLine: 3, lastContentLine: 9 }));
+    expect(shown.map((b) => b.command)).toEqual(['ls', 'pwd']);
+  });
+
+  it('ESC[2J（原地擦视口）：回滚区里内容还在的块活下来', async () => {
+    const h = harness({ stored: [profile()] });
+    const sessionId = await connected(h);
+
+    // 清屏前：一条大输出在回滚区（第 2 行），`clear` 敲在视口第一行（第 5 行）
+    hub.metrics.mockReturnValue(view({ viewportLine: 5, cursorLine: 2, lastContentLine: 100 }));
+    typeLine(sessionId, 'cat big.log');
+    hub.metrics.mockReturnValue(view({ viewportLine: 5, cursorLine: 5, lastContentLine: 100 }));
+    typeLine(sessionId, 'clear');
+
+    // 擦掉的是视口那几行，新提示符落在视口第一行 → 下一条命令也在第 5 行成块
+    hub.metrics.mockReturnValue(
+      view({ viewportLine: 5, cursorLine: 5, cursorCol: 6, lastContentLine: 6 }),
+    );
+    typeLine(sessionId, 'pwd');
+
+    const blocks = h.store.blocksOf(sessionId);
+    // `clear` 那块没了 —— 它和提示符落在同一行，正是上一轮留下的那条 1 行残留
+    // 色条；回滚区那块（行号更小、内容还在）一个都没动
+    expect(blocks.map((b) => b.command)).toEqual(['cat big.log', 'pwd']);
+    // 用户擦完往上滚，回滚区那块照旧看得见
+    const shown = bandsOf(blocks, view({ viewportLine: 0, lastContentLine: 6 }));
+    expect(shown.map((b) => b.command)).toEqual(['cat big.log', 'pwd']);
+  });
+
+  it('没清过屏：一个都不丢', async () => {
+    const h = harness({ stored: [profile()] });
+    const sessionId = await connected(h);
+
+    for (const line of [0, 6, 12]) {
+      hub.metrics.mockReturnValue(view({ cursorLine: line, lastContentLine: 200 }));
+      typeLine(sessionId, `cmd${line}`);
+    }
+
+    expect(h.store.blocksOf(sessionId).map((b) => b.command)).toEqual(['cmd0', 'cmd6', 'cmd12']);
+  });
+
+  it('⚠️ 剪掉的块，字节仍要重放（少了那一段，折出来的画面就对不上）', async () => {
+    const h = harness({ stored: [profile()] });
+    const sessionId = await connected(h);
+    const request = vi.mocked(h.client.open).mock.calls[0]?.[0];
+    const enc = new TextEncoder();
+
+    // 时间要能推（折叠要求「输出停了 250ms」），连接建好之后再换成假表
+    vi.useFakeTimers();
+    try {
+      // 清屏前那一块 + 它的输出 —— 清屏那串转义序列就在这一段的字节里
+      hub.metrics.mockReturnValue(view({ cursorLine: 10, lastContentLine: 100 }));
+      typeLine(sessionId, 'cat big.log');
+      request?.onEvent({ kind: 'data', bytes: enc.encode('一堆输出\x1b[H\x1b[2J\x1b[3J') });
+
+      vi.advanceTimersByTime(500); // 输出停了
+      hub.metrics.mockReturnValue(view({ cursorLine: 0, lastContentLine: 5 }));
+      typeLine(sessionId, 'ls');
+      request?.onEvent({ kind: 'data', bytes: enc.encode('新输出') });
+      vi.advanceTimersByTime(500);
+
+      const fresh = h.store.blocksOf(sessionId);
+      expect(fresh.map((b) => b.command)).toEqual(['ls']); // 旧的已经被剪掉
+
+      expect(h.store.toggleBlockFold(sessionId, fresh[0]!.id)).toBe(true);
+      const parts = vi.mocked(hub.redraw).mock.calls[0]?.[1] ?? [];
+      const replayed = parts
+        .map((p) => ('text' in p ? p.text : new TextDecoder().decode(p.bytes)))
+        .join('');
+
+      // ⚠️ 这一段是这次改动的全部意义：被剪掉那块「连清屏转义一起」原样写回。
+      // 少了它，重放出来的画面里那一次清屏就没了 —— 用户擦掉的内容会回来
+      expect(replayed).toContain('一堆输出');
+      expect(replayed).toContain('\x1b[2J');
+      expect(replayed).toContain('\x1b[3J');
+      // 而被折起来的那一块换成了一行摘要（它的字节当然不再原样写回）
+      expect(replayed).toContain('已折叠');
+      expect(replayed).not.toContain('新输出');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

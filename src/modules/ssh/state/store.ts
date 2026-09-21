@@ -936,14 +936,27 @@ export class SshStore {
     const plan: Array<{ bytes: Uint8Array } | { text: string }> = [
       { bytes: log.preamble() },
     ];
-    for (const b of blocks) {
-      const folded = b.id === blockId ? collapse : set.has(b.id);
+    // ⚠️ 重放**按日志自己的分段走，不是按还活着的块走**。
+    //
+    // 清屏丢了一批块之后（见 `recordInput` 里那次 `pruneFrom`），那些块的字节
+    // 还在这份日志里 —— 少了它们，重放出来的画面就和真实的对不上（清屏那一下
+    // 的转义序列正藏在那几段里），而且行号跟着一起错。日志的分段顺序就是字节
+    // 到达的顺序，和块的顺序一致，所以照它走写出来的字节流和原来一模一样。
+    const byId = new Map(blocks.map((b) => [b.id, b]));
+    for (const id of log.blockIds()) {
+      const b = byId.get(id);
+      // 块已经不在（清屏带走的那批）：没人能折它了，原样写回去
+      if (b === undefined) {
+        plan.push({ bytes: log.block(id) });
+        continue;
+      }
+      const folded = id === blockId ? collapse : set.has(id);
       plan.push(
         folded
           ? // ⚠️ 摘要要**截到一行之内**：超宽会被终端折成两行，而下面的行号
             // 推算假定「折起来就占一行」—— 对不上就是从这一行开始的
             { text: `${clampLine(collapsedLine(b), metrics.cols)}\r\n` }
-          : { bytes: log.block(b.id) },
+          : { bytes: log.block(id) },
       );
     }
 
@@ -1019,9 +1032,42 @@ export class SshStore {
     const command = this.readCommand(sessionId, metrics, typed + pending);
 
     const created = tracker.submit(command, metrics.cursorLine, metrics.cursorCol, now);
+    if (created === null) return;
+
+    // ⚠️ **清屏把坐标系重置过 → 把已经被擦掉的那批旧块丢掉。**
+    //
+    // 判据是拿两个块自己的行号比大小，为什么这样够用，三种情况分开看：
+    //
+    // * **没重置过**：新命令的行号只可能比所有旧块大（输出只会往后走）→ 这里
+    //   一个都不丢，是个 no-op；
+    // * **`ESC[3J`（连回滚区一起清）**：旧块留的是重置前的大行号，新块是小行号
+    //   → `line >= 新块行号` 正好把旧的全收走。**顺带把「块按 line 有序」这条
+    //   不变式修回来** —— `bandsOf` 的二分查找和那两条 `break` 全靠它，不然
+    //   旧块的大行号会把扫描提前 break 掉，clear 之后新命令的色条压根出不来；
+    // * **`ESC[2J`（原地擦视口）**：新命令行号就是视口第一行左右 → 收走的正是
+    //   被擦掉的那一批；**回滚区里内容还在的块行号更小，一个都不动** ✓
+    //   （所以**不能**用「新块比上一块小就全清」那种粗暴规则 —— 那是把回滚区
+    //   里还活着的块一起误杀，而用户滚上去正是要看它们）。
+    //
+    // ⚠️ 判据只看两个块自己的行号，**不碰 `contentEnd` / `viewportLine` 这些
+    // 当帧量出来的数**：窗口 resize / 重排的时候那些数会抖，拿它们决定「谁该
+    // 被剪掉」会误剪。行号比较和终端这一帧长什么样无关。
+    const dropped = tracker.pruneFrom(created.line);
+    if (dropped.length > 0) {
+      // 死 id 从这两个集合里一起拿走。留着其实也不会画错（色条只问还活着的
+      // 块、重放查不到块时会原样写字节），但让它们只装活着的块，比靠查询侧
+      // 兜底干净 —— 以后有人改成「按 id 直接取」时不会踩到。
+      const folded = this.folded.get(sessionId);
+      const sizes = this.expandedLines.get(sessionId);
+      for (const id of dropped) {
+        folded?.delete(id);
+        sizes?.delete(id);
+      }
+    }
+
     // 立了块就把日志分段（空命令返回 null，那种情况字节继续留在上一段里，
     // 而上一段的末尾正是「下一条命令那一行」—— 两边对得上）
-    if (created !== null) this.logs.get(sessionId)?.startBlock(created.id);
+    this.logs.get(sessionId)?.startBlock(created.id);
   }
 
   /**

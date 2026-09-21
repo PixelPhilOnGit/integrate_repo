@@ -98,6 +98,21 @@ export interface BlockTracker {
    * 这样调用方只报它真的挪过的那些。
    */
   remap(moved: ReadonlyMap<number, number>): void;
+  /**
+   * 丢掉一批**内容已经不在**的旧块（清屏把坐标系重置了），返回丢掉的 id。
+   *
+   * 判据是行号：`line >= 传进来的那个行号` 的那些。为什么这个判据成立、为什么
+   * 不能用「新块比上一块小就全清」那种粗暴规则，见调用处（store 立块那一刻）
+   * 的推演 —— 这个文件不知道终端里发生了什么，只知道行号。
+   *
+   * ⚠️ **刚提交的那一块（数组最后一个）要留着**：它的行号正好等于这个判据。
+   *
+   * 为什么必须丢：被擦掉的那些块，行号还"有效"（绝对行号没变），但内容没了 ——
+   * 色条会画在空行上。而且清屏把行号推回小数之后，`ESC[3J` 那批旧块的大行号
+   * 会把「块按 line 有序」这条不变式破坏掉，而二分查找和渲染那两条 `break`
+   * 全靠它。
+   */
+  pruneFrom(line: number): number[];
   /** 现在有哪些块（新的在后）。渲染和复制都从这里拿 */
   blocks(): readonly CommandBlock[];
 }
@@ -217,6 +232,20 @@ export function createBlockTracker(): BlockTracker {
         const line = moved.get(block.id);
         if (line !== undefined) block.line = line;
       }
+    },
+
+    pruneFrom(line) {
+      const dropped: number[] = [];
+      // 从后往前剪（边扫边 splice，倒着走才不会错位），而且**从倒数第二个
+      // 开始**：最后一个是刚提交的那一块，它的行号正好等于判据，但它自己得留着
+      for (let i = blocks.length - 2; i >= 0; i -= 1) {
+        const block = blocks[i];
+        if (block === undefined || block.line < line) continue;
+        dropped.push(block.id);
+        blocks.splice(i, 1);
+      }
+      // 倒着扫出来的，翻回来交给调用方（「丢掉了哪几块」按原来的先后说更顺）
+      return dropped.reverse();
     },
 
     blocks: () => blocks,

@@ -55,6 +55,20 @@ describe('字节日志：分段', () => {
     expect(log.block(99)).toHaveLength(0);
   });
 
+  it('⚠️ 一个字节都没吐的块也在名单里 —— 重放是按名单走的', () => {
+    // 链路卡一下的时候，用户能抢在回显回来之前再敲一条：中间那块一段字节都没有。
+    // 它在名单里，被折叠时那一行摘要才有人写（不在的话后面的行号全错位）
+    const log = createByteLog();
+    log.startBlock(1);
+    log.append(bytes('第一块的输出'), 1);
+    log.startBlock(2); // 第二块什么都没吐
+    log.startBlock(3);
+    log.append(bytes('第三块的输出'), 2);
+
+    expect(log.blockIds()).toEqual([1, 2, 3]);
+    expect(text(log.block(2))).toBe('');
+  });
+
   it('拼回来的是**原样**的字节，一段不多一段不少', () => {
     const log = createByteLog();
     const raw = bytes('带颜色的输出：\x1b[31m红\x1b[0m\r\n');

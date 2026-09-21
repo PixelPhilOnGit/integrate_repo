@@ -57,6 +57,16 @@ export interface ByteLog {
   preamble(): Uint8Array;
   /** 某一块的字节。没有这一块（或者日志溢出了）返回空 */
   block(blockId: number): Uint8Array;
+  /**
+   * 已经开了段的块 id，**按开的先后**（也就是字节到达的先后）。
+   *
+   * ⚠️ 重放要按这个名单走，而不是按「模型里还活着的块」走：清屏之后有一批块
+   * 被丢掉了（见 `blocks.ts` 的 `pruneFrom`），可它们的字节还在这儿 ——
+   * 少了那几段，重放出来的画面就和真实的对不上（清屏那一下的转义序列正是
+   * 藏在那几段字节里）。一个字节都没吐的块也在名单里（空段）：它被折叠时
+   * 那一行摘要得有人写。
+   */
+  blockIds(): readonly number[];
   /** 最后一段字节是什么时候来的 —— 「shell 停下来了没有」靠它判断 */
   lastOutputAt(): number | null;
   total(): number;
@@ -98,6 +108,10 @@ export function createByteLog(limit: number = DEFAULT_BYTE_LIMIT): ByteLog {
 
     startBlock(blockId) {
       current = blockId;
+      // ⚠️ **先占个位**（哪怕这一段一个字节都还没来）：重放是按 `blockIds()` 走的，
+      // 而「一条命令一个字节都没吐」的块（链路卡一下，用户抢在回显回来之前又敲了
+      // 一条）也得在名单里 —— 不然它被折叠时那一行摘要就没人写，后面的行号全错位
+      if (!blocks.has(blockId)) blocks.set(blockId, []);
     },
 
     preamble: () => join(head),
@@ -106,6 +120,10 @@ export function createByteLog(limit: number = DEFAULT_BYTE_LIMIT): ByteLog {
       const list = blocks.get(blockId);
       return list === undefined ? new Uint8Array(0) : join(list);
     },
+
+    // Map 的键按插入顺序走，而插入发生在 `startBlock`（这一块开始了）——
+    // 也就是块和它们的字节到来的先后
+    blockIds: () => [...blocks.keys()],
 
     lastOutputAt: () => lastAt,
     total: () => total,
