@@ -1,6 +1,6 @@
 [package]
 name = "devtoolkit-core"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.89"
 description = "Devtoolkit 的纯逻辑内核：工作区路径安全校验与文件操作（不依赖 Tauri，可独立快速测试）"
