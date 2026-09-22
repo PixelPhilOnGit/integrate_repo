@@ -19,6 +19,8 @@
 //! | 参数拼不出合法 JSON → **丢弃整轮、重发** | [`Action::Retry`] |
 //! | 同一个工具同一组参数反复调用要熔断 | [`check_limits`] |
 
+use serde::Serialize;
+
 use crate::message::{StopReason, Usage};
 use crate::turn::{ArgsState, ToolCall, Turn};
 
@@ -151,7 +153,8 @@ pub enum ToolMode {
 }
 
 /// 为什么中止。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AbortReason {
     /// 迭代次数到顶了。
     IterationsExhausted {

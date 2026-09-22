@@ -52,6 +52,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(task_commands::TasksState::new()))
         // 键值库（各模块的档案/指纹/偏好）。同样惰性打开 —— 见 kv_commands.rs
         .manage(std::sync::Arc::new(kv_commands::KvState::new()))
+        // 助手：审批闸门 + 正在跑的 run + 会话记录库。包一层 Arc 是因为
+        // 跑一次对话要活到 run 结束（转发任务得把 run 从表里摘掉）。
+        .manage(std::sync::Arc::new(assistant_commands::AssistantRuntime::new()))
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,
@@ -115,6 +118,12 @@ pub fn run() {
             // 助手的凭据。**只写不读** —— 理由见 assistant_commands.rs
             assistant_commands::assistant_api_key_status,
             assistant_commands::assistant_set_api_key,
+            // 助手跑一次对话 / 回答审批 / 停止 / 清空这个会话的历史。
+            // 事件走 `Channel` 流式推回来
+            assistant_commands::assistant_send,
+            assistant_commands::assistant_approve,
+            assistant_commands::assistant_cancel,
+            assistant_commands::assistant_clear_session,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

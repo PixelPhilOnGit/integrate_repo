@@ -266,24 +266,38 @@ pub struct PreparedCall {
     pub side_effect: SideEffect,
     /// **给人看的那一行**。写文件是解析之后的真实路径，跑命令是完整命令行原文。
     pub display: String,
-    /// 记住授权用的 key。只读工具是 `None`。
+    /// 记住授权用的 key。**`None` 有两种含义**，靠 [`SideEffect`] 区分：
+    ///
+    /// * 只读工具 —— 本来就不问，`None` 只是「没有这一步」；
+    /// * 写 / 执行类 —— **每次都要问，而且不给「本次会话记住」这个选项**。
+    ///
+    /// 后一种见 [`PreparedCall::needs_approval`] 里那段理由。
     pub grant: Option<GrantKey>,
 }
 
 impl PreparedCall {
-    /// 要问用户吗？返回 `Some` 表示要问，值是被记住时的那条 key。
+    /// 要问用户吗？`granted` 是本会话已经批准过的那些。
     ///
     /// 纯函数，**判定和等待是分开的**（等待在 `approval.rs`）——
     /// 这样「什么情况下要问」可以在毫秒级单测里穷举。
-    pub fn needs_approval(&self, granted: &HashSet<GrantKey>) -> Option<GrantKey> {
+    pub fn needs_approval(&self, granted: &HashSet<GrantKey>) -> bool {
         if !self.side_effect.needs_approval() {
-            return None;
+            return false;
         }
-        let key = self.grant.clone()?;
-        if granted.contains(&key) {
-            return None; // 本会话已经批准过这一条
+        match &self.grant {
+            Some(k) => !granted.contains(k),
+            // ⚠️ **没有 key 的写 / 执行类：每次都要问，也不给「记住」。**
+            //
+            // 这条分支的方向必须是「问」。反过来（当成免审）的话，将来哪个工具
+            // 忘了填 key，它就在**静默地免审** —— 而静默的放宽没人会发现。
+            // 这个函数以前返回 `Option`、用 `?` 提前返回的写法恰好是反的
+            // （`None` 一路走成「不用问」），所以这次顺手把默认方向掰过来了。
+            //
+            // 真会用到这条的是 `run_command` 跑 **shell 解释器**的时候：
+            // 记住 `bash` 等于免审之后所有的 `bash -c "…"`，而用户点「记住」时
+            // 看到的是**当时那一条**命令 —— 那正是「记住」最不该做的事。
+            None => true,
         }
-        Some(key)
     }
 }
 
@@ -385,14 +399,14 @@ mod tests {
     #[test]
     fn reads_never_ask() {
         let c = call("read_file", SideEffect::Read, "a.txt");
-        assert_eq!(c.needs_approval(&HashSet::new()), None);
+        assert!(!c.needs_approval(&HashSet::new()));
     }
 
     #[test]
     fn writes_and_execs_always_ask() {
         let empty = HashSet::new();
-        assert!(call("write_file", SideEffect::Write, "src").needs_approval(&empty).is_some());
-        assert!(call("run_command", SideEffect::Execute, "git").needs_approval(&empty).is_some());
+        assert!(call("write_file", SideEffect::Write, "src").needs_approval(&empty));
+        assert!(call("run_command", SideEffect::Execute, "git").needs_approval(&empty));
     }
 
     #[test]
@@ -406,11 +420,11 @@ mod tests {
         });
 
         let git = call("run_command", SideEffect::Execute, "git");
-        assert_eq!(git.needs_approval(&granted), None, "git 已经批准过，不该再问");
+        assert!(!git.needs_approval(&granted), "git 已经批准过，不该再问");
 
         let curl = call("run_command", SideEffect::Execute, "curl");
         assert!(
-            curl.needs_approval(&granted).is_some(),
+            curl.needs_approval(&granted),
             "⚠️ 批准 git 不能顺带批准 curl —— 那是个用户发现不了的洞"
         );
     }
@@ -423,6 +437,43 @@ mod tests {
             target: "src".into(),
         });
         let elsewhere = call("write_file", SideEffect::Write, "config");
-        assert!(elsewhere.needs_approval(&granted).is_some());
+        assert!(elsewhere.needs_approval(&granted));
+    }
+
+    #[test]
+    fn a_writable_call_without_a_key_asks_every_time() {
+        // ⚠️ 这条钉的是**默认方向**：没有 key 的写 / 执行类必须偏向「问」。
+        //
+        // 以前这里返回 `Option` 并且用 `?` 提前返回 —— `grant: None` 一路走成
+        // 「不用问」，也就是**静默免审**。今天没有工具走那条路（测试里的假实现
+        // 都填了 key），所以它一直没被发现；但「忘记填 key」的后果不该是放宽。
+        let mut granted = HashSet::new();
+        granted.insert(GrantKey {
+            tool: "run_command".into(),
+            target: "bash".into(),
+        });
+
+        let no_key = PreparedCall {
+            name: "run_command".into(),
+            args: json!({}),
+            side_effect: SideEffect::Execute,
+            display: "bash -c …".into(),
+            grant: None,
+        };
+        assert!(
+            no_key.needs_approval(&HashSet::new()),
+            "没有 key 的执行类必须问"
+        );
+        assert!(
+            no_key.needs_approval(&granted),
+            "⚠️ 没有 key 就是「不可记住」—— 哪怕 granted 里恰好有一条同名的"
+        );
+
+        // 只读那些**本来就不问**，跟有没有 key 无关。
+        let read_no_key = PreparedCall {
+            side_effect: SideEffect::Read,
+            ..no_key
+        };
+        assert!(!read_no_key.needs_approval(&granted));
     }
 }

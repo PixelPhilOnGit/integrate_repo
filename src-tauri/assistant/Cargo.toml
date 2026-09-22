@@ -35,6 +35,19 @@ serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
 # 自己再写一份路径解析 = 多一个会漏的地方，而且是**在安全边界上**漏。
 devtoolkit-core = { path = "../core" }
 
+# 会话记录落盘（`transcript.rs`）。
+#
+# ⚠️ 这是这个 crate 最重的一个依赖，得说清楚为什么值得：
+# 它是 `bundled` 的 —— SQLite 源码编进来，用户那边不用装任何东西，三个平台一致。
+# 而 `store` / `tasks` 用的**是同一个版本、同一组 feature**，所以 cargo 复用
+# 同一份编译产物，净增的编译时间接近零。
+#
+# 为什么不另起一个 crate（像 `store` / `tasks` 那样）：那两处独立是因为它们的
+# 消费者**是多个模块**；这份记录只服务助手，而且存的就是这个 crate 自己的类型
+# （`Usage` / `RunStatus` / `ContextStrategy`）。拆出去会把一个内部实现细节
+# 变成两个 crate 之间的公共契约。理由和失效条件都写在 `transcript.rs` 头部。
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 # 这个内核是 async 的（流式 HTTP + 审批要挂起等用户点确认），
 # 但**运行时由调用方提供** —— Tauri 那边已经有一个（`tauri::async_runtime`），
 # 自己再起一个是在运行时里套运行时的坑，`ssh` 那一轮记过。

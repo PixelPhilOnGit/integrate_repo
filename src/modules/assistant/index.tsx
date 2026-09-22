@@ -10,9 +10,12 @@
  *
  * # 现在做到哪儿了
  *
- * 能用的只有**配置**（提供方 / 地址 / 模型 / API key）。循环内核
- * （`src-tauri/assistant/`）已经跑通并有测试，但 HTTP 客户端和对话界面还没接。
- * 主区域明说了这一点，不摆假的对话框。
+ * **能用了。** 说一句话，它在工作区里读文件、改文件、跑命令 ——
+ * 要动你的东西之前一定先弹审批。模型配置（提供方 / 地址 / 模型 / API key）
+ * 在右边的「模型」面板里。
+ *
+ * 还没做的看 HANDOFF 的「下一步」：摘要策略、工具面扩到别的模块、检索，
+ * 以及**跨重启的对话**（历史现在只在内存里，关掉应用就没了）。
  */
 
 import type { Module } from '../../shell/types';
@@ -48,7 +51,10 @@ export const assistantModule: Module = {
   Inspector: InspectorBound,
   StatusItems: AssistantStatusItems,
 
-  // 助手不往工作区里写文件：它的产物是对话记录，存在自己的库里
+  // ⚠️ 这两个字段是给「列文件树 / 另存为」那套用的（顺序图的 `.seq.json`），
+  // **不是**助手的安全边界 —— 它碰的是工作区里的**任意**文件。
+  // 管住它的是 Rust 侧那道唯一的路径闸门（`Workspace::resolve`），
+  // 白名单在这儿一点用都没有（多一个后缀也拦不住 `..`）。
   platform: { listedExtensions: [], defaultExtension: '' },
 
   onActivate(api) {

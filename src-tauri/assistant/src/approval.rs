@@ -37,7 +37,8 @@ use crate::tool::GrantKey;
 /// ⚠️ **必须带 run 代次**：只靠 `tool_use_id` 的话，同一个会话里前后两次 run
 /// 的 id 撞上（模型给的 id 不保证跨轮唯一）、或者重复 run，回答就会串台 ——
 /// 用户批的是第 2 轮的事，落到第 1 轮上执行了。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApprovalKey {
     /// 哪一次 run。
     pub run: u64,
@@ -72,8 +73,17 @@ pub struct ApprovalRequest {
     pub tool: String,
     /// **给人看的那一行**：写文件是解析之后的真实路径，跑命令是完整命令行原文。
     pub display: String,
-    /// 记住授权用的键（粒度是 `(工具名, 归一化目标)`，见 `tool.rs` 的 `GrantKey`）。
-    pub grant: GrantKey,
+    /// 批准之后要不要给出「本次会话记住」这个选项。
+    ///
+    /// * `Some(key)` —— 给。粒度是 `(工具名, 归一化目标)`，见 `tool.rs` 的 [`GrantKey`]。
+    /// * `None` —— **不给**，这个操作每次都问。
+    ///   （跑 shell 解释器就是这一类：记住 `bash` 等于免审之后**所有**的
+    ///   `bash -c "…"`，而用户点「记住」时看到的是当时那一条 —— 见
+    ///   [`crate::tool::PreparedCall::needs_approval`]。）
+    ///
+    /// ⚠️ 前端**必须**按这个字段决定显不显示「记住」按钮。显示一个点了却没用
+    /// （下次照样问）的按钮，比根本不显示更糟 —— 用户会以为已经批准过了。
+    pub grant: Option<GrantKey>,
 }
 
 /// 取消信号的**接收端**。可以克隆很多份，给每个等待方一份。
@@ -289,10 +299,10 @@ mod tests {
             key: key(run, call),
             tool: tool.into(),
             display: format!("{tool} {target}"),
-            grant: GrantKey {
+            grant: Some(GrantKey {
                 tool: tool.into(),
                 target: target.into(),
-            },
+            }),
         }
     }
 

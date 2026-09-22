@@ -26,14 +26,17 @@
 
 pub mod approval;
 pub mod context;
+pub mod journal;
 pub mod loop_runner;
 pub mod message;
 pub mod provider;
 pub mod provider_config;
 pub mod session;
 pub mod sse;
+pub mod transcript;
 pub mod transport;
 pub mod tool;
+pub mod tools;
 pub mod turn;
 
 #[cfg(test)]

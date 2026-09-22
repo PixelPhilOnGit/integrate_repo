@@ -19,12 +19,14 @@
 //! 三个都抽出来是为了**这一个文件能用假实现跑完整条链路**：
 //! 不需要网络、不需要 API key、不需要 Tauri。里程碑就是它。
 
-use std::time::Duration;
+use std::sync::Arc;
 
+use serde::Serialize;
 use tokio::sync::mpsc;
 
 use crate::approval::{ApprovalRequest, Cancel, Decision};
 use crate::context::{ContextStrategy, assemble, sanitize};
+use crate::journal::Journal;
 use crate::loop_runner::{AbortReason, Action, Limits, LoopState, ToolMode, check_limits, next_action, signature_of};
 use crate::message::{Block, Message, Role, StopReason, Usage};
 use crate::tool::{InvalidInput, PreparedCall, ToolSpec};
@@ -90,7 +92,8 @@ pub trait ToolRunner: Send + Sync {
 }
 
 /// 审批的结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ApprovalOutcome {
     /// 不用问（只读，或者本会话已经批准过这一类）。
     NotNeeded,
@@ -107,10 +110,19 @@ pub enum ApprovalOutcome {
 /// 真实现包装 [`crate::approval::Gate`]；测试里塞一个按剧本回答的假实现。
 pub trait ApproveGate: Send + Sync {
     /// 问一次。
+    ///
+    /// ⚠️ **`ApprovalNeeded` 这条事件由实现来发，而且必须发在「登记之后」。**
+    /// 调用方（`run_tools`）刻意不发它 —— 那个位置在登记**之前**，
+    /// 前端有可能抢在登记完成前就回答，那条回答会石沉大海，
+    /// 表现是「弹层消失了，但什么也没发生」（见 `approval.rs` 的不变量 1）。
+    ///
+    /// 真实现把它挂在 `Gate::request` 的 `emit` 回调上，那个回调就是
+    /// 为「登记完成之后、不持锁」这件事设计的。
     fn approve(
         &self,
         request: ApprovalRequest,
         cancel: &Cancel,
+        events: &EventSink,
     ) -> impl std::future::Future<Output = ApprovalOutcome> + Send;
 }
 
@@ -135,7 +147,11 @@ impl EventSink {
 }
 
 /// 循环往上报的事件。
-#[derive(Debug, Clone, PartialEq)]
+///
+/// ⚠️ `rename_all` 只管**变体名**，变体内部的字段名要 `rename_all_fields` 才管 ——
+/// 少写了就是 `invalid args` 那类「两边测试都盖不到」的错（见 HANDOFF 里那条）。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum RunEvent {
     /// 第几圈开始了。
     Iteration {
@@ -171,6 +187,12 @@ pub enum RunEvent {
         tool: String,
         /// 给人看的那一行。
         display: String,
+        /// 要不要给「本次会话记住」这个选项。
+        ///
+        /// ⚠️ **前端必须按它决定按钮显不显示。** 给一个点了没用（下次照样问）
+        /// 的按钮比不给更糟 —— 用户会以为已经批准过了。
+        /// 什么情况下是 `false`，见 [`crate::tool::PreparedCall::needs_approval`]。
+        can_remember: bool,
     },
     /// 审批有结果了。
     ApprovalDecided {
@@ -202,6 +224,19 @@ pub enum RunEvent {
         /// 为什么。
         reason: String,
     },
+    /// 这次 run 结束了。**一定是最后一条事件。**
+    ///
+    /// ⚠️ 前端靠它收尾：关掉还挂着的审批弹层、把输入框解禁、把「正在跑」
+    /// 的指示停掉。少了它，界面只能靠「不再来消息了」去猜 ——
+    /// 而「跑完了」和「连接断了」在界面上长得一模一样。
+    Finished {
+        /// 结局。
+        status: RunStatus,
+        /// 累计用量。
+        usage: Usage,
+        /// 一共跑了几轮。
+        iterations: usize,
+    },
 }
 
 /// 一次 run 要什么。
@@ -213,6 +248,15 @@ pub struct RunSpec {
     pub system: String,
     /// 用户的输入（对 `for` 循环来说，就是这一个任务）。
     pub prompt: String,
+    /// 这次 run 之前的历史（**不含** `prompt`）。
+    ///
+    /// ⚠️ 空 = 一次全新的对话。要做多轮的话，**调用方自己**把上一轮的
+    /// `RunOutcome::history` 存起来、下一轮从这里传回来 —— 循环这边不替谁保管它。
+    ///
+    /// 那是刻意的：历史放在哪儿（内存？落盘？按会话分几份？）是调用方的事，
+    /// 而这个 crate 的定位是「给定历史，跑一轮」。它要是自己藏一份，
+    /// 就会和 `transcript.rs` 那份落盘的、以及上下文策略要改写的**变成三份**。
+    pub history: Vec<Message>,
     /// 上下文策略。
     pub strategy: ContextStrategy,
     /// 可用的工具。
@@ -221,17 +265,17 @@ pub struct RunSpec {
     pub limits: Limits,
     /// 每轮输出上限。
     pub max_tokens: u32,
-    /// 审批等多久算拒绝。
+    /// 记账口子（`None` = 这次不记）。
     ///
-    /// ⚠️ **默认是 `None`（永远等下去）**，这是刻意的产品决定：
-    /// 这个应用已有的设计就是「agent 可以一直等你」（agents 那边有专门的
-    /// 「需要你」状态 + 角标）。十步任务里弹十次、次次自动拒，比等着更烦人。
-    /// 挂起状态在界面上必须显眼，并且随时可取消 —— 那就够了。
-    pub approval_timeout: Option<Duration>,
+    /// ⚠️ 放在 `RunSpec` 里而不是给 `run()` 再加一个参数：`run()` 已经有六个了，
+    /// 而「记不记、记到哪儿」本来就是**这一次 run 要什么**的一部分 ——
+    /// 和 [`RunSpec::run_id`] 是一类东西。
+    pub journal: Option<Arc<dyn Journal>>,
 }
 
 /// 一次 run 的结局。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum RunStatus {
     /// 正常结束。
     Completed {
@@ -279,8 +323,42 @@ where
     T: ToolRunner,
     A: ApproveGate,
 {
-    let mut history: Vec<Message> = vec![Message::user_text(&spec.prompt)];
+    // ⚠️ 历史从 `spec.history` 接上，而不是每次从零开始 —— 不然「对话」
+    // 就退化成「每次问一个独立的问题」，模型看不到上一句
+    // （症状是「它怎么不记得我刚才说的」）。
+    let mut history: Vec<Message> = spec.history.clone();
+    history.push(Message::user_text(&spec.prompt));
     let mut state = LoopState::default();
+
+    // 记账。**在发第一个请求之前**就开一条记录：连第一轮都没发出去的那些 run
+    // （key 不对、模型名拼错、地址填错）恰恰是最需要留下痕迹的。
+    let handle = spec.journal.as_ref().map(|j| j.start(&spec));
+
+    // ⚠️ 收尾包成闭包，而不是在每一处 `return` 前面写一遍：`run()` 有九条出口
+    // （完成 / 预算超了 / 迭代超了 / 卡住 / 拒绝 / 取消 / 不可重试的错……），
+    // 漏掉一条的后果是那条记录**永远停在「没有结束时间」上** ——
+    // 按它算时长要么是无穷大、要么被静默跳过，而且不会有任何报错。
+    let finish = |status: RunStatus, history: Vec<Message>, state: LoopState| {
+        if let (Some(j), Some(h)) = (spec.journal.as_ref(), handle.as_ref()) {
+            j.finish(h, &status);
+        }
+        // 「跑完了」这条一定要发出去，它是前端的收尾信号。它和别的 `try_send`
+        // 不一样的地方在于：**它后面就没有别的消息了**，所以就算这次 `try_send`
+        // 撞上队列满，前端也永远等不到收尾 —— 界面会一直停在「正在跑」。
+        // 队列打满需要前端在几毫秒里一条都不消费，实践中到不了；真到了，
+        // 用 `EventSink` 的容量去兜（命令层给的是 256）。
+        events.send(RunEvent::Finished {
+            status: status.clone(),
+            usage: state.usage,
+            iterations: state.iteration,
+        });
+        RunOutcome {
+            status,
+            history,
+            usage: state.usage,
+            iterations: state.iteration,
+        }
+    };
 
     loop {
         // 取消和上限**先于**任何 IO 检查：预算超了就不要再发请求了。
@@ -358,6 +436,14 @@ where
             usage: turn.usage,
         });
 
+        // 记这一轮。⚠️ **就地写，不攒到收尾**：`[profile.release]` 里是
+        // `panic = "abort"`，进程一炸攒着的一个字都留不下（见 `transcript.rs`）。
+        // 上面那个 `events.send` 靠不住 —— 它是 `try_send`、满了就丢，
+        // 而用量是不能丢的那种数据。
+        if let (Some(j), Some(h)) = (spec.journal.as_ref(), handle.as_ref()) {
+            j.turn(h, state.iteration, &turn.usage, &turn.stop_reason);
+        }
+
         let action = next_action(&turn);
 
         // ⚠️ **只有会被追加的分支才追加。** `Action::Retry`（参数拼不出合法 JSON、
@@ -432,15 +518,6 @@ where
     }
 }
 
-fn finish(status: RunStatus, history: Vec<Message>, state: LoopState) -> RunOutcome {
-    RunOutcome {
-        status,
-        history,
-        usage: state.usage,
-        iterations: state.iteration,
-    }
-}
-
 struct ToolRunResult {
     blocks: Vec<Block>,
     is_cancelled: bool,
@@ -502,17 +579,21 @@ where
                 },
                 tool: prepared.name.clone(),
                 display: prepared.display.clone(),
-                grant: prepared.grant.clone().unwrap_or_else(|| crate::tool::GrantKey {
-                    tool: prepared.name.clone(),
-                    target: prepared.display.clone(),
-                }),
+                // ⚠️ **原样带上去，不要在这里补一个兜底的 key。**
+                // `None` 是「这次不给记住选项」（见 `PreparedCall::needs_approval`），
+                // 补个假 key 就把它变成「可以记住」了 —— 而那正是
+                // `run_command` 跑 shell 解释器时最不该发生的事。
+                grant: prepared.grant.clone(),
             };
-            events.send(RunEvent::ApprovalNeeded {
-                key: req.key.clone(),
-                tool: req.tool.clone(),
-                display: req.display.clone(),
-            });
-            let outcome = approver.approve(req.clone(), cancel).await;
+            // ⚠️ **这里不发 `ApprovalNeeded`**（以前发过，那是个结构性的错）：
+            // 这个位置在闸门**登记之前**，前端可能抢在前面回答，而那条回答
+            // 落在还没登记的闸门上 —— 石沉大海。发事件是 approver 的事，
+            // 它会在登记完成之后发（见 `ApproveGate::approve` 的文档）。
+            //
+            // 顺带还有一层：`EventSink::send` 是 `try_send`（满了就丢），
+            // 审批事件一旦丢掉，`gate.request` 会挂到天荒地老 ——
+            // 界面上看到的就是「它卡住了」。
+            let outcome = approver.approve(req.clone(), cancel, events).await;
             events.send(RunEvent::ApprovalDecided {
                 key: req.key,
                 decision: outcome,
@@ -581,29 +662,40 @@ mod tests {
     // ---------------------------------------------------------------- 假实现
 
     /// 按剧本回答的模型：每次 `stream` 弹一个 `Turn`。
+    ///
+    /// 顺带**把它收到的请求记下来** —— 「模型到底看到了什么」这件事只能从这里
+    /// 验：`RunOutcome::history` 只能证明循环手里有什么，证明不了它发了什么。
     struct ScriptedProvider {
         queued: StdMutex<Vec<Result<Turn, ProviderError>>>,
+        seen: StdMutex<Vec<ProviderRequest>>,
     }
 
     impl ScriptedProvider {
         fn new(turns: Vec<Turn>) -> Self {
             ScriptedProvider {
                 queued: StdMutex::new(turns.into_iter().map(Ok).collect()),
+                seen: StdMutex::new(Vec::new()),
             }
         }
         fn with_errors(items: Vec<Result<Turn, ProviderError>>) -> Self {
             ScriptedProvider {
                 queued: StdMutex::new(items),
+                seen: StdMutex::new(Vec::new()),
             }
+        }
+        /// 第 `n` 次请求里模型看到的 messages。
+        fn sent_messages(&self, n: usize) -> Vec<Message> {
+            self.seen.lock().unwrap()[n].messages.clone()
         }
     }
 
     impl Provider for ScriptedProvider {
         async fn stream(
             &self,
-            _request: ProviderRequest,
+            request: ProviderRequest,
             _events: EventSink,
         ) -> Result<Turn, ProviderError> {
+            self.seen.lock().unwrap().push(request);
             let mut q = self.queued.lock().unwrap();
             if q.is_empty() {
                 return Err(ProviderError {
@@ -667,6 +759,7 @@ mod tests {
             &self,
             _request: ApprovalRequest,
             _cancel: &Cancel,
+            _events: &EventSink,
         ) -> ApprovalOutcome {
             let mut a = self.answers.lock().unwrap();
             if a.is_empty() {
@@ -719,11 +812,49 @@ mod tests {
             run_id: 1,
             system: "你是助手".into(),
             prompt: "看看 a.txt".into(),
+            history: vec![],
             strategy: ContextStrategy::Full,
             tools: vec![],
             limits: Limits::default(),
             max_tokens: 4096,
-            approval_timeout: None,
+            journal: None,
+        }
+    }
+
+    /// 记账的假实现：把调用顺序记下来。
+    #[derive(Debug, Default)]
+    struct FakeJournal {
+        log: StdMutex<Vec<String>>,
+    }
+
+    impl FakeJournal {
+        fn taken(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl Journal for FakeJournal {
+        fn start(&self, _spec: &RunSpec) -> crate::journal::RunHandle {
+            self.log.lock().unwrap().push("start".into());
+            crate::journal::RunHandle(1)
+        }
+        fn turn(
+            &self,
+            _handle: &crate::journal::RunHandle,
+            n: usize,
+            _usage: &Usage,
+            _stop: &StopReason,
+        ) {
+            self.log.lock().unwrap().push(format!("turn:{n}"));
+        }
+        fn finish(&self, _handle: &crate::journal::RunHandle, status: &RunStatus) {
+            let what = match status {
+                RunStatus::Completed { .. } => "completed",
+                RunStatus::Aborted { .. } => "aborted",
+                RunStatus::Cancelled => "cancelled",
+                RunStatus::Failed { .. } => "failed",
+            };
+            self.log.lock().unwrap().push(format!("finish:{what}"));
         }
     }
 
@@ -983,11 +1114,190 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_follow_up_actually_sees_what_came_before() {
+        // ⚠️ 这条钉的是**「对话」这件事本身**。`run()` 一开始是拿
+        // `vec![user_text(prompt)]` 硬起头的 —— 那样每一句都是独立的问题，
+        // 模型看不到上一句，症状是「它怎么不记得我刚才说的」。
+        //
+        // 注意断言的是**模型收到了什么**（`sent_messages`），不只是循环手里
+        // 有什么 —— 后者证明不了它发出去了。
+        let provider = ScriptedProvider::new(vec![text_turn("接着说", StopReason::EndTurn)]);
+        let tools = FakeTools::default();
+        let approver = ScriptedApprover::new(vec![]);
+        let (_sw, cancel) = crate::approval::cancel_pair();
+        let (sink, _rx) = EventSink::new(64);
+
+        let mut s = spec();
+        s.prompt = "接着聊".into();
+        s.history = vec![
+            Message::user_text("第一句"),
+            Message {
+                role: Role::Assistant,
+                content: vec![Block::Text {
+                    text: "第一句的回答".into(),
+                }],
+            },
+        ];
+
+        let out = run(&provider, &tools, &approver, &cancel, s, sink).await;
+        assert!(matches!(out.status, RunStatus::Completed { .. }));
+
+        let sent = provider.sent_messages(0);
+        assert_eq!(sent.len(), 3, "模型该看到：前两句 + 这一句");
+        match &sent[0].content[0] {
+            Block::Text { text } => assert_eq!(text, "第一句"),
+            other => panic!("历史没接上：{other:?}"),
+        }
+        // 结果里带回的也是完整历史（调用方要靠它接下一轮）
+        assert_eq!(out.history.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_first_turn_starts_from_nothing() {
+        // 空历史是**默认**的样子：不传就是一次全新的对话，不该凭空多出东西。
+        let provider = ScriptedProvider::new(vec![text_turn("好", StopReason::EndTurn)]);
+        let tools = FakeTools::default();
+        let approver = ScriptedApprover::new(vec![]);
+        let (_sw, cancel) = crate::approval::cancel_pair();
+        let (sink, _rx) = EventSink::new(64);
+
+        let out = run(&provider, &tools, &approver, &cancel, spec(), sink).await;
+        assert_eq!(out.history.len(), 2);
+        assert_eq!(provider.sent_messages(0).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_normal_run_is_journalled_from_start_to_finish() {
+        let provider = ScriptedProvider::new(vec![
+            tool_turn("t1", "read_file", "{}"),
+            text_turn("看完了", StopReason::EndTurn),
+        ]);
+        let tools = FakeTools::default();
+        let approver = ScriptedApprover::new(vec![]);
+        let (_sw, cancel) = crate::approval::cancel_pair();
+        let (sink, _rx) = EventSink::new(64);
+
+        let fake = Arc::new(FakeJournal::default());
+        let mut s = spec();
+        s.journal = Some(fake.clone() as Arc<dyn Journal>);
+
+        let out = run(&provider, &tools, &approver, &cancel, s, sink).await;
+        assert!(matches!(out.status, RunStatus::Completed { .. }));
+
+        assert_eq!(
+            fake.taken(),
+            ["start", "turn:1", "turn:2", "finish:completed"],
+            "每一轮都要记一笔，而且要能看出是哪一轮"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_never_gets_a_turn_still_gets_its_end_marker() {
+        // ⚠️ 这条盯的是「每一处 `return` 都要记一笔」里最容易漏的那种：
+        // 一轮都没跑就返回了（开跑前就取消、或者第一轮就是不可重试的错）。
+        // 漏了的话那条记录会**永远停在「没有结束时间」上** —— 不报错，
+        // 只是很久以后有人问「为什么这些 run 的时长是空的」。
+        let provider = ScriptedProvider::new(vec![]);
+        let tools = FakeTools::default();
+        let approver = ScriptedApprover::new(vec![]);
+        let (sw, cancel) = crate::approval::cancel_pair();
+        sw.cancel();
+        let (sink, _rx) = EventSink::new(64);
+
+        let fake = Arc::new(FakeJournal::default());
+        let mut s = spec();
+        s.journal = Some(fake.clone() as Arc<dyn Journal>);
+
+        let out = run(&provider, &tools, &approver, &cancel, s, sink).await;
+        assert_eq!(out.status, RunStatus::Cancelled);
+
+        assert_eq!(
+            fake.taken(),
+            ["start", "finish:cancelled"],
+            "一次都没跑也要收尾"
+        );
+    }
+
     fn mk_call(id: &str, name: &str, args: &str) -> ToolCall {
         ToolCall {
             id: id.into(),
             name: name.into(),
             args: crate::turn::ArgsState::Ok(RawValue::from_string(args.to_owned()).unwrap()),
         }
+    }
+
+    // ------------------------------------------------------------ IPC 契约
+    //
+    // ⚠️ 这一组盯的是**前端和 Rust 之间那条缝**。两端各自的测试都盖不到它：
+    // 前端跑的是假实现（不过 serde）、Rust 测试直接构造 Rust 值（不过序列化）。
+    // 而这条缝真的出过事 —— `#[serde(rename_all)]` 加在枚举上**只改变体名、
+    // 不改变体内部的字段名**，症状是 `invalid args ... missing field`，
+    // 两边的测试全绿（见 HANDOFF 里那一整节）。
+    //
+    // 所以这里**手写前端会读到的字段名**，不要照着结构体拼 ——
+    // 照着拼只是把 Rust 的定义抄了一遍，改错了照样绿。
+
+    #[test]
+    fn contract_approval_needed_uses_the_names_the_frontend_reads() {
+        let e = RunEvent::ApprovalNeeded {
+            key: crate::approval::ApprovalKey {
+                run: 7,
+                call: "toolu_1".into(),
+            },
+            tool: "write_file".into(),
+            display: "写入 src/a.txt".into(),
+            can_remember: true,
+        };
+        let json = serde_json::to_value(&e).unwrap();
+
+        assert_eq!(json["kind"], "approvalNeeded");
+        assert_eq!(json["key"]["run"], 7);
+        assert_eq!(json["key"]["call"], "toolu_1");
+        assert_eq!(json["tool"], "write_file");
+        assert_eq!(json["display"], "写入 src/a.txt");
+        // ⚠️ 少了 `rename_all_fields` 的话这里就是 `can_remember`，
+        // 而前端读的是 `canRemember` —— 那个「记住」按钮会永远不显示。
+        assert_eq!(
+            json["canRemember"], true,
+            "字段名没转成 camelCase：{json}"
+        );
+    }
+
+    #[test]
+    fn contract_finished_nests_the_status_the_way_the_frontend_switches_on() {
+        let e = RunEvent::Finished {
+            status: RunStatus::Aborted {
+                reason: AbortReason::BudgetExhausted {
+                    used: 120,
+                    budget: 100,
+                },
+            },
+            usage: Usage::default(),
+            iterations: 3,
+        };
+        let json = serde_json::to_value(&e).unwrap();
+
+        assert_eq!(json["kind"], "finished");
+        assert_eq!(json["iterations"], 3);
+        assert_eq!(json["status"]["kind"], "aborted");
+        assert_eq!(json["status"]["reason"]["kind"], "budgetExhausted");
+        assert_eq!(json["status"]["reason"]["used"], 120);
+        assert_eq!(json["status"]["reason"]["budget"], 100);
+    }
+
+    #[test]
+    fn contract_text_keeps_chinese_readable_over_the_wire() {
+        // 转义成 `中` 也不算错，但前端调试时会看不清 —— 这条只是钉住
+        // 「我们没开那个会转义的配置」。
+        let e = RunEvent::ToolFinished {
+            name: "read_file".into(),
+            is_error: false,
+            content: "读到了".into(),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("读到了"), "中文被转义了：{json}");
+        assert!(json.contains(r#""isError":false"#), "{json}");
+        assert!(json.contains(r#""kind":"toolFinished""#), "{json}");
     }
 }

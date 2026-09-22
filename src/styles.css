@@ -2879,3 +2879,188 @@ textarea:focus {
   gap: 6px;
   font-size: 12px;
 }
+
+/* --- 助手：对话 ------------------------------------------------------------ */
+
+/*
+ * ⚠️ `.rd-main` 那一层已经是「布局透明」的（`flex: 1; min-width: 0; min-height: 0`），
+ * 这里再叠一层**列**：顶栏 + 消息流 + 输入区。要能自己滚的是**中间那块**，
+ * 不是整页 —— 而 `.rd-assistant-stream` 上的 `min-height: 0` 就是让它能缩到
+ * 内容以下的那个关键（少了它，内容会把整个界面撑高，滚的变成外层；
+ * SQL 那张宽表踩过同一个坑，见 HANDOFF 里 `min-width: 0` 那段）。
+ *
+ * `position: relative` 是给审批弹层当定位基准的：弹层只盖**主区域**，
+ * 不盖侧栏和图标栏 —— 用户得能一边看着它一边去点别的地方。
+ */
+.rd-assistant-chat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  min-height: 0;
+}
+
+.rd-assistant-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.rd-assistant-workspace {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-assistant-strategy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  /* 把这一组和「清空」一起推到右边 */
+  margin-left: auto;
+}
+
+.rd-assistant-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rd-assistant-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* 别铺满整行 —— 一屏里能同时看到两边的发言才分得清谁在说 */
+  max-width: 92%;
+}
+
+.rd-assistant-msg.is-user {
+  align-self: flex-end;
+}
+
+.rd-assistant-msg.is-assistant {
+  align-self: flex-start;
+}
+
+.rd-assistant-text {
+  /* 模型的输出里有换行和缩进，不能按 HTML 那样折叠掉 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  line-height: 1.55;
+}
+
+.rd-assistant-msg.is-user .rd-assistant-text {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+/* 工具调用那一行。比正文小一号、颜色淡 —— 它是过程，不是结论 */
+.rd-assistant-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.rd-assistant-tool-mark {
+  width: 1em;
+  flex: 0 0 auto;
+}
+
+.rd-assistant-tool.is-error {
+  color: var(--danger);
+}
+
+.rd-assistant-composer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rd-assistant-input {
+  flex: 1 1 auto;
+  /* ⚠️ 和外面那些 flex 子项一样：不写的话 textarea 的默认宽度会把行撑开 */
+  min-width: 0;
+  resize: none;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  line-height: 1.5;
+}
+
+.rd-assistant-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 主操作（发送 / 允许）。`is-primary` 那个类在别处有人写，但**没有任何定义**
+   —— 所以这里用一个真会被渲染的。 */
+.rd-assistant-go {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- 审批弹层 -------------------------------------------------------------- */
+
+/*
+ * ⚠️ 这是这个模块最要紧的一块界面：审批**默认不超时**（它一直等你），
+ * 所以它必须显眼、可撤。用户去干别的了回来，得一眼看出「它在等我点一下」。
+ */
+.rd-assistant-approval {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.rd-assistant-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 560px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.22);
+}
+
+.rd-assistant-approval-card h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* 要执行的那一行：路径和命令行都要能逐字看清（空格、引号、反斜杠都是信息） */
+.rd-assistant-approval-what {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

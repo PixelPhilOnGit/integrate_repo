@@ -57,6 +57,52 @@ pub enum ContextStrategy {
     },
 }
 
+impl ContextStrategy {
+    /// 存进记录 / 传给前端用的短名。
+    ///
+    /// ⚠️ **改了会让老数据对不上** —— 会话记录里存的就是这个字符串
+    /// （见 `transcript.rs`），而那份数据要跨版本比对「哪个策略划算」。
+    /// 要加新策略就加新名字，别动旧名字的拼法。
+    pub fn as_str(self) -> String {
+        match self {
+            ContextStrategy::Full => "full".to_string(),
+            ContextStrategy::Rolling { keep_last_atoms } => format!("rolling:{keep_last_atoms}"),
+            ContextStrategy::Summarize { keep_recent } => format!("summarize:{keep_recent}"),
+            ContextStrategy::Retrieve { top_k } => format!("retrieve:{top_k}"),
+        }
+    }
+
+    /// [`ContextStrategy::as_str`] 的逆运算（命令层从 IPC 收字符串）。
+    ///
+    /// ⚠️ **认不出来就报错，绝不退到某个默认值。** 用户以为自己选了滚动、
+    /// 实际在用全量的话，账单会替他发现问题 —— 而那时已经烧掉了。
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let (head, tail) = match s.split_once(':') {
+            Some((h, t)) => (h, Some(t)),
+            None => (s, None),
+        };
+        let count = |name: &str| -> Result<usize, String> {
+            tail.ok_or_else(|| format!("「{name}」后面要跟一个数字，比如 {name}:20"))?
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("「{name}」后面的数字看不懂：{}", tail.unwrap_or("")))
+        };
+        match head {
+            "full" => Ok(ContextStrategy::Full),
+            "rolling" => Ok(ContextStrategy::Rolling {
+                keep_last_atoms: count("rolling")?,
+            }),
+            "summarize" => Ok(ContextStrategy::Summarize {
+                keep_recent: count("summarize")?,
+            }),
+            "retrieve" => Ok(ContextStrategy::Retrieve {
+                top_k: count("retrieve")?,
+            }),
+            other => Err(format!("认不出的上下文策略「{other}」")),
+        }
+    }
+}
+
 /// 组装失败。
 ///
 /// ⚠️ **策略没实现时是「报错」，不是「悄悄退回全量」。**
