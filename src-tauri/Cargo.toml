@@ -85,6 +85,11 @@ devtoolkit-assistant = { path = "assistant" }
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
 members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
+# 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
+# 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
+# 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
+resolver = "2"
 
 # ⚠️ **Rust 侧的版本号只有这一处。** 各个 crate 一律写 `version.workspace = true`。
 #
@@ -100,13 +105,15 @@ members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store
 # 还剩三处手写的（前端那三个，不归 cargo 管）：
 # `package.json`、`package-lock.json`（根包那两行）、`tauri.conf.json`。
 # CI 的关卡照旧盯着它们。
+#
+# ⚠️⚠️ **这一段必须放在 `[workspace]` 的所有键之后。** TOML 的段是**持续**的 ——
+# 插在中间的话，它后面的 `default-members` / `resolver` 会被算进
+# `workspace.package` 里，cargo 只给一句 `unused manifest key` 的警告，
+# 然后 `default-members` **静默失效** —— 那正好就是上面那行注释警告过的
+# 「在 src-tauri 下敲 cargo test 只跑 app crate」。这个错在写这一段的当天
+# 就犯了一次，是靠编译输出里那两行 warning 抓回来的。
 [workspace.package]
-version = "0.8.0"
-# 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
-# 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
-# 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
-resolver = "2"
+version = "0.9.0"
 
 [profile.release]
 codegen-units = 1
