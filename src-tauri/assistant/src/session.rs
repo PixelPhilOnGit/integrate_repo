@@ -20,6 +20,7 @@
 //! 不需要网络、不需要 API key、不需要 Tauri。里程碑就是它。
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::mpsc;
@@ -515,6 +516,37 @@ where
                 });
             }
         }
+    }
+}
+
+/// 带**总超时**地跑一轮（`run()` 之外的入口）。
+///
+/// ⚠️ 平时**不要**用它。`run()` 里的每一轮都不该有总时长上限 ——
+/// 长回答可以流好几分钟，那是正常的；真正该拦的是「一直没有任何新数据」，
+/// 那件事由 [`crate::transport::IDLE_TIMEOUT`] 管（**空闲**超时）。
+/// 拿总时长当上限会把慢模型误杀成网络问题。
+///
+/// 它存在的理由是「测试连接」那类场景：用户点一下按钮，是为了
+/// **立刻知道通不通**，等两分钟才给答案就失去意义了。
+pub async fn stream_once<P: Provider>(
+    provider: &P,
+    request: ProviderRequest,
+    events: EventSink,
+    timeout: Duration,
+) -> Result<Turn, ProviderError> {
+    match tokio::time::timeout(timeout, provider.stream(request, events)).await {
+        Ok(result) => result,
+        // ⚠️ 超时的文案在这里拼，不在调用方 —— 调用方拼的话，同一个意思
+        // 会在每个用到它的地方各写一遍，然后慢慢走偏。
+        Err(_) => Err(ProviderError {
+            message: format!(
+                "等了 {} 秒还没有响应头。可能是网络慢/被挡了，也可能这个网关就是很慢 —— \
+                 直接发一句对话看看。",
+                timeout.as_secs()
+            ),
+            // 不值得自动重发：用户就在屏幕前面等着，再等一轮只是更慢地告诉他同一件事。
+            retryable: false,
+        }),
     }
 }
 
@@ -1112,6 +1144,48 @@ mod tests {
             RunStatus::Failed { message } => assert!(message.contains("还没做")),
             other => panic!("应当明确报错：{other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_never_starts_gives_up_with_a_readable_message() {
+        // ⚠️ `stream_once` 是给「测试连接」用的：用户点一下按钮是为了**立刻**
+        // 知道通不通，不该等两分钟。而且超时**不能**自动重发 —— 用户就在
+        // 屏幕前面等着，再等一轮只是更慢地告诉他同一件事。
+        struct NeverAnswers;
+
+        impl Provider for NeverAnswers {
+            async fn stream(
+                &self,
+                _request: ProviderRequest,
+                _events: EventSink,
+            ) -> Result<Turn, ProviderError> {
+                // 永远不会就绪 —— 模拟「连上了但对端一个字都不回」。
+                std::future::pending::<()>().await;
+                unreachable!()
+            }
+        }
+
+        let (sink, _rx) = EventSink::new(1);
+        let request = ProviderRequest {
+            system: String::new(),
+            messages: vec![Message::user_text("ping")],
+            tools: vec![],
+            max_tokens: 16,
+        };
+
+        let started = std::time::Instant::now();
+        let err = stream_once(
+            &NeverAnswers,
+            request,
+            sink,
+            Duration::from_millis(50),
+        )
+        .await
+        .expect_err("超时了就该报错，不是一直等");
+
+        assert!(!err.retryable, "超时不该自动重发");
+        assert!(err.message.contains("秒"), "文案要说清等了多久：{}", err.message);
+        assert!(started.elapsed() < Duration::from_secs(5), "没有真的超时");
     }
 
     #[tokio::test]

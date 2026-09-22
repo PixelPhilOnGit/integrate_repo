@@ -48,7 +48,7 @@ use devtoolkit_assistant::provider_config::{
     api_key_id, ProviderConfig, ProviderKind, KEYCHAIN_MODULE,
 };
 use devtoolkit_assistant::session::{
-    run, ApprovalOutcome, ApproveGate, EventSink, RunEvent, RunSpec,
+    run, stream_once, ApprovalOutcome, ApproveGate, EventSink, ProviderRequest, RunEvent, RunSpec,
 };
 use devtoolkit_assistant::tools::Tools;
 use devtoolkit_assistant::transcript::{Transcript, TranscriptJournal};
@@ -136,6 +136,167 @@ const TRANSCRIPT_FILE: &str = "assistant-transcript.db";
 ///
 /// 40 是 `Limits` 的默认值，这里显式写出来只是因为命令层要有个地方能看见它。
 const MAX_ITERATIONS: usize = 40;
+
+/// 「测试连接」最多等多久。
+///
+/// 比一次正常对话短得多 —— 用户点它是为了**立刻知道通不通**，
+/// 等两分钟才给答案就失去意义了。代价是慢网关可能被误报成超时，
+/// 所以文案里要说清「可能只是慢」。
+const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 按配置建一个 provider，名字绑到 `$provider` 上，然后跑 `$body`。
+///
+/// 为什么要一个宏：两家 provider 的泛型不同（`AnthropicProvider<HyperTransport>`
+/// 和 `OpenAiProvider<HyperTransport>`），而 `Provider` 不是对象安全的
+/// （方法用了 RPITIT），所以没法统一成 `Box<dyn Provider>`。两条路
+/// **只有建哪一个不一样**，其余一字不差 —— 手抄两遍的话，
+/// 将来改一处忘一处，两边行为就分了。
+///
+/// `$config` 是**引用**（两条分支都要用它，不能 move）。
+macro_rules! with_provider {
+    ($config:expr, $key:expr, $provider:ident => $body:expr) => {{
+        let config = $config;
+        let key = &$key;
+        match config.kind {
+            ProviderKind::Anthropic => {
+                let $provider = AnthropicProvider::new(
+                    HyperTransport::new(),
+                    config.base_url.clone(),
+                    AnthropicConfig {
+                        model: config.model.clone(),
+                        ..AnthropicConfig::default()
+                    },
+                    key.clone(),
+                );
+                $body
+            }
+            ProviderKind::OpenAi => {
+                let $provider = OpenAiProvider::new(
+                    HyperTransport::new(),
+                    config.base_url.clone(),
+                    OpenAiConfig {
+                        model: config.model.clone(),
+                        ..OpenAiConfig::default()
+                    },
+                    key.clone(),
+                );
+                $body
+            }
+        }
+    }};
+}
+
+/// 提供方的中文名（报错文案里用）。
+fn provider_label(kind: ProviderKind) -> &'static str {
+    match kind {
+        ProviderKind::Anthropic => "Anthropic",
+        ProviderKind::OpenAi => "OpenAI 兼容",
+    }
+}
+
+/// 试出来的结果（直接显示给用户，所以文案都是成品）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionReport {
+    /// 通没通。
+    pub ok: bool,
+    /// 花了多少毫秒。
+    pub millis: u64,
+    /// 一句话。**成功和失败都有**，直接放到界面上。
+    pub message: String,
+    /// 模型真回了什么（成功时才有）。它是「真的通了」的证据 ——
+    /// 只显示「成功」的话，用户没法分辨自己是不是被中间设备骗了
+    /// （有的企业代理会回一个 200 然后什么也不给）。
+    pub reply: String,
+}
+
+/// 试一下这套配置通不通（用户点「测试连接」）。
+///
+/// # ⚠️ 它**不走 Channel**，这是刻意的
+///
+/// 用户卡住的时候，「界面收不到事件」和「网络根本不通」是**两回事**，
+/// 而走 `Channel` 的话这两种会表现成同一个样子（都卡着、都不报错）。
+/// 一个一次往返、直接返回结果的命令才能把它们分开：
+///
+/// * 这里**成功** + 对话卡住 → 问题在事件通道那一层；
+/// * 这里**失败** → 问题就在下面这句话里。
+///
+/// # 为什么发的是最小请求
+///
+/// 不带工具、system 为空、只让它回一个字 —— 目标是**最快地知道握手成不成**，
+/// 不是验证模型聪不聪明。所以它比一次正常对话快得多，也便宜得多。
+#[tauri::command]
+pub async fn assistant_test_connection(
+    config: ProviderConfig,
+) -> Result<ConnectionReport, String> {
+    config.validate()?;
+
+    let kind = config.kind;
+    let key = tauri::async_runtime::spawn_blocking(move || {
+        secrets::get(KEYCHAIN_MODULE, &api_key_id(kind))
+    })
+    .await
+    .map_err(|e| format!("读凭据时出错了：{e}"))?
+    .map_err(|e| e.to_string())?
+    .filter(|k| !k.trim().is_empty())
+    .ok_or_else(|| {
+        format!(
+            "还没配「{}」的 API key —— 在下面的输入框里填一把再试。",
+            provider_label(config.kind)
+        )
+    })?;
+
+    let started = std::time::Instant::now();
+
+    let request = ProviderRequest {
+        system: String::new(),
+        messages: vec![Message::user_text("只回一个字：好")],
+        // ⚠️ **不带工具**：带了的话请求体大一圈，而且模型可能选择调工具，
+        // 那就不止一次往返了。这里要的是「握手」，不是「干活」。
+        tools: Vec::new(),
+        max_tokens: 32,
+    };
+
+    // `stream` 要一个事件出口，但这里没人听 —— 丢掉的接收端会让
+    // `EventSink::send` 静默失败（它本来就是 `try_send`），正合我们意。
+    let (events, _nobody_listens) = EventSink::new(1);
+
+    // ⚠️ 超时在**内核**里（`stream_once`），不是在这儿包一层 `tokio::timeout`：
+    // app crate 没有 tokio（它走 `tauri::async_runtime`），而且超时的文案
+    // 该和「怎么跑一轮」那段逻辑住在一起。
+    let result = with_provider!(&config, key, provider => {
+        stream_once(&provider, request, events, TEST_TIMEOUT).await
+    });
+
+    let millis = started.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(turn) => {
+            let reply: String = turn
+                .blocks
+                .iter()
+                .filter_map(|b| match b {
+                    devtoolkit_assistant::message::Block::Text { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            Ok(ConnectionReport {
+                ok: true,
+                millis,
+                message: format!("通了（{millis} 毫秒）。key、地址、模型名都对得上。"),
+                reply: reply.trim().to_string(),
+            })
+        }
+        // ⚠️ 把模型侧的原话**原样带出来** —— 「key 不对」「模型名写错了」
+        // 这类话就在里面，那才是能照着改的东西。
+        Err(e) => Ok(ConnectionReport {
+            ok: false,
+            millis,
+            message: e.message,
+            reply: String::new(),
+        }),
+    }
+}
 
 /// 助手的运行期状态。Tauri 的 `manage` 持有。
 ///
@@ -374,34 +535,12 @@ pub async fn assistant_send(
             }
         });
 
-        // 两家 provider 的泛型不同，所以两条路各调一次 `run`。
-        // `spec` / `sink` 在 match 的两条分支里各 move 一次 —— 分支互斥，合法。
-        let outcome = match config.kind {
-            ProviderKind::Anthropic => {
-                let provider = AnthropicProvider::new(
-                    HyperTransport::new(),
-                    config.base_url.clone(),
-                    AnthropicConfig {
-                        model: config.model.clone(),
-                        ..AnthropicConfig::default()
-                    },
-                    key.clone(),
-                );
-                run(&provider, &tools, &approver, &cancel, spec, sink).await
-            }
-            ProviderKind::OpenAi => {
-                let provider = OpenAiProvider::new(
-                    HyperTransport::new(),
-                    config.base_url.clone(),
-                    OpenAiConfig {
-                        model: config.model.clone(),
-                        ..OpenAiConfig::default()
-                    },
-                    key.clone(),
-                );
-                run(&provider, &tools, &approver, &cancel, spec, sink).await
-            }
-        };
+        // 两家 provider 的泛型不同（`Provider` 不是对象安全的），所以建哪一个
+        // 要 match；`with_provider!` 把那段样板收在一处 —— 见它的文档。
+        // `spec` / `sink` 在展开后的两条分支里各 move 一次，分支互斥，合法。
+        let outcome = with_provider!(&config, key, provider => {
+            run(&provider, &tools, &approver, &cancel, spec, sink).await
+        });
 
         // 收尾：把这轮跑出来的完整历史存回去，接下一轮。
         //

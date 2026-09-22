@@ -6,12 +6,13 @@
  */
 
 import { createChannel, invoke } from '../../../shared/platform/invoke';
-import type { ProviderKind } from '../core/config';
+import type { ProviderConfig, ProviderKind } from '../core/config';
 import type {
   AssistantClient,
   AssistantEvent,
   AssistantKeyStatus,
   ApprovalDecision,
+  ConnectionReport,
   SendRequest,
 } from './types';
 
@@ -61,6 +62,11 @@ export function createTauriAssistantClient(): AssistantClient {
 
     async clearSession(session: string): Promise<void> {
       await invoke<null>('assistant_clear_session', { session });
+    },
+
+    async testConnection(config: ProviderConfig): Promise<ConnectionReport> {
+      // 一次往返，拿到就返回 —— 不起通道（理由见 `types.ts`）。
+      return await invoke<ConnectionReport>('assistant_test_connection', { config });
     },
   };
 }

@@ -33,6 +33,16 @@ pub struct TransportRequest {
 /// 响应体的一块字节，或者一个传输错误。
 pub type Chunk = Result<Vec<u8>, TransportError>;
 
+/// 流式响应里，**两块数据之间**最多等多久。
+///
+/// ⚠️ 这是「多久算对端不说话了」的分界线，**不是**「一次请求总共能跑多久」——
+/// 一次长回答流好几分钟是正常的，不正常的是一直**没有任何新数据**。
+/// 拿总时长当上限会把慢模型误杀成网络问题。
+///
+/// 90 秒是刻意宽松的：有些 OpenAI 兼容网关不是真流式（攒完整个回答才吐），
+/// 首字节之前沉默几十秒很正常。卡太紧的话，那种网关会被判成"断了"。
+pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// 传输层出错。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportError {
@@ -215,7 +225,30 @@ impl Transport for HyperTransport {
                 tokio::spawn(async move {
                     use http_body_util::BodyExt;
                     let mut body = response.into_body();
-                    while let Some(frame) = body.frame().await {
+                    loop {
+                        // ⚠️ **空闲超时**。
+                        //
+                        // 没有它的话有这么一条路：对端连上了、响应头也回来了，
+                        // 然后**再也不发数据、也不关连接**。这个循环会永远等下去，
+                        // 而用户那边只有一个「正在跑」的界面 —— **一个字都不报**，
+                        // 重试也不会发生，日志里什么都没有。那种失败完全无从下手。
+                        //
+                        // 超时必须**报出来**，不能只是安静地退出循环：
+                        // 安静退出在上层看来和「对端正常关了连接」一模一样，
+                        // 而那条路会被当成**一轮完整的响应**（少了半截内容却当成成功）。
+                        let frame = match tokio::time::timeout(IDLE_TIMEOUT, body.frame()).await {
+                            Ok(Some(f)) => f,
+                            Ok(None) => break, // 对端正常读完并关了连接
+                            Err(_) => {
+                                let _ = tx
+                                    .send(Err(TransportError::retryable(format!(
+                                        "连上了，但对端 {} 秒没再回数据（网络中间断了，或者这个网关不支持流式）",
+                                        IDLE_TIMEOUT.as_secs()
+                                    ))))
+                                    .await;
+                                break;
+                            }
+                        };
                         let Ok(frame) = frame else { break };
                         if let Some(data) = frame.data_ref() {
                             // 接收端没了（用户取消了）→ 别再读了。

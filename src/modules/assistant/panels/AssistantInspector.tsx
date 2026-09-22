@@ -198,6 +198,49 @@ export function AssistantInspector({ state, store }: Props): ReactNode {
             来回切不会互相覆盖。key 只在系统钥匙串里，<strong>读不回来</strong> —— 只能换。
           </p>
 
+          <hr className="rd-assistant-sep" />
+
+          {/* ---------------------------------------------------- 测试连接 */}
+
+          {/*
+            ⚠️ 这个按钮存在的理由只有一个：**把「卡住」变成一句能读的话**。
+
+            用户配好之后发消息、界面一直转圈、一个字都不报 —— 那是我们能给出的
+            最糟的失败方式（他连「是网络还是 key」都无从判断）。这个按钮一次往返
+            就能回答，而且**刻意不走对话那条通道**：走同一条路的话，
+            「界面收不到事件」和「网络不通」会表现成同一个样子。
+
+            它只要 30 秒（对话那条路的超时宽容得多），因为用户点它是为了立刻知道结果。
+          */}
+          <div className="rd-assistant-row">
+            <button
+              type="button"
+              className="rd-btn"
+              data-testid="assistant-test"
+              disabled={state.testing}
+              onClick={() => void store.testConnection()}
+            >
+              {state.testing ? '测试中…' : '测试连接'}
+            </button>
+            <span className="rd-hint">不问它问题，只握一次手</span>
+          </div>
+
+          {state.test !== null && (
+            <p
+              className={`rd-hint${state.test.ok ? '' : ' is-error'}`}
+              data-testid="assistant-test-result"
+              data-ok={state.test.ok ? 'yes' : 'no'}
+            >
+              {state.test.message}
+              {state.test.reply !== '' && (
+                <>
+                  <br />
+                  它回的是：<code>{state.test.reply}</code>
+                </>
+              )}
+            </p>
+          )}
+
           {state.error !== null && (
             <p className="rd-hint is-error" data-testid="assistant-error">
               {state.error}

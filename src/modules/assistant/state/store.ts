@@ -23,6 +23,7 @@ import type {
   ApprovalDecision,
   AssistantEvent,
   AssistantKeyStatus,
+  ConnectionReport,
 } from '../services/types';
 
 // 对话那部分的类型定义在 `core/chat.ts` 里（和那个纯函数的 reducer 放一起）。
@@ -40,6 +41,15 @@ export interface AssistantState {
   keyStatus: AssistantKeyStatus | null;
   /** 正在存 key */
   savingKey: boolean;
+  /**
+   * 「测试连接」的结果（`null` = 还没测过）。
+   *
+   * ⚠️ 配置一改就清掉 —— 留着的话，用户改完地址看到上一次的「通了」，
+   * 会以为新的这套也通了。
+   */
+  test: ConnectionReport | null;
+  /** 正在测。 */
+  testing: boolean;
   /** 一句提示（保存成功之类） */
   notice: string | null;
   /** 一句错误（配置不合法、钥匙串用不了） */
@@ -85,6 +95,8 @@ export class AssistantStore {
     saved: defaultConfig('anthropic'),
     keyStatus: null,
     savingKey: false,
+    test: null,
+    testing: false,
     notice: null,
     error: null,
     workspace: null,
@@ -175,22 +187,64 @@ export class AssistantStore {
     }
   }
 
+  // ---------------------------------------------------------------- 测试连接
+
+  /**
+   * 试一下**正在编辑的这份**配置通不通。
+   *
+   * ⚠️ 用的是 `config`（编辑中的那份），不是 `saved` —— 用户点这个按钮，
+   * 想知道的就是「我刚填的这组参数行不行」。
+   *
+   * ⚠️ 它是**一次往返、直接返回结果**的（不走 `Channel`）：用户卡住的时候，
+   * 「界面收不到事件」和「网络根本不通」是两回事，而走 `Channel` 的话
+   * 这两种会表现成同一个样子（都卡着、都不报错）。
+   */
+  async testConnection(): Promise<void> {
+    const problem = this.configProblem();
+    if (problem !== null) {
+      // 参数本身就不合法，没必要发请求 —— 文案就是那条问题本身。
+      this.set({ test: { ok: false, millis: 0, message: problem, reply: '' } });
+      return;
+    }
+
+    this.set({ testing: true, test: null });
+    try {
+      const report = await assistantClient.testConnection(this.state.config);
+      this.set({ test: report });
+    } catch (e) {
+      this.set({
+        test: { ok: false, millis: 0, message: describeError(e), reply: '' },
+      });
+    } finally {
+      this.set({ testing: false });
+    }
+  }
+
   // ---------------------------------------------------------------- 编辑
 
   /** 换提供方：地址和模型跟着换成那一家的默认值。 */
   setKind(kind: ProviderKind): void {
     if (kind === this.state.config.kind) return;
-    this.set({ config: defaultConfig(kind), notice: null, error: null });
+    // `test: null` —— 换了一家之后，上一次的「通了」不再代表任何事。
+    this.set({ config: defaultConfig(kind), notice: null, error: null, test: null });
     // 两家的 key 是分开存的，所以状态得重新问一次
     void this.refreshKeyStatus();
   }
 
   setBaseUrl(baseUrl: string): void {
-    this.set({ config: { ...this.state.config, baseUrl }, notice: null });
+    this.set({
+      config: { ...this.state.config, baseUrl },
+      notice: null,
+      test: null,
+    });
   }
 
   setModel(model: string): void {
-    this.set({ config: { ...this.state.config, model }, notice: null });
+    this.set({
+      config: { ...this.state.config, model },
+      notice: null,
+      test: null,
+    });
   }
 
   /** 有没改过（没改就不用给「保存」按钮亮起来）。 */

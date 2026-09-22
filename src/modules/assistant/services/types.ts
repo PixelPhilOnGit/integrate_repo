@@ -73,6 +73,37 @@ export interface AssistantClient {
    * 下一句它会接着说上一句的事 —— 那比不清更让人困惑。
    */
   clearSession(session: string): Promise<void>;
+
+  /**
+   * 试一下这套配置通不通（用户点「测试连接」）。
+   *
+   * ⚠️ 它是**一次往返**，不是流式 —— 用户点它是为了立刻知道结果。
+   * 而且它**不走 Channel**：用户卡住的时候，「界面收不到事件」和
+   * 「网络根本不通」是两回事，而走 Channel 的话这两种会表现成同一个样子
+   * （都卡着、都不报错）。一个直接返回结果的命令才能把它们分开。
+   */
+  testConnection(config: ProviderConfig): Promise<ConnectionReport>;
+}
+
+/**
+ * 试出来的结果。
+ *
+ * 文案是**成品**（Rust 侧拼好的）—— 这一层不再加工，直接显示。
+ */
+export interface ConnectionReport {
+  /** 通没通。 */
+  ok: boolean;
+  /** 花了多少毫秒。 */
+  millis: number;
+  /** 一句话。 */
+  message: string;
+  /**
+   * 模型真回了什么（成功时才有）。
+   *
+   * ⚠️ 它不是装饰：只显示「成功」的话，用户没法分辨自己是不是被中间设备骗了
+   * （有的企业代理会回一个 200 然后什么也不给）。
+   */
+  reply: string;
 }
 
 /** 一次 run 的结局。 */

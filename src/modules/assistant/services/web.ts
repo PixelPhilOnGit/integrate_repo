@@ -18,12 +18,14 @@
  *   要不要走写文件那条路（那会让审批弹层出现）。e2e 靠这个驱动。
  */
 
-import type { ProviderKind } from '../core/config';
+import { validateConfig } from '../core/config';
+import type { ProviderConfig, ProviderKind } from '../core/config';
 import type {
   AssistantClient,
   AssistantEvent,
   AssistantKeyStatus,
   ApprovalDecision,
+  ConnectionReport,
   SendRequest,
 } from './types';
 
@@ -117,6 +119,38 @@ export function createWebAssistantClient(): AssistantClient {
     async clearSession(session: string): Promise<void> {
       // 幂等：清一个不存在的会话不是错误。
       sessions.delete(session);
+    },
+
+    async testConnection(config: ProviderConfig): Promise<ConnectionReport> {
+      // ⚠️ 真机上是**真的发一个最小请求**（见 `assistant_commands.rs`），
+      // 这里只是把「几种结局」模拟出来，好让 e2e 走得到三条分支。
+      //
+      // 「填错了」那条要先判：它和 Rust 侧一样是**发请求之前**就拦下来的
+      // （`ProviderConfig::validate`），别等模拟完网络再说。
+      const problem = validateConfig(config);
+      if (problem !== null) {
+        return { ok: false, millis: 0, message: problem, reply: '' };
+      }
+
+      await sleep(120);
+
+      if (!keys.has(config.kind)) {
+        return {
+          ok: false,
+          millis: 120,
+          message: `还没配「${config.kind === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容'}」的 API key`,
+          reply: '',
+        };
+      }
+
+      // 通了。`reply` 不是装饰：只显示「成功」的话，用户分不清自己是不是
+      // 被中间设备骗了（有的代理回 200 然后什么也不给）。
+      return {
+        ok: true,
+        millis: 120,
+        message: '通了（120 毫秒）。key、地址、模型名都对得上。',
+        reply: '好',
+      };
     },
   };
 }

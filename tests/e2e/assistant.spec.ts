@@ -125,6 +125,46 @@ test('没配 key 时角标亮着 —— 用户在别的模块里也看得见', a
   await expect(page.getByTestId('assistant-badge')).toHaveCount(0);
 });
 
+// ---------------------------------------------------------------- 测试连接
+//
+// ⚠️ 这一组盯的是「卡住」那件事：用户配好之后发消息、界面一直转圈、
+// **一个字都不报** —— 那是我们能给出的最糟的失败方式（他连「是网络还是 key」
+// 都无从判断）。这个按钮一次往返就能回答，而且刻意**不走对话那条通道**：
+// 走同一条路的话，「界面收不到事件」和「网络不通」会表现成同一个样子。
+
+test('测试连接：先把原因说清，配好之后说通，并且给出模型的原话', async ({ page }) => {
+  await page.getByTestId('assistant-test').click();
+
+  // 没配 key 的时候，说的必须是**这个**原因（而不是笼统的「失败」）
+  const result = page.getByTestId('assistant-test-result');
+  await expect(result).toHaveAttribute('data-ok', 'no');
+  await expect(result).toContainText('API key');
+
+  await page.getByTestId('assistant-key-input').fill('sk-test');
+  await page.getByTestId('assistant-key-save').click();
+  await page.getByTestId('assistant-test').click();
+
+  await expect(result).toHaveAttribute('data-ok', 'yes');
+  // ⚠️ 成功时也要有**证据**（模型真回了什么）—— 只显示「成功」的话，
+  // 用户分不清自己是不是被中间设备骗了（有的代理回 200 然后什么也不给）。
+  await expect(result).toContainText('好');
+});
+
+test('⚠️ 改了配置，上一次的测试结果要消失', async ({ page }) => {
+  // 留着的话，用户改完地址看到上一次那句「通了」，会以为**新的这套**也通了 ——
+  // 而那正是他接下来要发消息用的配置。
+  await page.getByTestId('assistant-key-input').fill('sk-test');
+  await page.getByTestId('assistant-key-save').click();
+  await page.getByTestId('assistant-test').click();
+  await expect(page.getByTestId('assistant-test-result')).toHaveAttribute(
+    'data-ok',
+    'yes',
+  );
+
+  await page.getByTestId('assistant-model').fill('claude-sonnet-5');
+  await expect(page.getByTestId('assistant-test-result')).toHaveCount(0);
+});
+
 // ---------------------------------------------------------------------- 对话
 //
 // 浏览器版跑的是 `services/web.ts` 里那个假 agent —— 它按 prompt 里有没有

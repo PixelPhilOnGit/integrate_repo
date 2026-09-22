@@ -124,6 +124,8 @@ pub fn run() {
             assistant_commands::assistant_approve,
             assistant_commands::assistant_cancel,
             assistant_commands::assistant_clear_session,
+            // 配置通不通，一次往返问清楚（**不走 Channel** —— 理由见那个函数）
+            assistant_commands::assistant_test_connection,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

@@ -7,7 +7,7 @@
  * 审批那块界面（`ApprovalSheet`）是这个模块最要紧的东西 —— 见它的注释。
  */
 
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { basename, platform } from '../../shared/platform';
 import { PROVIDER_LABEL, validateConfig } from './core/config';
 import { assistantStore } from './state/store';
@@ -207,10 +207,38 @@ function ChatStream(): ReactNode {
           ))}
         </div>
       ))}
-      {state.running && (
-        <div className="rd-hint" data-testid="assistant-running">
-          正在跑…（点下面的「停止」可以随时叫停）
-        </div>
+      {state.running && <RunningHint />}
+    </div>
+  );
+}
+
+/**
+ * 「正在跑…」那一行，带**已经等了多少秒**。
+ *
+ * ⚠️ 秒数不是装饰。用户卡住的时候，「转了 3 秒」和「转了 3 分钟」是完全不同的
+ * 两件事 —— 前者叫正常，后者叫出问题了。没有秒数的话，他只能凭感觉猜
+ * 「是不是卡住了」，而**猜错的方向是继续等**（最贵的那种错）。
+ *
+ * 超过一分钟就多给一句，指向那个能查出原因的按钮（配置面板的「测试连接」）。
+ * 那一格刻意不走对话这条通道，所以它能回答这里答不了的问题。
+ */
+function RunningHint(): ReactNode {
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  return (
+    <div className="rd-hint" data-testid="assistant-running" data-seconds={seconds}>
+      正在跑…已经 {seconds} 秒（点「停止」可以随时叫停）
+      {seconds >= 60 && (
+        <>
+          <br />
+          超过一分钟没有回应了。右边「测试连接」能查是不是网络/配置的问题 ——
+          它走的是另一条路，所以这里卡住的时候它照样能给出答案。
+        </>
       )}
     </div>
   );
