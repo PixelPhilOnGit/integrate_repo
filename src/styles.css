@@ -2906,6 +2906,9 @@ textarea:focus {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+  /* 窄的时候整块换行，而不是把某个标签**挤断** —— 真机截图里
+     「上下文」被挤成了「上下」+「文」两行。 */
+  flex-wrap: wrap;
 }
 
 .rd-assistant-workspace {
@@ -2924,6 +2927,10 @@ textarea:focus {
   color: var(--muted);
   /* 把这一组和「清空」一起推到右边 */
   margin-left: auto;
+  /* ⚠️ 和上面那条一起：flex 子项默认**可以缩到比内容还窄**，而这是个中文标签
+     （「上下文」）—— 少了 `flex: 0 0 auto` 它会被压成一个字一行。 */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .rd-assistant-stream {
@@ -2933,6 +2940,17 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* 空状态里那份「还差什么」的清单。
+   左对齐 + 圆点 —— 它是**一份待办**，不是一句说明文字，居中排版会看不出有几条。 */
+.rd-assistant-blockers {
+  margin: 0;
+  padding-left: 18px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .rd-assistant-msg {

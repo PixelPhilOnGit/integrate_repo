@@ -9,9 +9,9 @@
 
 import { useState, useSyncExternalStore, type ReactNode } from 'react';
 import { basename, platform } from '../../shared/platform';
-import { PROVIDER_LABEL } from './core/config';
+import { PROVIDER_LABEL, validateConfig } from './core/config';
 import { assistantStore } from './state/store';
-import type { PendingApproval } from './state/store';
+import type { AssistantState, PendingApproval } from './state/store';
 
 function useAssistant(): ReturnType<typeof assistantStore.getSnapshot> {
   return useSyncExternalStore(assistantStore.subscribe, assistantStore.getSnapshot);
@@ -130,24 +130,54 @@ function ChatBar(): ReactNode {
   );
 }
 
+/**
+ * 现在**发不出去**的原因，一条一条列清楚（空数组 = 能发）。
+ *
+ * ⚠️ 这是 [`assistantStore.canSend`] 的另一面 —— **同一个判断，加条件时两边都要改**。
+ *
+ * 为什么非得把它摆出来：发送按钮的禁用条件有五个，任何一个不满足都是
+ * **灰的、点了完全没反应**。而「点了一个按钮什么也没发生」是用户唯一
+ * 得不出任何信息的失败方式 —— 他会直接得出「这玩意儿坏了」。
+ */
+function sendBlockers(state: AssistantState): string[] {
+  const out: string[] = [];
+  if (!state.ready) out.push('正在读配置…');
+  if (state.workspace === null) {
+    out.push('还没选工作目录 —— 助手要有个地方干活，它碰不到那个目录以外的任何文件。');
+  }
+  const problem = validateConfig(state.config);
+  if (problem !== null) out.push(problem);
+  if (state.keyStatus === null) {
+    out.push('读不到 key 的状态 —— 右边那个面板里应该有更具体的原因。');
+  } else if (!state.keyStatus.configured) {
+    out.push('还没配 API key —— 在右边的「模型」面板里填一把。');
+  }
+  return out;
+}
+
 /** 消息流。 */
 function ChatStream(): ReactNode {
   const state = useAssistant();
 
   if (state.messages.length === 0) {
+    const blockers = sendBlockers(state);
+
     return (
       <div className="rd-assistant-stream" data-testid="assistant-stream">
         <div className="rd-agent-empty" data-testid="assistant-empty">
-          <h3>说点什么</h3>
-          <p className="rd-hint">
-            助手会在上面那个目录里读文件、改文件、跑命令。
-            <br />
-            改文件和跑命令**每次都会先问你** —— 你点了允许它才动。
-          </p>
-          {state.workspace === null && (
-            <p className="rd-hint" data-testid="assistant-main-noworkspace">
-              先选一个工作目录。助手需要一个地方干活 —— 它碰不到那个目录以外的任何文件。
+          <h3>{blockers.length > 0 ? '还差几样东西' : '说点什么'}</h3>
+          {blockers.length === 0 ? (
+            <p className="rd-hint">
+              助手会在上面那个目录里读文件、改文件、跑命令。
+              <br />
+              改文件和跑命令**每次都会先问你** —— 你点了允许它才动。
             </p>
+          ) : (
+            <ul className="rd-hint rd-assistant-blockers" data-testid="assistant-blockers">
+              {blockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
           )}
         </div>
       </div>

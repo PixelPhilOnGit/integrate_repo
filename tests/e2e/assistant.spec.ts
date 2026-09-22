@@ -143,13 +143,32 @@ async function readyToChat(page: Page): Promise<void> {
   await expect(page.getByTestId('assistant-workspace')).not.toHaveText('还没选目录');
 }
 
-test('没选目录时说清要干什么，而不是让人对着灰按钮猜', async ({ page }) => {
-  // 助手需要一个地方干活 —— 它碰不到那个目录以外的任何文件。
+test('⚠️ 发不出去的时候，把缺的每一样都列出来，并且一条条消失', async ({ page }) => {
+  // ⚠️ 这条盯的是**最难查的那种失败**：发送按钮有好几个禁用条件，任何一个不满足
+  // 都是「灰的、点了完全没反应」。界面上一个字都不说的话，用户只能得出
+  // 「它坏了」这个结论 —— 而这个模块是拿来干活的，那等于它没用了。
+  //
+  // 所以空状态要把**所有**拦住它的原因摆出来（不是随便挑一个），
+  // 而且解决掉一条就该少一条。
+  const blockers = page.getByTestId('assistant-blockers');
+
+  // 一上来：key 没配、目录没选 —— 两条都得说
+  await expect(blockers).toContainText('工作目录');
+  await expect(blockers).toContainText('API key');
+  await expect(page.getByTestId('assistant-send')).toBeDisabled();
+
+  // 配一把 key：清单少一条，但**没有**变成「能发了」
   await page.getByTestId('assistant-key-input').fill('sk-test');
   await page.getByTestId('assistant-key-save').click();
-
-  await expect(page.getByTestId('assistant-main-noworkspace')).toBeVisible();
+  await expect(blockers).not.toContainText('API key');
+  await expect(blockers).toContainText('工作目录');
   await expect(page.getByTestId('assistant-send')).toBeDisabled();
+
+  // 选了目录才清空 —— 这时候才真的能发
+  await page.getByTestId('assistant-pick-workspace').click();
+  await expect(blockers).toHaveCount(0);
+  await page.getByTestId('assistant-input').fill('你好');
+  await expect(page.getByTestId('assistant-send')).toBeEnabled();
 });
 
 test('发一句话：回复边跑边出，工具调用留痕', async ({ page }) => {
