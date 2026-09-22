@@ -45,6 +45,30 @@ async fn fake_server(pieces: Vec<&'static str>) -> (String, tokio::task::JoinHan
             }
         }
 
+        // ⚠️ **请求必须带 `Host`** —— HTTP/1.1 要求的，而真的服务端
+        // （Anthropic、各家网关、Cloudflare 前面那一层）拿不到就回
+        // `400 Bad Request: missing required Host header`。
+        //
+        // hyper 1.x 的客户端**不会替你补**：它只要求 URI 是 origin-form
+        // （就一个路径），而路径里当然没有主机名。
+        //
+        // ⚠️ 这个检查是 2026-09-22 补的。在那之前这个假服务器**什么都不看**
+        // （只把原文交回去），于是「Host 没发」这件事在集成测试里一直是绿的，
+        // 直到用户在真机上撞出那个 400 —— 又一次**两边的测试结构性地盖不到**，
+        // 和 HANDOFF 里 `rename_all_fields` 那次是同一个形状。
+        let text = String::from_utf8_lossy(&raw).to_lowercase();
+        assert!(
+            text.contains("\r\nhost: "),
+            "请求里没有 Host 头（真服务端会回 400）：\n{text}"
+        );
+        let host = text
+            .lines()
+            .find_map(|l| l.strip_prefix("host: "))
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        assert!(!host.is_empty(), "Host 是空的：\n{text}");
+
         sock.write_all(
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
         )

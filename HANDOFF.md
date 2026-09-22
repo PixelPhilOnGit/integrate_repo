@@ -1142,6 +1142,43 @@ while let Some(frame) = body.frame().await {   // ← 原来是这样
 「转了 3 秒」和「转了 3 分钟」是完全不同的两件事，而没有秒数的话用户只能凭感觉猜
 —— 猜错的方向是**继续等**，那是最贵的一种错。
 
+**⑪ HTTP 请求没发 `Host` 头 —— 真服务端一律回 400。**
+
+用户报的：「`请求被拒绝了（HTTP 400）：400 Bad Request: missing required Host header`」。
+
+根因：`transport.rs` 里只给了 hyper **路径**（origin-form）：
+
+```rust
+let mut builder = hyper::Request::builder()
+    .method(hyper::Method::POST)
+    .uri(&uri_path);        // ← 就一个路径
+```
+
+⚠️ **hyper 1.x 的客户端不会替你补 `Host`。** 它只要求 URI 是 origin-form，
+而路径里当然没有主机名 —— 所以 Host 从别处来不了。而 HTTP/1.1 **要求**每个请求带它。
+现在自己加（`Endpoint::host_header()`，默认端口不写出来）。
+
+⚠️ **为什么集成测试一直是绿的**：那个手写的假服务器**什么都不检查**，
+只把收到的原文交回去。于是「请求写对没有」这件事从来没被真正验过 ——
+和 HANDOFF 里 `rename_all_fields` 那次**是同一个形状**：
+假东西和真东西之间那条缝，两边的测试结构性地盖不到。
+
+现在那个假服务器**会断言 Host 存在且非空**（每条走真 socket 的测试都盖到了）。
+而且这条防线是**验证过**的：故意去掉 Host 跑一次，它确实红了 ✓
+—— 一条抓不到 bug 的测试是假防线，写的时候要顺手确认一次。
+
+**⑫ 磁盘满的时候，失败的样子和磁盘毫无关系（又犯了一次）。**
+
+提交 ⑪ 之前跑全量，有一组 `1 passed; 5 failed`，看着像集成测试自己 flaky。
+`df -h` 一看：**`/` 100%**（`target/` 占 51G，其中 `debug/incremental` 5.7G、
+`release` 3.9G）。
+
+清了那两个（+ 一个 5 天前残留的 redis 容器）之后**同样的命令全绿（529 条）**。
+
+⚠️ 这条 HANDOFF 早就写着（「数据库测试夹具」那节），还是又踩了一次 ——
+因为**「先 df -h」这个动作没有变成肌肉记忆**。跑集成测试之前先看一眼磁盘，
+比读任何栈都快。
+
 ### 前端
 
 - **`noUncheckedIndexedAccess` 开着**，`arr[i]` 一律是 `T | undefined`。

@@ -194,7 +194,11 @@ impl Transport for HyperTransport {
 
                 let mut builder = hyper::Request::builder()
                     .method(hyper::Method::POST)
-                    .uri(&uri_path);
+                    .uri(&uri_path)
+                    // ⚠️ **Host 得自己加**（hyper 不会补，它只看 URI 里的路径）。
+                    // 少了这一条，真的服务端一律回
+                    // `400 Bad Request: missing required Host header`。
+                    .header(hyper::header::HOST, target.host_header());
                 for (k, v) in &headers {
                     builder = builder.header(k.as_str(), v.as_str());
                 }
@@ -371,6 +375,28 @@ impl Endpoint {
 
     fn path_and_query(&self) -> String {
         self.path.clone()
+    }
+
+    /// HTTP/1.1 要求的 `Host` 头（`api.anthropic.com`，或者 `localhost:8443`）。
+    ///
+    /// ⚠️ **必须自己加 —— hyper 不会替你补。**
+    ///
+    /// hyper 1.x 的 http1 客户端只要求 URI 是 origin-form（就一个路径），
+    /// 而路径里当然没有主机名，所以 Host 从别处来不了。对端拿不到它就回
+    /// `400 Bad Request: missing required Host header` —— 用户在真机上撞到过，
+    /// 而**我们的假服务器不检查 Host**（它只看路径），所以集成测试全绿。
+    ///
+    /// 这条缝的具体形状和 HANDOFF 里记的那条一模一样：**两边的测试结构性地
+    /// 盖不到**。所以下面补了一条契约测试，让假服务器真的去要这个头。
+    fn host_header(&self) -> String {
+        // 默认端口不写出来：`example.com` 是惯例，`example.com:443` 虽然合法，
+        // 但有的网关（和某些校验严格的 CDN）会挑这个。
+        let default_port = if self.tls { 443 } else { 80 };
+        if self.port == default_port {
+            self.host.clone()
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
     }
 }
 
