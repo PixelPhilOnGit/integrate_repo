@@ -409,6 +409,23 @@ mod tests {
     }
 
     #[test]
+    fn the_host_header_omits_the_default_port() {
+        // ⚠️ `example.com:443` 是合法的，但惯例是不写出来，而且有的网关
+        // （和校验严格的 CDN）会挑它。
+        assert_eq!(parse("https://api.anthropic.com/v1/messages").host_header(), "api.anthropic.com");
+        assert_eq!(parse("http://localhost/v1/messages").host_header(), "localhost");
+
+        // 非默认端口**必须**写出来 —— 不写的话请求会打到 80/443 上，
+        // 而那个错看起来像"网关挂了"。
+        assert_eq!(parse("http://localhost:8080/v1").host_header(), "localhost:8080");
+        // ⚠️ 这条最容易写错：**TLS + 非 443** 也是非默认端口（内网网关常见）。
+        assert_eq!(
+            parse("https://gw.example.com:8443/v1").host_header(),
+            "gw.example.com:8443"
+        );
+    }
+
+    #[test]
     fn https_defaults_to_443_and_http_to_80() {
         assert_eq!(parse("https://api.anthropic.com/v1/messages").port, 443);
         assert_eq!(parse("http://localhost:8080/v1/x").port, 8080);
