@@ -21,6 +21,7 @@ import { fuzzyBest } from '../../../shared/search';
 import { addressOf } from '../core/profile';
 import type { SshProfile, SshSession } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
+import { NewConnectionDialog } from './NewConnectionDialog';
 
 interface Props {
   state: SshState;
@@ -41,6 +42,8 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
   /** 正在行内改名的分组 id + 草稿（和文件树那套一样，不用弹窗） */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  /** 「新建连接」弹框开着没有。开了才挂载，所以每次都是干净草稿。 */
+  const [newOpen, setNewOpen] = useState(false);
 
   const q = query.trim();
   const searching = q !== '';
@@ -143,27 +146,22 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         <span>连接</span>
         {/* 钥匙串用不了时提醒一句（桌面端才有；见 KeychainNotice） */}
         <KeychainNotice />
-        <button
-          type="button"
-          data-testid="ssh-btn-new"
-          onClick={() => void store.createProfile()}
-        >
+        <button type="button" data-testid="ssh-btn-new" onClick={() => setNewOpen(true)}>
           新建
         </button>
         {/*
-          ⚠️ **单独一个按钮，而不是把「新建」改成弹菜单选种类。**
-          一来一回多一步，而且「新建」是这里点得最多的东西；
-          二来 e2e 和用户的手感都是「点一下就是一个 SSH 连接」，
-          那种约定不该为了一个新种类去动。
+          ⚠️ **这里原来还有一个「本地」按钮**（`ssh-btn-new-local`，点一下直接建一个
+          本地终端）。2026-09-23 去掉了，种类改成在弹框里选。
+
+          当时留两个按钮的理由是「点一下就是一个 SSH 连接，那个约定不该为了一个
+          新种类去动」。用户反馈之后推翻了这个决定 —— 因为那两个按钮**替用户
+          决定了种类**：想建本地终端却点了上面那个，得到的是一个要填主机和密码的
+          东西，而且界面上看不出哪里不对。
+
+          代价是建本地终端多一步（开弹框 → 选种类）。所以那一格选完就**没有别的
+          必填项**了：`validateProfile` 在 `kind === 'local'` 时只查名字，而名字是
+          预填好的 —— 两次点击、零输入。
         */}
-        <button
-          type="button"
-          data-testid="ssh-btn-new-local"
-          title="在本机起一个 shell（PowerShell / cmd）"
-          onClick={() => void store.createProfile('local')}
-        >
-          本地
-        </button>
         <button
           type="button"
           data-testid="ssh-btn-new-group"
@@ -226,6 +224,10 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+
+      {newOpen && (
+        <NewConnectionDialog state={state} store={store} onClose={() => setNewOpen(false)} />
       )}
     </div>
   );

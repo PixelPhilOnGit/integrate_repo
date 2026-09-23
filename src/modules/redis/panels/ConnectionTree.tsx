@@ -29,6 +29,7 @@ import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { fuzzyFilter } from '../../../shared/search';
 import type { ConnectionProfile, DbInfo } from '../core/types';
 import type { RedisState, RedisStore } from '../state/store';
+import { NewConnectionDialog } from './NewConnectionDialog';
 
 interface Props {
   state: RedisState;
@@ -50,6 +51,8 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
   const [draft, setDraft] = useState('');
   /** 哪些分组是收起来的。**纯显示状态，不持久化**（和 SQL 那个引擎折叠一个道理） */
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  /** 「新建连接」弹框开着没有。开了才挂载，所以每次都是干净草稿。 */
+  const [newOpen, setNewOpen] = useState(false);
 
   /**
    * 只按**连接行自己的文本**（名字 + 地址）过滤。
@@ -129,7 +132,9 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
           type="button"
           data-testid="btn-new-connection"
           title="新建连接"
-          onClick={() => void store.createProfile()}
+          // 开弹框，**不直接建** —— 建是弹框里点了确定才发生的事。
+          // 「先建后填」的话取消就成了一次删除（见 NewConnectionDialog 的注释）。
+          onClick={() => setNewOpen(true)}
         >
           新建
         </button>
@@ -213,6 +218,10 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+
+      {newOpen && (
+        <NewConnectionDialog state={state} store={store} onClose={() => setNewOpen(false)} />
       )}
     </div>
   );

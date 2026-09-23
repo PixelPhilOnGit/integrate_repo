@@ -26,6 +26,23 @@ import type { KeyValueStore } from '../platform/kv';
 import { withSecrets } from '../platform/secrets';
 import type { ConnectionProfileBase, ProfileStore } from './types';
 
+/**
+ * 这个名字还是「我们替他起的」那个默认名吗（去重过的 `新建连接 2` 也算）。
+ *
+ * ⚠️ **不能只比全等。** `nextAvailableName` 会把第二条起成「新建 PostgreSQL
+ * 连接 2」，而 `DEFAULT_NAME` 是「新建 PostgreSQL 连接」—— 全等比较会把去重
+ * 过的名字判成「用户改过」，于是换引擎时名字**不跟着换**。
+ *
+ * 症状很具体（e2e 抓到的）：先建一条 PG、再建第二条并切成 MySQL，第二条会叫
+ * 「新建 PostgreSQL 连接 2」—— 一个名字里写着 PostgreSQL 的 MySQL 连接。
+ *
+ * 判据是「等于 base，或者以 `base ` 开头」：后者正好盖住 `nextAvailableName`
+ * 的 `base 2` / `base 3` 那种形状。
+ */
+export function isDefaultName(current: string, base: string): boolean {
+  return current === base || current.startsWith(`${base} `);
+}
+
 export interface ProfileStoreOptions<P> {
   /** 存储里的键名。三个模块各用各的键值命名空间，所以默认值够用 */
   key?: string;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetIdsForTest } from '../../src/shared/ids';
+import { newProfile } from '../../src/modules/sql/core/profile';
 import { SqlStore } from '../../src/modules/sql/state/store';
 import type { ConnectionGroup, ProfileStore } from '../../src/shared/connections/types';
 import type { SqlClient } from '../../src/modules/sql/services/types';
@@ -102,6 +103,51 @@ describe('SQL 档案管理', () => {
     expect(store.getSnapshot().profiles.map((p) => p.id)).toEqual([id]);
     expect(store.getSnapshot().selectedId).toBe(id);
     expect(store.selectedProfile()?.id).toBe(id);
+  });
+
+  // ------------------------------------------------- 「新建连接」弹框那条路
+
+  it('⚠️ id 只有 store 一个来源 —— 草稿那个不算数', async () => {
+    // 弹框里那份草稿档案**自带一个 id**（它是 `newProfile` 造的，那个 id 给
+    // React 当 key 用）。`createProfile` 必须把它换成自己生成的那个 ——
+    // 两个来源意味着有一天会撞，而**撞了不报错**。
+    const { store } = harness();
+    const draft = newProfile([], 'postgres');
+    const id = await store.createProfile('postgres', draft);
+
+    expect(id).not.toBe(draft.id);
+    expect(store.getSnapshot().profiles[0]?.id).toBe(id);
+  });
+
+  it('弹框收集到的字段真的写进了档案', async () => {
+    const { store } = harness();
+    const draft = newProfile([], 'postgres');
+    const id = await store.createProfile('postgres', {
+      ...draft,
+      name: '生产库',
+      host: 'db.example.com',
+      port: 15432,
+    });
+
+    expect(store.selectedProfile()?.id).toBe(id);
+    const saved = store.getSnapshot().profiles[0];
+    expect(saved?.name).toBe('生产库');
+    expect(saved?.host).toBe('db.example.com');
+    expect(saved?.port).toBe(15432);
+    // 没传的字段仍然是 `newProfile` 的默认值（不是 undefined）
+    expect(saved?.username).toBe('postgres');
+    expect(saved?.database).toBe('postgres');
+  });
+
+  it('用户填的名字原样采用 —— 哪怕和已有的重名', async () => {
+    // ⚠️ 这是**刻意的**：名字是用户亲手打的，程序不该替他改成「生产库 2」——
+    // 和「换引擎不碰用户改过的名字」是同一条道理。
+    //
+    // 默认名字那条路仍然会去重，因为草稿的名字本来就是去重过的（`newProfile` 的活）。
+    const { store } = harness();
+    await store.createProfile('postgres', { name: '生产库' });
+    await store.createProfile('postgres', { name: '生产库' });
+    expect(store.getSnapshot().profiles.map((p) => p.name)).toEqual(['生产库', '生产库']);
   });
 
   it('新建会落盘', async () => {

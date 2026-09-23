@@ -20,9 +20,15 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('redis-main')).toBeVisible();
 });
 
-/** 新建一个连接并连上。连上之后会自动展开、列出库、加载默认库的 key */
+/**
+ * 新建一个连接并连上。连上之后会自动展开、列出库、加载默认库的 key。
+ *
+ * ⚠️ 「新建」现在弹一个对话框，**点确认才真的建**（先收集后建 —— 取消的话
+ * store 一个字都没动）。这里是下游几十条用例的公共入口，所以补在 helper 里。
+ */
 async function connectNew(page: Page): Promise<void> {
   await page.getByTestId('btn-new-connection').click();
+  await page.getByTestId('redis-new-confirm').click();
   await expect(page.getByTestId('conn-name')).toHaveValue('新建连接');
 
   await page.getByTestId('btn-conn-toggle').click();
@@ -67,6 +73,9 @@ test('新建连接、连上、状态栏反映连接状态', async ({ page }) => 
   await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
 
   await page.getByTestId('btn-new-connection').click();
+  // 弹框要点确认才真的建 —— 所以下面那条断言反而先证明了「还没建」
+  await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
+  await page.getByTestId('redis-new-confirm').click();
   await expect(page.getByTestId('conn-list')).toContainText('新建连接');
   await expect(page.getByTestId('conn-status')).toContainText('未连接');
 
@@ -75,8 +84,52 @@ test('新建连接、连上、状态栏反映连接状态', async ({ page }) => 
   await expect(page.getByTestId('conn-info')).toContainText('Redis 7');
 });
 
+test('新建弹框：预填默认值，填完确定之后侧栏和右侧表单都是它', async ({ page }) => {
+  await page.getByTestId('btn-new-connection').click();
+
+  // 打开就是一套能直接用的默认值（名字还去过重）—— 所以「点新建再点确定」
+  // 也是一条合法的路，想改哪格改哪格。
+  await expect(page.getByTestId('redis-new-name')).toHaveValue('新建连接');
+  await expect(page.getByTestId('redis-new-host')).toHaveValue('127.0.0.1');
+  await expect(page.getByTestId('redis-new-port')).toHaveValue('6379');
+  await expect(page.getByTestId('redis-new-db')).toHaveValue('0');
+
+  await page.getByTestId('redis-new-name').fill('缓存');
+  await page.getByTestId('redis-new-host').fill('10.0.0.5');
+  await page.getByTestId('redis-new-confirm').click();
+
+  // 侧栏那一行
+  await expect(page.getByTestId('conn-list')).toContainText('缓存');
+  // 右侧完整表单也是它（建完会被选中）
+  await expect(page.getByTestId('conn-name')).toHaveValue('缓存');
+  await expect(page.getByTestId('conn-host')).toHaveValue('10.0.0.5');
+});
+
+test('⚠️ 取消和 Esc 都不留痕，重开还是干净的', async ({ page }) => {
+  // 弹框是**先收集后建**：取消的话 store 一个字没动、磁盘一个字没写、选中项不变。
+  // （「先建后填、取消时删」的话，取消就成了一次**破坏性操作** —— 而且那份空档案
+  // 在切模块时没人删得掉。）
+  await page.getByTestId('btn-new-connection').click();
+  await page.getByTestId('redis-new-name').fill('不想建的');
+  await page.getByTestId('redis-new-cancel').click();
+  await expect(page.getByTestId('redis-new-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
+
+  // Esc 走同一条路
+  await page.getByTestId('btn-new-connection').click();
+  await page.getByTestId('redis-new-name').fill('也不想建的');
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('redis-new-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
+
+  // 而且重开是**干净**的 —— 上次填的东西不该留到这次
+  await page.getByTestId('btn-new-connection').click();
+  await expect(page.getByTestId('redis-new-name')).toHaveValue('新建连接');
+});
+
 test('连不上时给出提示', async ({ page }) => {
   await page.getByTestId('btn-new-connection').click();
+  await page.getByTestId('redis-new-confirm').click();
   await page.getByTestId('conn-host').fill('unreachable.invalid');
   await page.getByTestId('btn-conn-toggle').click();
 
@@ -114,6 +167,7 @@ test('删除连接会从列表里消失', async ({ page }) => {
 
 test('连接档案会写进本地存储，重开页面还在', async ({ page }) => {
   await page.getByTestId('btn-new-connection').click();
+  await page.getByTestId('redis-new-confirm').click();
   await page.getByTestId('conn-name').fill('本地测试库');
   await expect(page.getByTestId('conn-list')).toContainText('本地测试库');
 
@@ -380,6 +434,7 @@ test('侧栏搜索：按名字过滤连接，清空之后原样回来', async ({
   // 改个名，好和下面新建的那条区分开
   await page.getByTestId('conn-name').fill('生产库');
   await page.getByTestId('btn-new-connection').click();
+  await page.getByTestId('redis-new-confirm').click();
 
   await expect(page.locator('[data-conn-name]')).toHaveCount(2);
 

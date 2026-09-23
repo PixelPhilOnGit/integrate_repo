@@ -22,7 +22,14 @@ import type { ConnectionGroup } from '../../../shared/connections/types';
 import { describeError } from '../../../shared/platform/types';
 import type { ShellApi } from '../../../shell/types';
 import { pushHistory, moveHistory } from '../core/history';
-import { hasErrors, newProfile, sameConnection, toConnectParams, validateProfile } from '../core/profile';
+import {
+  hasErrors,
+  newProfile,
+  sameConnection,
+  toConnectParams,
+  validateProfile,
+  type ProfileInit,
+} from '../core/profile';
 import { redactArgs } from '../core/redact';
 import { tokenize } from '../core/tokenize';
 import { keyBytesOf } from '../core/types';
@@ -262,9 +269,17 @@ export class RedisStore {
     }
   }
 
-  /** 新建一个连接档案，自动选中，并把名字去重。返回它的 id */
-  async createProfile(): Promise<string> {
-    const profile = newProfile(this.state.profiles);
+  /**
+   * 新建一个连接档案，自动选中，并把名字去重。返回它的 id。
+   *
+   * `init` 是「新建连接」弹框收集到的字段。不给就是纯默认值 ——
+   * **签名向后兼容**是硬要求（树和单测里 40 多处调用一个字都不用改）。
+   */
+  async createProfile(init: ProfileInit = {}): Promise<string> {
+    const seed = newProfile(this.state.profiles);
+    // ⚠️ **`id` 必须写在展开之后**：弹框那份草稿自带一个 id（给 React 当 key
+    // 用的），漏写这一行就会静默地和草稿共用同一个 id —— 而那**不报错**。
+    const profile: ConnectionProfile = { ...seed, ...init, id: seed.id };
     const profiles = [...this.state.profiles, profile];
 
     this.set({

@@ -4,7 +4,7 @@
  * 纯函数，不碰平台也不碰 store —— 表单校验和「改了参数要不要提示重连」都靠它。
  */
 
-import { nextAvailableName } from '../../../shared/connections/profiles';
+import { isDefaultName, nextAvailableName } from '../../../shared/connections/profiles';
 import { newId } from '../../../shared/ids';
 import {
   DEFAULT_SSH_PORT,
@@ -40,6 +40,20 @@ export const DEFAULT_HOST = '127.0.0.1';
 export const DEFAULT_USER = 'root';
 
 /**
+ * 新建时的默认名字，按种类分。
+ *
+ * 本地终端叫「新建本地终端」—— 列表里一眼能分出来，而不是一串都叫
+ * 「新建 SSH 连接」的东西混在一起。
+ *
+ * 抽成一张表（原来是个内联三元）是因为**弹框里换种类时也要用**：
+ * 判「名字还停在默认名上吗」得拿同一个来源比。SQL 那边也是这个形状。
+ */
+const DEFAULT_NAME: Record<SshProfileKind, string> = {
+  ssh: '新建 SSH 连接',
+  local: '新建本地终端',
+};
+
+/**
  * 新建一个连接档案，名字自动去重。
  *
  * `kind` 决定名字的前缀：本地终端叫「新建本地终端」——列表里一眼能分出来，
@@ -52,10 +66,7 @@ export function newProfile(
 ): SshProfile {
   return {
     id: newId('ssh'),
-    name: nextAvailableName(
-      existing.map((p) => p.name),
-      kind === 'local' ? '新建本地终端' : '新建 SSH 连接',
-    ),
+    name: nextAvailableName(existing.map((p) => p.name), DEFAULT_NAME[kind]),
     kind,
     localShell: '',
     host: DEFAULT_HOST,
@@ -212,3 +223,47 @@ export function applyKindSwitch(profile: SshProfile, kind: SshProfileKind): SshP
     passphrase: '',
   };
 }
+
+/**
+ * 「新建连接」弹框里换种类：`applyKindSwitch` 之上，**名字也跟着换**。
+ *
+ * 为什么要单独加一条名字规则：`applyKindSwitch` 刻意不动 `name` —— 那是给右侧
+ * 表单用的，用户把连接起名叫「生产机」之后，换个种类不该被改名。但弹框里的名字
+ * 多半还没被人碰过，不换的话会建出一个叫「新建 SSH 连接」的本地终端。
+ *
+ * 判据和 SQL 那边**是同一条**：名字还等于旧种类的默认名才算「没动过」。
+ *
+ * `existing` 是给名字去重用的 —— 换过去之后可能和已有的重名。
+ */
+export function applyNewDialogKindSwitch(
+  existing: readonly SshProfile[],
+  draft: SshProfile,
+  kind: SshProfileKind,
+): SshProfile {
+  // 同一个种类：原样返回**同一个引用**，不做无谓的对象分配。
+  if (draft.kind === kind) return draft;
+
+  const next = applyKindSwitch(draft, kind);
+  // ⚠️ 用 `isDefaultName` 而不是全等 —— 去重过的「新建 SSH 连接 2」也算默认名
+  //（判据写窄了的症状：第二条连接换成「本地终端」之后，名字还写着 SSH）。
+  if (!isDefaultName(draft.name, DEFAULT_NAME[draft.kind])) return next;
+
+  return {
+    ...next,
+    name: nextAvailableName(
+      existing.map((p) => p.name),
+      DEFAULT_NAME[kind],
+    ),
+  };
+}
+
+/**
+ * 新建时可以从外面带进来的字段（弹框收集到的那份）。
+ *
+ * ⚠️ **没有 `id`**：档案的 id 只该有一个来源（store 里的 `newId`）。弹框那份
+ * 草稿档案自带一个 id，但那是给 React 当 key 用的，插进来时一律丢掉 ——
+ * 两个来源意味着有一天会撞，而撞了**不报错**。
+ *
+ * ⚠️ **也没有 `kind`**：它以位置参数为准（见 `createProfile(kind, init)`）。
+ */
+export type SshProfileInit = Partial<Omit<SshProfile, 'id' | 'kind'>>;

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   applyAuthKindSwitch,
   applyKindSwitch,
+  applyNewDialogKindSwitch,
   addressOf,
   hasErrors,
   newProfile,
@@ -9,7 +10,7 @@ import {
   toAuth,
   validateProfile,
 } from '../../src/modules/ssh/core/profile';
-import type { SshProfile } from '../../src/modules/ssh/core/types';
+import type { SshProfile, SshProfileKind } from '../../src/modules/ssh/core/types';
 import { __resetIdsForTest } from '../../src/shared/ids';
 
 beforeEach(() => __resetIdsForTest());
@@ -225,5 +226,53 @@ describe('本地终端：档案层', () => {
         profile({ kind: 'local', localShell: 'cmd', host: '别的' }),
       ),
     ).toBe(true);
+  });
+});
+
+/**
+ * ⚠️ 弹框里换种类和**右侧表单里**换种类不是一回事 —— 差别只在**名字**上。
+ *
+ * 右侧表单：用户已经把连接起名叫「生产机」了，换个种类不该被改名。
+ * 弹框：名字多半还没被人碰过，不换的话会建出一个叫「新建 SSH 连接」的本地终端。
+ */
+describe('弹框里换种类（applyNewDialogKindSwitch）', () => {
+  /** 弹框里的草稿：就是 `newProfile` 造出来的那份（名字已按种类预填） */
+  const draft = (kind: SshProfileKind = 'ssh'): SshProfile => newProfile([], kind);
+
+  it('名字还停在默认名时，跟着换成新种类的', () => {
+    expect(applyNewDialogKindSwitch([], draft('ssh'), 'local').name).toBe('新建本地终端');
+    expect(applyNewDialogKindSwitch([], draft('local'), 'ssh').name).toBe('新建 SSH 连接');
+  });
+
+  it('⚠️ 名字被用户改过就一个字都不动', () => {
+    const custom: SshProfile = { ...draft('ssh'), name: '生产机' };
+    const next = applyNewDialogKindSwitch([], custom, 'local');
+    expect(next.name).toBe('生产机');
+    expect(next.kind).toBe('local');
+  });
+
+  it('换过去的默认名也要去重', () => {
+    const existing: SshProfile[] = [{ ...draft('local'), id: 'x' }];
+    const next = applyNewDialogKindSwitch(existing, draft('ssh'), 'local');
+    expect(next.name).toBe('新建本地终端 2');
+  });
+
+  it('切到本地终端会清掉凭据（沿用 applyKindSwitch 的规则）', () => {
+    const withKey: SshProfile = { ...draft('ssh'), privateKeyPath: '~/.ssh/id_ed25519' };
+    expect(applyNewDialogKindSwitch([], withKey, 'local').privateKeyPath).toBe('');
+  });
+
+  it('同一个种类返回同一个引用', () => {
+    const d = draft('ssh');
+    expect(applyNewDialogKindSwitch([], d, 'ssh')).toBe(d);
+  });
+
+  it('⚠️ 去重过的默认名也算默认名 ——「新建 SSH 连接 2」也要跟着换', () => {
+    // 判据写成全等的话，第二条连接换种类时名字不跟着换 —— 症状是一个名字里
+    // 写着 SSH 的本地终端。SQL 那边是同一条，两处一起改的。
+    const second = newProfile([{ ...draft('ssh'), id: 'x' }], 'ssh');
+    expect(second.name).toBe('新建 SSH 连接 2');
+
+    expect(applyNewDialogKindSwitch([], second, 'local').name).toBe('新建本地终端');
   });
 });

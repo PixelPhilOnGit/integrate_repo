@@ -1795,6 +1795,27 @@ textarea:focus {
   width: 76px;
 }
 
+/* --- 新建连接弹框（三个连接模块共用，见 shared/connections/ConnectionDialog.tsx）--- */
+
+/*
+ * ⚠️ 这两条**故意限定在 `.rd-conn-dialog` 里**，不动全局。
+ *
+ * `rd-btn-primary` 那个类名全仓有 7 个 tsx 挂着，但 CSS 里**一个字都没有** ——
+ * 按钮的样式一直走 `button` 元素选择器，所以那些「主按钮」看起来和普通按钮
+ * 一模一样。加一条全局规则确实能把它们一起修好，但也会**顺手改掉别的模块
+ * 弹框的外观** —— 那是另一件事，不该混在这次改动里（已记进 HANDOFF）。
+ */
+.rd-conn-dialog .rd-btn-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* `.rd-form` 自带 12px 内边距，叠在 `.rd-modal` 的 padding 上会让这个弹框
+   比别人胖一圈。字段的间距 `.rd-form` 还是要的，只是把外边距抹平 */
+.rd-conn-dialog .rd-form {
+  padding: 0;
+}
+
 /* --------------------------------------------------------- 智能体会话模块
  *
  * 只追加，不动上面任何已有规则 —— 那些是别的模块在用的。

@@ -41,6 +41,7 @@ import { fuzzyFilter } from '../../../shared/search';
 import { displayName, qualifyName } from '../core/query';
 import { KIND_LABEL, KIND_ORDER, type SqlKind, type SqlProfile, type TableInfo } from '../core/types';
 import type { SqlState, SqlStore } from '../state/store';
+import { NewConnectionDialog } from './NewConnectionDialog';
 
 interface Props {
   state: SqlState;
@@ -64,6 +65,14 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
   /** 正在行内改名的分组 id + 草稿（和文件树那套一样，不用弹窗） */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  /**
+   * 「新建连接」弹框开着时的引擎；`null` = 没开。
+   *
+   * 引擎在这里而不是在弹框里，是因为**两个入口的默认值不一样**：
+   * 「新建」按钮进来是默认引擎（用户自己选），分组头那个「＋」进来则
+   * **定死那一组的引擎**（它的原意就是「在这一组里加一条」）。
+   */
+  const [newKind, setNewKind] = useState<SqlKind | null>(null);
 
   const closeMenu = (): void => setMenu(null);
 
@@ -137,18 +146,6 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
     });
   };
 
-  /** 「新建」→ 先选引擎。两种引擎的默认端口/用户名差很多，让用户先选省得改 */
-  const openNewMenu = (x: number, y: number): void => {
-    setMenu({
-      x,
-      y,
-      items: (Object.keys(KIND_LABEL) as SqlKind[]).map((kind) => ({
-        label: KIND_LABEL[kind],
-        onSelect: () => void store.createProfile(kind),
-      })),
-    });
-  };
-
   /** 分组头（或者它被改名时的输入框）。引擎底下那一层，两个地方要用，抽出来 */
   const renderGroupHead = (group: ConnectionGroup, count: number): ReactNode => {
     if (renaming === group.id) {
@@ -200,11 +197,10 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         <button
           type="button"
           data-testid="btn-new-sql-connection"
-          title="新建连接（选引擎）"
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect();
-            openNewMenu(r.left, r.bottom + 2);
-          }}
+          title="新建连接"
+          // 引擎进了弹框（第一格），不再弹右键菜单 —— 用户要的是「填几个字就建好」，
+          // 而选引擎本来就是那件事的第一步。
+          onClick={() => setNewKind('postgres')}
         >
           新建
         </button>
@@ -258,7 +254,9 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
                     title={`新建一个 ${KIND_LABEL[kind]} 连接`}
                     aria-label={`新建 ${KIND_LABEL[kind]} 连接`}
                     data-testid={`sql-kind-new-${kind}`}
-                    onClick={() => void store.createProfile(kind)}
+                    // 开弹框并**预选这一组的引擎** —— 这个「＋」的原意是
+                    //「在这一组里加一条」，预选正好保住那个意思。
+                    onClick={() => setNewKind(kind)}
                   >
                     ＋
                   </button>
@@ -304,6 +302,15 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
       )}
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
+
+      {newKind !== null && (
+        <NewConnectionDialog
+          state={state}
+          store={store}
+          kind={newKind}
+          onClose={() => setNewKind(null)}
+        />
+      )}
     </div>
   );
 }

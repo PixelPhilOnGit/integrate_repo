@@ -82,6 +82,10 @@ async function connectNew(
   options: { username?: string; password?: string; host?: string } = {},
 ): Promise<void> {
   await page.getByTestId('ssh-btn-new').click();
+  // ⚠️ 弹框要点确认才真的建（先收集后建 —— 取消的话 store 一个字没动）。
+  // 这里用默认值建出来，参数照旧在后面那些 `ssh-field-*` 里填 —— 那是**右侧
+  // 完整表单**，也就是用户改已有连接的那条路，同样要盖到。
+  await page.getByTestId('ssh-new-confirm').click();
   if (options.host !== undefined) {
     await page.getByTestId('ssh-field-host').fill(options.host);
   }
@@ -525,8 +529,12 @@ test('侧栏搜索：按连接名过滤；搜会话名时把那条连接自动�
 test('本地终端：建一个、敲命令、命令块照常', async ({ page }) => {
   await expect(page.getByTestId('ssh-conn-list')).toContainText('还没有连接');
 
-  // 「本地」是单独一个按钮 —— 「新建」那条路一个字都没变
-  await page.getByTestId('ssh-btn-new-local').click();
+  // 种类在弹框里选。⚠️ 原来「本地」是单独一个按钮，2026-09-23 合并进了弹框 ——
+  // 那两个按钮**替用户决定了种类**（想建本地终端却点了「新建」，得到的是一个
+  // 要填主机和密码的东西，而界面上看不出哪里不对）。
+  await page.getByTestId('ssh-btn-new').click();
+  await page.getByTestId('ssh-new-kind').selectOption('local');
+  await page.getByTestId('ssh-new-confirm').click();
 
   // 侧栏那一行说的是「本地」，不是 `127.0.0.1:22` 那种看着像远端的东西
   const row = page.locator('[data-testid^="conn-"]').first();
@@ -550,8 +558,45 @@ test('本地终端：建一个、敲命令、命令块照常', async ({ page }) 
   await expect(row).toHaveAttribute('data-status', 'connected');
 });
 
+test('⚠️ 弹框里选「本地终端」：机器那一段消失，而且零输入就能建', async ({ page }) => {
+  await page.getByTestId('ssh-btn-new').click();
+
+  // 默认是 SSH 连接，所以要主机那一段
+  await expect(page.getByTestId('ssh-new-host')).toBeVisible();
+  await expect(page.getByTestId('ssh-new-name')).toHaveValue('新建 SSH 连接');
+
+  await page.getByTestId('ssh-new-kind').selectOption('local');
+
+  // ⚠️ 整块**隐藏**而不是禁用 —— 那三个字段对本地终端毫无意义，画三个灰框只是噪音
+  //（和右侧表单一个处理）。
+  await expect(page.getByTestId('ssh-new-host')).toHaveCount(0);
+  await expect(page.getByTestId('ssh-new-port')).toHaveCount(0);
+  await expect(page.getByTestId('ssh-new-username')).toHaveCount(0);
+
+  // 名字跟着种类换（用户没碰过它，所以该换）
+  await expect(page.getByTestId('ssh-new-name')).toHaveValue('新建本地终端');
+
+  // ⚠️ **零输入就能建**（合并入口的代价要控制在这里）：本地终端没有别的必填项，
+  // 名字也是预填好的。按钮要是灰的，用户会以为还得填什么。
+  await expect(page.getByTestId('ssh-new-confirm')).toBeEnabled();
+  await page.getByTestId('ssh-new-confirm').click();
+
+  await expect(page.getByTestId('ssh-field-kind')).toHaveValue('local');
+});
+
+test('⚠️ 名字被改过之后，换种类不该把它改掉', async ({ page }) => {
+  // 「只改用户没动过的」这条规则在弹框里同样成立 —— 和右侧表单那条是同一个判据。
+  await page.getByTestId('ssh-btn-new').click();
+  await page.getByTestId('ssh-new-name').fill('生产机');
+  await page.getByTestId('ssh-new-kind').selectOption('local');
+
+  await expect(page.getByTestId('ssh-new-name')).toHaveValue('生产机');
+});
+
 test('本地终端：切 shell 之后再开一个，用的是新 shell', async ({ page }) => {
-  await page.getByTestId('ssh-btn-new-local').click();
+  await page.getByTestId('ssh-btn-new').click();
+  await page.getByTestId('ssh-new-kind').selectOption('local');
+  await page.getByTestId('ssh-new-confirm').click();
   await page.getByTestId('ssh-field-local-shell').selectOption('cmd');
 
   await page.getByTestId('ssh-btn-connect').click();

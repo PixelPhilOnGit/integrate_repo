@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { newProfile } from '../../src/modules/ssh/core/profile';
 
 /**
  * 终端实例归 hub 管，而 hub 要用真实的 xterm（需要真实布局才能量尺寸），
@@ -797,5 +798,44 @@ describe('清屏之后：命令块的坐标系重置', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('新建档案（「新建连接」弹框那条路）', () => {
+  it('⚠️ id 只有 store 一个来源 —— 草稿那个不算数', async () => {
+    // 弹框那份草稿档案**自带一个 id**（给 React 当 key 用）。`createProfile`
+    // 必须把它换成自己生成的那个 —— 两个来源意味着有一天会撞，而**撞了不报错**。
+    const { store } = harness();
+    const draft = newProfile([], 'ssh');
+    const id = await store.createProfile('ssh', draft);
+
+    expect(id).not.toBe(draft.id);
+    expect(store.getSnapshot().profiles[0]?.id).toBe(id);
+  });
+
+  it('弹框收集到的字段真的写进了档案', async () => {
+    const { store } = harness();
+    await store.createProfile('ssh', {
+      name: '生产机',
+      host: '10.0.0.9',
+      username: 'deploy',
+    });
+
+    const saved = store.getSnapshot().profiles[0];
+    expect(saved?.name).toBe('生产机');
+    expect(saved?.host).toBe('10.0.0.9');
+    expect(saved?.username).toBe('deploy');
+    // 没传的字段仍然是 `newProfile` 的默认值（不是 undefined）
+    expect(saved?.port).toBe(22);
+  });
+
+  it('⚠️ 种类以位置参数为准 —— 草稿里那个不算数', async () => {
+    // `init` 刻意不含 `kind`（两个来源会打架）。这条钉住「谁说了算」：
+    // 弹框里选了「本地终端」，传的草稿却是按 ssh 造的 —— 结果必须是 local。
+    const { store } = harness();
+    const draft = newProfile([], 'ssh');
+    const id = await store.createProfile('local', draft);
+
+    expect(store.profileById(id)?.kind).toBe('local');
   });
 });

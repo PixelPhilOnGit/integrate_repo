@@ -18,12 +18,22 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('sql-main')).toBeVisible();
 });
 
-/** 新建一个连接（不连）。点「新建」会先弹引擎选择，选完才建 */
+/** 新建一个连接（不连）。点「新建」弹一个对话框，引擎是里面第一格 */
 type EngineName = 'PostgreSQL' | 'MySQL' | 'ClickHouse' | 'MongoDB';
+
+/** 界面上的引擎名 → `select` 的 value（弹框里那一格用的是后者）。 */
+const ENGINE_VALUE: Record<EngineName, string> = {
+  PostgreSQL: 'postgres',
+  MySQL: 'mysql',
+  ClickHouse: 'clickhouse',
+  MongoDB: 'mongodb',
+};
 
 async function newConnection(page: Page, engine: EngineName = 'PostgreSQL'): Promise<void> {
   await page.getByTestId('btn-new-sql-connection').click();
-  await page.getByTestId(`menu-${engine}`).click();
+  // ⚠️ 引擎原来是一个右键菜单（`menu-<引擎名>`），现在进了弹框的第一格。
+  await page.getByTestId('sql-new-kind').selectOption(ENGINE_VALUE[engine]);
+  await page.getByTestId('sql-new-confirm').click();
   await expect(page.getByTestId('sql-name')).toHaveValue(`新建 ${engine} 连接`);
 }
 
@@ -44,14 +54,19 @@ async function run(page: Page, sql: string): Promise<void> {
 
 // ------------------------------------------------------------------ 连接
 
-test('新建时可以选引擎', async ({ page }) => {
+test('新建时可以选引擎，端口默认值当场跟着换', async ({ page }) => {
   await page.getByTestId('btn-new-sql-connection').click();
 
-  // 两种引擎都得能选，而不是建完再去属性面板里改
-  await expect(page.getByTestId('menu-PostgreSQL')).toBeVisible();
-  await expect(page.getByTestId('menu-MySQL')).toBeVisible();
+  // 引擎是弹框里的第一格，而不是建完再去属性面板里改
+  await page.getByTestId('sql-new-kind').selectOption('mysql');
 
-  await page.getByTestId('menu-MySQL').click();
+  // ⚠️ 联动要在**弹框里**就发生：用户先选引擎再填端口，不该填完 5432 之后
+  // 才发现引擎是 MySQL。`applyNewDialogKindSwitch` 负责这件事。
+  await expect(page.getByTestId('sql-new-port')).toHaveValue('3306');
+
+  await page.getByTestId('sql-new-confirm').click();
+
+  // 建出来的档案确实是 MySQL
   await expect(page.getByTestId('sql-kind')).toHaveValue('mysql');
   await expect(page.getByTestId('sql-port')).toHaveValue('3306');
 });
@@ -265,6 +280,7 @@ test('Alt+上下翻执行历史', async ({ page }) => {
 
 test('没连上时不能执行', async ({ page }) => {
   await page.getByTestId('btn-new-sql-connection').click();
+  await page.getByTestId('sql-new-confirm').click();
 
   await expect(page.getByTestId('btn-sql-run')).toBeDisabled();
   await expect(page.getByTestId('sql-editor')).toHaveAttribute('placeholder', '先连上一个数据库');
@@ -314,9 +330,11 @@ test('侧栏搜索：按名字/引擎过滤，清空之后原样回来', async (
 test('侧栏按引擎分组：连接挂在它那个种类下面', async ({ page }) => {
   // 用户要的：「新建 pg，那这个连接属于 pg，也就是连接最好有一个 tag」
   await page.getByTestId('btn-new-sql-connection').click();
-  await page.getByTestId('menu-PostgreSQL').click();
+  await page.getByTestId('sql-new-kind').selectOption('postgres');
+  await page.getByTestId('sql-new-confirm').click();
   await page.getByTestId('btn-new-sql-connection').click();
-  await page.getByTestId('menu-MySQL').click();
+  await page.getByTestId('sql-new-kind').selectOption('mysql');
+  await page.getByTestId('sql-new-confirm').click();
 
   // 两个组都在，各自一个连接
   await expect(page.getByTestId('sql-kind-postgres')).toBeVisible();
@@ -332,8 +350,13 @@ test('侧栏按引擎分组：连接挂在它那个种类下面', async ({ page 
   await expect(page.getByTestId('sql-kind-postgres').locator('.rd-conn-row')).toHaveCount(0);
   await expect(page.getByTestId('sql-kind-mysql').locator('.rd-conn-row')).toHaveCount(1);
 
-  // 组头上那个 ＋ 直接建一个**这种引擎**的连接（不用再去菜单里选一次）
+  // 组头上那个 ＋ 开弹框，而且**引擎已经预选好** —— 它的原意就是
+  //「在这一组里加一条」，预选正好保住那个意思（不用再去引擎那一格选一次）
   await page.getByTestId('sql-kind-new-mysql').click();
+  await expect(page.getByTestId('sql-new-dialog')).toBeVisible();
+  await expect(page.getByTestId('sql-new-kind')).toHaveValue('mysql');
+
+  await page.getByTestId('sql-new-confirm').click();
   await expect(page.getByTestId('sql-kind-count-mysql')).toHaveText('2');
 });
 
@@ -342,13 +365,25 @@ test('侧栏按引擎分组：连接挂在它那个种类下面', async ({ page 
 
 test('新建时可以选四种引擎，端口默认值跟着引擎走', async ({ page }) => {
   await page.getByTestId('btn-new-sql-connection').click();
-  for (const engine of ['PostgreSQL', 'MySQL', 'ClickHouse', 'MongoDB'] as const) {
-    await expect(page.getByTestId(`menu-${engine}`)).toBeVisible();
+
+  // 四种都能在弹框里选到，而且端口当场跟着换
+  for (const [kind, port] of [
+    ['postgres', '5432'],
+    ['mysql', '3306'],
+    ['clickhouse', '8123'], // HTTP 口，不是 9000
+    ['mongodb', '27017'],
+  ] as const) {
+    await page.getByTestId('sql-new-kind').selectOption(kind);
+    await expect(page.getByTestId('sql-new-port')).toHaveValue(port);
   }
 
-  await page.getByTestId('menu-ClickHouse').click();
-  await expect(page.getByTestId('sql-port')).toHaveValue('8123'); // HTTP 口，不是 9000
+  await page.getByTestId('sql-new-kind').selectOption('clickhouse');
+  await page.getByTestId('sql-new-confirm').click();
+  await expect(page.getByTestId('sql-kind')).toHaveValue('clickhouse');
+  await expect(page.getByTestId('sql-port')).toHaveValue('8123');
 
+  // ⚠️ 下面这条是**建完之后**在右侧表单里换引擎 —— 和弹框里那条不是一回事：
+  // 那边名字也跟着换，这边不换（用户可能已经起好名字了）。
   await page.getByTestId('sql-kind').selectOption('mongodb');
   await expect(page.getByTestId('sql-port')).toHaveValue('27017');
   // ⚠️ 切换引擎时**用户没动过的字段**才跟着换（改过的不能抢方向盘）

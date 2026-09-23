@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { __resetIdsForTest } from '../../src/shared/ids';
 import {
   applyKindSwitch,
+  applyNewDialogKindSwitch,
   hasErrors,
   newProfile,
   sameConnection,
   toConnectParams,
   validateProfile,
 } from '../../src/modules/sql/core/profile';
-import { DEFAULT_PORT, type SqlProfile } from '../../src/modules/sql/core/types';
+import { DEFAULT_PORT, type SqlKind, type SqlProfile } from '../../src/modules/sql/core/types';
 
 beforeEach(() => __resetIdsForTest());
 
@@ -115,6 +116,57 @@ describe('切引擎时跟着换的默认值', () => {
   it('默认端口表覆盖两种引擎', () => {
     expect(DEFAULT_PORT.postgres).toBe(5432);
     expect(DEFAULT_PORT.mysql).toBe(3306);
+  });
+});
+
+/**
+ * ⚠️ 弹框里换引擎和**右侧表单里**换引擎不是一回事 —— 差别只在**名字**上。
+ *
+ * 右侧表单：用户已经把连接起名叫「生产库」了，换个引擎不该被改名（上面那条
+ * 「切引擎不动名字」钉着）。弹框：名字多半还没被人碰过，不换的话会建出一个
+ * 叫「新建 PostgreSQL 连接」的 MySQL 连接。
+ */
+describe('弹框里换引擎（applyNewDialogKindSwitch）', () => {
+  /** 弹框里的草稿：就是 `newProfile` 造出来的那份（名字已按引擎预填） */
+  const draft = (kind: SqlKind = 'postgres'): SqlProfile => newProfile([], kind);
+
+  it('名字还停在默认名时，跟着换成新引擎的', () => {
+    const next = applyNewDialogKindSwitch([], draft('postgres'), 'mysql');
+    expect(next.name).toBe('新建 MySQL 连接');
+    // 端口那些照旧走 applyKindSwitch 的规则
+    expect(next.port).toBe(3306);
+  });
+
+  it('⚠️ 名字被用户改过就一个字都不动', () => {
+    const custom: SqlProfile = { ...draft('postgres'), name: '生产库' };
+    const next = applyNewDialogKindSwitch([], custom, 'mysql');
+    expect(next.name).toBe('生产库');
+    // 但端口照旧联动 —— 判据是同一条「只看那个字段有没有被用户动过」
+    expect(next.port).toBe(3306);
+  });
+
+  it('换过去的默认名也要去重', () => {
+    // 已经有一条「新建 MySQL 连接」了
+    const existing: SqlProfile[] = [{ ...draft('mysql'), id: 'x' }];
+    const next = applyNewDialogKindSwitch(existing, draft('postgres'), 'mysql');
+    expect(next.name).toBe('新建 MySQL 连接 2');
+  });
+
+  it('同一个引擎返回同一个引用', () => {
+    // 调用方多半在 setState 里 —— 白造一个对象会让它以为状态变了
+    const d = draft('postgres');
+    expect(applyNewDialogKindSwitch([], d, 'postgres')).toBe(d);
+  });
+
+  it('⚠️ 去重过的默认名也算默认名 ——「新建 PostgreSQL 连接 2」也要跟着换', () => {
+    // ⚠️ 这条盯的是判据的**宽度**。一开始写的是全等比较，于是第二条连接换引擎时
+    // 名字不跟着换（它被去重成「新建 PostgreSQL 连接 **2**」，和默认名不全等）——
+    // 症状是一个名字里写着 PostgreSQL 的 MySQL 连接。e2e 抓出来的。
+    const second = newProfile([{ ...draft('postgres'), id: 'x' }], 'postgres');
+    expect(second.name).toBe('新建 PostgreSQL 连接 2');
+
+    const next = applyNewDialogKindSwitch([], second, 'mysql');
+    expect(next.name).toBe('新建 MySQL 连接');
   });
 });
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __resetIdsForTest } from '../../src/shared/ids';
+import { newProfile } from '../../src/modules/redis/core/profile';
 import { RedisStore } from '../../src/modules/redis/state/store';
 import type { ConnectionGroup, ProfileStore } from '../../src/shared/connections/types';
 import type { RedisClient, RedisServices } from '../../src/modules/redis/services/types';
@@ -127,6 +128,30 @@ describe('连接档案管理', () => {
     expect(store.getSnapshot().profiles.map((p) => p.id)).toEqual([id]);
     expect(store.getSnapshot().selectedId).toBe(id);
     expect(store.selectedProfile()?.id).toBe(id);
+  });
+
+  // ------------------------------------------------- 「新建连接」弹框那条路
+
+  it('⚠️ id 只有 store 一个来源 —— 草稿那个不算数', async () => {
+    // 弹框那份草稿档案**自带一个 id**（给 React 当 key 用）。`createProfile`
+    // 必须把它换成自己生成的那个 —— 两个来源意味着有一天会撞，而**撞了不报错**。
+    const { store } = harness();
+    const draft = newProfile([]);
+    const id = await store.createProfile(draft);
+
+    expect(id).not.toBe(draft.id);
+    expect(store.getSnapshot().profiles[0]?.id).toBe(id);
+  });
+
+  it('弹框收集到的字段真的写进了档案', async () => {
+    const { store } = harness();
+    await store.createProfile({ name: '缓存', host: '10.0.0.5', port: 6380, db: 3 });
+
+    const saved = store.getSnapshot().profiles[0];
+    expect(saved?.name).toBe('缓存');
+    expect(saved?.host).toBe('10.0.0.5');
+    expect(saved?.port).toBe(6380);
+    expect(saved?.db).toBe(3);
   });
 
   it('新建会落盘', async () => {

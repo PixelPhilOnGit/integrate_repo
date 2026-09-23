@@ -42,6 +42,7 @@ import {
   sameConnection,
   toAuth,
   validateProfile,
+  type SshProfileInit,
 } from '../core/profile';
 import { terminalHub } from '../core/terminalHub';
 import type {
@@ -321,11 +322,20 @@ export class SshStore {
   /**
    * 新建一个连接档案。
    *
-   * `kind` 默认 `ssh` —— 原来那个「新建」按钮的行为**一个字都不变**
-   * （本地终端走它自己的按钮，见 `ConnectionTree`）。
+   * `kind` 默认 `ssh`。`init` 是「新建连接」弹框收集到的字段 —— 不传就是
+   * 纯默认值，所以**没有初值的那条路行为一个字都不变**（签名向后兼容）。
+   *
+   * ⚠️ `kind` 仍然是**位置参数**：它是唯一来源（`init` 里刻意不含它，
+   * 两个来源会打架），所以下面展开里它写在 `init` **之后**。
    */
-  async createProfile(kind: SshProfileKind = 'ssh'): Promise<string> {
-    const profile = newProfile(this.state.profiles, kind);
+  async createProfile(
+    kind: SshProfileKind = 'ssh',
+    init: SshProfileInit = {},
+  ): Promise<string> {
+    const seed = newProfile(this.state.profiles, kind);
+    // ⚠️ **`id` 和 `kind` 都必须写在展开之后**：弹框那份草稿自带一个 id
+    // （给 React 当 key 用的），漏写就会静默地和草稿共用同一个 id —— 不报错。
+    const profile: SshProfile = { ...seed, ...init, kind, id: seed.id };
     const profiles = [...this.state.profiles, profile];
     this.set({
       profiles,

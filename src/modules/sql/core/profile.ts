@@ -4,7 +4,7 @@
  * 纯函数，不碰平台也不碰 store —— 表单和高亮哪一项写错了都靠它。
  */
 
-import { nextAvailableName } from '../../../shared/connections/profiles';
+import { isDefaultName, nextAvailableName } from '../../../shared/connections/profiles';
 import { newId } from '../../../shared/ids';
 import { DEFAULT_PORT, type ConnectParams, type SqlKind, type SqlProfile } from './types';
 
@@ -165,3 +165,54 @@ export function applyKindSwitch(profile: SqlProfile, kind: SqlKind): SqlProfile 
 
   return next;
 }
+
+/**
+ * 「新建连接」弹框里换引擎：`applyKindSwitch` 之上，**名字也跟着换**。
+ *
+ * 为什么要单独加一条名字规则：`applyKindSwitch` 刻意不动 `name` —— 那是给右侧
+ * 表单用的，用户把连接起名叫「生产库」之后，换个引擎不该被改名。但弹框里的名字
+ * 多半还没被人碰过，不换的话会建出一个叫「新建 PostgreSQL 连接」的 MySQL 连接。
+ *
+ * 判据和端口 / 用户名**是同一条**：只改用户没动过的。名字还停在旧引擎的默认名
+ * 上（**含去重序号**，见 `isDefaultName`）才算「没动过」。
+ *
+ * ⚠️ 这个判据一开始写成了全等，于是第二条连接换引擎时名字不跟着换（它叫
+ * 「新建 PostgreSQL 连接 **2**」，和默认名不全等）—— e2e 抓出来的。
+ *
+ * `existing` 是给名字去重用的 —— 换过去之后可能和已有的重名。
+ */
+export function applyNewDialogKindSwitch(
+  existing: readonly SqlProfile[],
+  draft: SqlProfile,
+  kind: SqlKind,
+): SqlProfile {
+  // 同一个引擎：原样返回**同一个引用**（调用方多半在 setState 里，白造一个对象
+  // 会让它以为状态变了）。
+  if (draft.kind === kind) return draft;
+
+  const next = applyKindSwitch(draft, kind);
+  // ⚠️ 用 `isDefaultName` 而不是全等 —— 去重过的「新建 PostgreSQL 连接 2」
+  // 也算默认名（判据写窄了的症状：第二条连接切成 MySQL 之后，名字还写着
+  // PostgreSQL。见那个函数的注释）。
+  if (!isDefaultName(draft.name, DEFAULT_NAME[draft.kind])) return next;
+
+  return {
+    ...next,
+    name: nextAvailableName(
+      existing.map((p) => p.name),
+      DEFAULT_NAME[kind],
+    ),
+  };
+}
+
+/**
+ * 新建时可以从外面带进来的字段（弹框收集到的那份）。
+ *
+ * ⚠️ **没有 `id`**：档案的 id 只该有一个来源（store 里的 `newId`）。弹框那份
+ * 草稿档案自带一个 id，但那是给 React 当 key 用的，插进来时一律丢掉 ——
+ * 两个来源意味着有一天会撞，而撞了**不报错**。
+ *
+ * ⚠️ **也没有 `kind`**：它以位置参数为准（见 `createProfile(kind, init)`），
+ * 两个来源会打架。
+ */
+export type SqlProfileInit = Partial<Omit<SqlProfile, 'id' | 'kind'>>;

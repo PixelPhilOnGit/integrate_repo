@@ -25,6 +25,7 @@ import {
   sameConnection,
   toConnectParams,
   validateProfile,
+  type SqlProfileInit,
 } from '../core/profile';
 import type {
   QueryResult,
@@ -172,8 +173,18 @@ export class SqlStore {
     if (changed && id !== null) void this.expandAndLoad(id);
   }
 
-  async createProfile(kind: SqlKind = 'postgres'): Promise<string> {
-    const profile = newProfile(this.state.profiles, kind);
+  /**
+   * 新建一个连接档案。`init` 是「新建连接」弹框收集到的字段。
+   *
+   * ⚠️ `kind` 仍然是**位置参数**：没有初值的那条路（单测、将来别的入口）它是
+   * 唯一来源，而 `init` 里刻意不含 `kind`（两个来源会打架）。所以下面那行
+   * 展开里 `kind` 写在 `init` **之后**。
+   */
+  async createProfile(kind: SqlKind = 'postgres', init: SqlProfileInit = {}): Promise<string> {
+    const seed = newProfile(this.state.profiles, kind);
+    // ⚠️ **`id` 和 `kind` 都必须写在展开之后**：弹框那份草稿自带一个 id
+    // （给 React 当 key 用的），漏写就会静默地和草稿共用同一个 id —— 不报错。
+    const profile: SqlProfile = { ...seed, ...init, kind, id: seed.id };
     const profiles = [...this.state.profiles, profile];
 
     this.set({

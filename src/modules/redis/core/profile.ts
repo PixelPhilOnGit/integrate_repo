@@ -19,6 +19,15 @@ export const DEFAULT_DB = 0;
 
 const MAX_NAME_LENGTH = 60;
 
+/**
+ * 新建时可以从外面带进来的字段（弹框收集到的那份）。
+ *
+ * ⚠️ **没有 `id`**：档案的 id 只该有一个来源（store 里的 `newId`）。弹框那份
+ * 草稿档案自带一个 id，但那是给 React 当 key 用的，插进来时一律丢掉 ——
+ * 两个来源意味着有一天会撞，而撞了**不报错**。
+ */
+export type ProfileInit = Partial<Omit<ConnectionProfile, 'id'>>;
+
 /** 新建一个连接档案，名字自动去重（「新建连接」「新建连接 2」……） */
 export function newProfile(existing: readonly ConnectionProfile[]): ConnectionProfile {
   return {
