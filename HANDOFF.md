@@ -16,6 +16,10 @@
 **七个都能用了。** 助手在 2026-09-22 那一轮接上了**工具**和**对话界面**：
 能真的读文件、改文件、跑命令，要动东西之前会先弹审批。见下面「助手」两节。
 
+⚠️ **第八个模块（「接口调试」，类似 Postman）正在做** —— 内核 crate
+（`src-tauri/request/`）已经抽出来并推送了，泛化和前端还没建。
+见下面「接口调试（在做）」那一节。
+
 - SSH 是第一个**流式**模块，也是第一个带安全决策（TOFU）的模块
 - 智能体会话是第一个**起用户本机进程**的模块，也是第一个**改工作区之外的文件**的模块
   （往 `~/.claude/settings.json` 和 `~/.codex/config.toml` 里装状态钩子 ——
@@ -421,6 +425,80 @@ PowerShell / Git Bash 取决于装没装 Git Bash，**同一个字符串语义�
 而不是假装存上了 —— e2e 专门验了这条。
 
 ---
+
+### 接口调试（在做，**内核 crate 已推送，界面一行还没有**）
+
+用户要的：「加一个 tab 页面，作用是类似 postman, 可以发各种请求，当然协议越多越好，
+http, https, ws」。拍板的两条：侧栏放**历史 + 保存的请求**（不做环境变量）、
+协议范围 **HTTP/HTTPS + WS/WSS**（不做 HTTP/2、不做裸 TCP）。
+
+#### 为什么必须先抽一个 crate
+
+现有的传输层在 `assistant/src/transport.rs`（490 行，**全仓唯一碰 socket 的产物代码**），
+而它的**形状不对**：
+
+| | 助手要的 | 调试器要的 |
+|---|---|---|
+| 方法 | POST 写死 | 任意 |
+| 响应头 | **丢掉**（只留 status） | **必须要** |
+| 请求体 | UTF-8 字符串 | 任意字节 |
+| TLS | 强制校验 + 打包根证书 | **要能关**（自签证书是天天遇到的） |
+
+复制一份会违背「把可能替换的第三方实现隔离在单文件里」的惯例，而且两份的
+**TLS provider 钉死和 Host 头怎么算迟早漂移** —— 那种漂移的后果是「偶发地连不上
+某个内网地址」，最难查的一类。所以抽成 `src-tauri/request/`，助手反过来依赖它。
+
+#### 第一步：纯搬迁（已完成，见提交历史里的 `49204c7`）
+
+⚠️ **验收标准是「`assistant/tests/provider_stream.rs` 和 `assistant_commands.rs`
+零改动，而测试全绿」** —— 已达成。做得到这一点靠的是那两个文件本来就**完全自包含**
+（grep 过，没有任何 `crate::` 引用），所以 `git mv` 之后原样能编，
+assistant 那边留一对 `pub use` 兼容壳。
+
+**泛化留到下一步**，这样「搬」和「改」各自能单独回滚。
+
+新 crate 的隔离边界**比在 assistant 里更细**：
+
+```
+tls.rs    ← rustls（HTTP 和 WS **共用同一份 ClientConfig**，这是重点）
+http.rs   ← hyper + socket
+sse.rs    ← 从 assistant 原样搬过来的（纯字节状态机）
+ws.rs     ← tokio-tungstenite（最后一步才加）
+```
+
+#### 剩下的（按顺序）
+
+1. **泛化**：`HttpRequest { method, url, headers, body: Vec<u8>, options }`、
+   `ErrorKind`（Invalid / Connect / Tls / Timeout / Idle / Redirect / Protocol / Body）、
+   `HttpResponse` 补上响应头 / 耗时 / 最终 URL，以及 `read_all(max)` 作为
+   「整块拿到」的**消费者选择**（Rust 侧只有一条路：永远流式）。
+   ⚠️ 助手那 5 个文件会坏，但改动**编译器能一一指出来**。
+2. **`tls.rs` + 证书开关**。⚠️ **HTTP 和 WS 共用同一份 ClientConfig** ——
+   树里 ring 和 aws-lc-rs **两个后端都在**，provider 自动挑会返回 `None` 然后在首个
+   HTTPS 请求 panic（编译期看不出来），而 tungstenite 自建 config 是**同一个坑的
+   第二个入口**。收在一个文件里就再也不会有第三个。
+3. **命令层**。三条踩过的坑要照抄：⚠️ Channel 必须 move 进转发任务（否则前端立刻
+   收到 `{end:true}`、界面一片空白且不报错）；⚠️ 转发任务**无论从哪条路退出都要发
+   一条终态事件**（否则前端 `running` 永远卡住）；⚠️ **2 MiB 转发上限**（否则一个
+   1 GB 的下载会把 webview 打爆 —— 超了就停转发 + drop receiver，Rust 侧 reader
+   看到 send 失败会真的把连接收掉）。
+4. **前端骨架**：模块 id `request`、name「接口调试」，插在占位模块**之前** → 它是
+   Ctrl+8、占位是 Ctrl+9。⚠️ 别忘了 `shell.spec.ts` 里「有几个模块」那个**故意会红**
+   的断言（还有 `Ctrl+1..8` 那条）。
+5. **主区 + Inspector + 侧栏**。Toolbar 槽位此前只有顺序图在用 ——
+   「方法 + URL + 发送」正好是它。
+6. **WS**（最后一步、**可以整块砍掉**）：加 `tokio-tungstenite` + `utf-8` 两个小包
+   （已确认能从镜像拉到，0.30.0，TLS 完全复用现有栈）。⚠️ HTTP 那一半**不依赖它**。
+
+#### 两条会咬人的细节（动手前先记着）
+
+* **跳转要手写**（不引 `url` crate —— 它会拉 `idna`/`icu_*`，对 `-p devtoolkit-request`
+   单独构建是实打实的新编译）。301/302/303 → 改成 GET、丢 body；307/308 → 原样保留。
+   ⚠️ **跨主机跳转必须丢掉 `authorization` / `cookie` / `proxy-authorization`**
+   （curl 和 Postman 都这么做）—— 安全默认，要有专门的测试。
+* **保留头 sanitize 收在一处**：用户显式给的 `host` **覆盖**我们算的；
+   `content-length` / `transfer-encoding` **一律丢掉**（hyper 自己管，
+   两边都设会得到一个看不懂的 hyper 错误）。
 
 ## 怎么跑起来
 
@@ -1421,6 +1499,22 @@ tauri-plugin-store 用的是 `app_data_dir`）。那份 `*.json` 可以直接预
 3. **cargo 镜像不用配** —— `/root/.cargo/config` 早就有阿里云镜像了。
 4. 系统里跑着一个 apt 装的 `mysqld`（监听 3306）和一个系统 `sshd`（监听 22），
    不是测试起的。测试用的实例都带 `/tmp/devtoolkit-*-test-*` 标记，好区分。
+5. **2026-09-23：加挂了一块 50G 的盘，挂在 `src-tauri/target` 上**
+   （`/dev/vdb`，写进 `/etc/fstab`、带 `nofail`）。根盘只有 79G，而 target 一度涨到
+   **48G** —— 磁盘满了之后失败的样子**和磁盘毫无关系**（见下面「数据库测试夹具」
+   那节开头那条，这次又是 ClickHouse 容器起不来、报的是「90s 内没有开始服务」）。
+
+   ⚠️ **两个数字值得记**：
+   * 那个 target 搬走之前是 **48G，全量重编之后只有 8.8G** —— cargo 从不清理旧版本
+     的产物，所以「重编一次」本身就能回收好几倍空间；
+   * **48G 塞不进 49G 的盘**（ext4 还要留 5% 给 root），所以最后是**重编**而不是搬。
+     盘用 `mkfs.ext4 -m 0` 格式化的 —— 它只放编译产物，不需要那个保留区。
+6. **Vitest 会在 `/tmp` 里留 SSR 转换缓存**：20 字符随机名的目录，里面一个 `ssr/`，
+   装的是 sha1 命名的模块缓存。**每次跑 `npm test` 都可能留一个** ——
+   2026-09-23 清的时候积了 **183 个**（6 天的量）。以后 `df -h` 报警先看这个：
+   ```bash
+   for d in /tmp/*/; do [ -d "$d/ssr" ] && rm -rf "$d"; done   # ⚠️ 别动 /tmp/claude-*
+   ```
 
 ---
 
@@ -1515,14 +1609,22 @@ playwright 跑的是**浏览器版**：各模块的 `services/web.ts` 内存假�
 
 ## 下一步
 
-**这一轮（2026-09-22）做完的**：助手从「只有配置」到**能用**。
+**2026-09-23 那一轮做完的**：
 
-- **真 tool runner**（`assistant/src/tools/`）—— 五个工具，路径全走
-  `Workspace::resolve()` 那道唯一的闸门。详见上面「助手」那节的工具和审批粒度。
-- **transcript 落盘**（`assistant/src/transcript.rs`）—— SQLite + `user_version`
-  迁移，每轮一次 INSERT（`panic = "abort"` 下不攒）。
-- **命令层 + 对话界面**（`assistant_commands.rs` + 前端的对话流 / 审批弹层）。
-- **版本号的漂移根治** —— 见下面「发版」那节。
+- **接口调试模块的第 1 步** —— 传输层抽成 `devtoolkit-request`（纯搬迁，
+  验收标准「`provider_stream.rs` 零改动」达成）。**剩下的在上面那一节。**
+- **新建连接改成交互式弹框** —— 三个连接模块都弹框收集关键字段；
+  SSH 那两个入口合并成一个（原来那两个按钮**替用户决定了种类**）。
+- **助手配置可以有多份**（各用各的 key），带一次**幂等的钥匙串迁移**。
+- **剪贴板**：Ctrl+V 在三个平台上都不通、三个平台三种原因 —— 见「踩过的坑」⑮。
+- **磁盘**：加挂 50G 盘 + 清掉积了 6 天的 vitest 缓存 —— 见「环境变更」5、6。
+
+**接着做（按顺序）**：
+
+1. **接口调试剩下的**（上面那一节有完整清单，从「泛化」开始）。
+2. **Ctrl+± 字体缩放**（用户提的）—— 现在**没有任何**改字体大小的入口。
+3. **画布上「选中元素 → Ctrl+C」** —— 画布上「点空白 = 平移画布、点元素 = 拖它」，
+   所以「拖选一段文字」在那里**没有位置**，复制只能以**选中的元素**为单位。
 
 **助手剩下的**：
 
@@ -1708,19 +1810,20 @@ v1 接受这个重复 —— 合起来要跨模块共享一份「已知主机」
 | | 行数 |
 |---|---|
 | 前端 `src/` | ~35k |
-| Rust `src-tauri/`（含各内核 crate） | ~31k |
-| ├ app crate（`src-tauri/src/`） | ~2.4k |
-| ├ 八个内核 crate | ~29k |
-| └ 其中助手（`assistant/`） | ~10k |
+| Rust `src-tauri/`（含各内核 crate） | ~32k |
+| ├ app crate（`src-tauri/src/`） | ~2.5k |
+| ├ **九个**内核 crate | ~30k |
+| ├ 其中助手（`assistant/`） | ~9k |
+| └ 其中请求（`request/`） | ~1k（**刚搬过来，还没泛化**） |
 | 前端测试 `tests/` | ~17k |
 
 **测试数量**（`cargo test` + `npm test` + `npx playwright test`）：
 
 | | 条数 |
 |---|---|
-| Rust 内核（八个 crate 合计） | 528 |
-| 前端单元（vitest） | 1059 |
-| 端到端（playwright） | 207 |
+| Rust 内核（**九个** crate 合计） | 534 |
+| 前端单元（vitest） | 1113 |
+| 端到端（playwright） | 218 |
 
 ⚠️ 那三组**测的不是一回事**，别只看总数：Rust 那组验纯逻辑和真 socket/真进程，
 vitest 验纯 TS，playwright 跑的是**浏览器版**（各模块的 `services/web.ts` 内存
