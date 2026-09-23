@@ -14,7 +14,7 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
-exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "target/**"]
+exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "store/**", "tasks/**", "request/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
@@ -82,13 +82,21 @@ devtoolkit-store = { path = "store" }
 #   * assistant 跑的是**我们自己的循环** —— 这正是「上下文策略可配」能成立的原因。
 devtoolkit-assistant = { path = "assistant" }
 
+# 请求内核（HTTP/HTTPS + WebSocket 客户端）。同样不依赖 tauri。
+#
+# 它原来是 assistant 里的 `transport.rs`（全仓唯一碰 socket 的产物代码），
+# 抽出来是因为「接口调试」模块要的形状不一样（任意方法、完整响应头、
+# 任意字节 body、能关掉的证书校验）—— 理由写在那个 crate 的 lib.rs 头部。
+# **两边的 TLS 配置从此只有一份**（`request/src/tls.rs`）。
+devtoolkit-request = { path = "request" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
+members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request"]
 resolver = "2"
 
 # ⚠️ **Rust 侧的版本号只有这一处。** 各个 crate 一律写 `version.workspace = true`。

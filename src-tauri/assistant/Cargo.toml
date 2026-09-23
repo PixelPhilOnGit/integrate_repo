@@ -63,42 +63,15 @@ tokio = { version = "1", features = ["sync", "macros", "net", "io-util", "rt", "
 
 # ---------------------------------------------------------------- HTTP / TLS
 #
-# ⚠️ **这一批不是新增包** —— 版本全部对上 `Cargo.lock` 里已有的那一份
-# （它们本来是 `devtoolkit-sql` 的 mongodb 拉进来的，走 `rustls/ring` 那条路）。
-# 实测过：`reqwest` 在桌面端**一次都没编译过**（它只挂在 tauri 的 Android/iOS
-# 那个 cfg 下面），所以「用 reqwest 不新增依赖」是个误判；手写这一层才是。
+# ⚠️ **这一批已经搬进 `devtoolkit-request` 了**（连同它们那一大段注释 ——
+# 「provider 必须显式钉死」那条是这里最贵的知识，现在住在
+# `request/Cargo.toml` 和 `request/src/tls.rs` 的注释里）。
 #
-# 只声明用得到的能力，别蹭 feature union（别人改了 feature 你会莫名编译失败）。
-hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"] }
-# `TokioIo` 这个适配器在 `tokio` feature 下面（不是 `rt` —— 那个名字是 tokio 自己的）。
-hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
-http-body-util = "0.1.5"
-bytes = "1.12.1"
-
-# TLS。用 rustls 而**不是** native-tls：后者会把 openssl 拖进来（系统依赖、
-# 跨平台版本差异、Windows 上还要装），而 rustls 是纯 Rust 且已经在树里。
-tokio-rustls = "0.26.5"
-#
-# ⚠️ **provider 必须显式钉住，而且要把 feature 也开出来。** 两个坑叠在一起：
-#
-# 1. rustls 的加密后端是按 crate feature 自动挑的。**同时开着 `ring` 和
-#    `aws-lc-rs` 时那个自动挑会返回 `None`**，然后在第一次真正发 HTTPS 请求时
-#    panic —— 编译期完全看不出来。
-# 2. 而 feature **在"单独构建这个 crate"和"整个工作区构建"时不一样**：
-#    mongodb（devtoolkit-sql 拉的）会开 `rustls/ring`，可 `-p devtoolkit-assistant`
-#    的依赖图里根本没有 mongodb。同一份代码两种构建方式行为不同，是最难查的一类。
-#
-# 所以这里 `default-features = false`，自己把要用的能力列全。
-#
-# ⚠️ **但它挡不住 aws-lc-rs** —— feature 是叠加的，别的 workspace 成员
-# （mongodb / tauri）照样会把它拉进来（实测过：构建产物里两个后端都在）。
-# 它只能保证「单独构建这个 crate 时不去编译那个 C 依赖」。
-# 真正的保险是**代码里显式指定**：`builder_with_provider(ring)`。
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-# 根证书。用打包进来的那一份，**不读系统的证书库** —— 读系统的话
-# 行为会跟着用户机器变（企业 MITM 代理、自签证书），而失败的样子
-# 是"我这儿好好的，他那儿连不上"。
-webpki-roots = "1.0.9"
+# 搬走的理由不是「两个模块都要用」，而是形状不对：这一层是给
+# 「POST 一段 JSON 拿 SSE 流」定制的，而「接口调试」模块要的是任意方法、
+# 完整响应头、任意字节 body、以及能关掉的证书校验。复制两份的话，
+# TLS 的 provider 钉死和 Host 头怎么算迟早漂移。
+devtoolkit-request = { path = "../request" }
 
 [dev-dependencies]
 # 测试要 #[tokio::test]（循环是 async 的）；被测代码自己不起运行时。

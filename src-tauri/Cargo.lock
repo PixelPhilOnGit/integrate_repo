@@ -1345,6 +1345,7 @@ dependencies = [
  "devtoolkit-assistant",
  "devtoolkit-core",
  "devtoolkit-redis",
+ "devtoolkit-request",
  "devtoolkit-sql",
  "devtoolkit-ssh",
  "devtoolkit-store",
@@ -1376,19 +1377,13 @@ dependencies = [
 name = "devtoolkit-assistant"
 version = "0.9.3"
 dependencies = [
- "bytes",
  "devtoolkit-core",
- "http-body-util",
- "hyper",
- "hyper-util",
+ "devtoolkit-request",
  "rusqlite",
- "rustls",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "tokio-rustls",
- "webpki-roots",
 ]
 
 [[package]]
@@ -1407,6 +1402,20 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "devtoolkit-request"
+version = "0.9.3"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
+ "webpki-roots",
 ]
 
 [[package]]

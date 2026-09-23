@@ -124,6 +124,13 @@ jobs:
         working-directory: src-tauri
         run: cargo test --package devtoolkit-assistant --locked
 
+      # 请求内核（HTTP/WS 客户端）。和助手那组同一个性质：
+      # **不需要任何服务端** —— 集成测试打的是自己起的假 HTTP/WS 服务器。
+      # ⚠️ 加新 crate 必须同步加到这里，否则它的测试**静默不跑**。
+      - name: 跑测试（请求内核）
+        working-directory: src-tauri
+        run: cargo test --package devtoolkit-request --locked
+
       # SSH：**只跑不需要 root 的那两组**。
       #
       #   session / registry —— 用 russh 自己的服务端在进程内起一个假服务器，
