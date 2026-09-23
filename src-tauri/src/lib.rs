@@ -17,6 +17,7 @@ mod health;
 mod kv_commands;
 mod local_commands;
 mod redis_commands;
+mod request_commands;
 mod secret_commands;
 mod sql_commands;
 mod ssh_commands;
@@ -172,6 +173,10 @@ pub fn run() {
             task_commands::tasks_delete,
             task_commands::tasks_progress,
             task_commands::tasks_add_progress,
+            // 「接口调试」：发一个请求，响应走 Channel 流式回来。
+            // 所有结局都在通道里（见 request_commands.rs 的头部）
+            request_commands::request_send,
+
             kv_commands::kv_open,
             kv_commands::kv_get,
             kv_commands::kv_set,

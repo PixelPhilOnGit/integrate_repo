@@ -24,12 +24,15 @@ test('图标栏列出所有注册的模块', async ({ page }) => {
 
   // 有几个模块就有几个图标（加模块时**这里就该红** —— 那是故意的：
   // 它逼你想一遍新模块在图标栏里的位置和 Ctrl+数字的顺序）
-  await expect(rail.getByRole('tab')).toHaveCount(8);
+  await expect(rail.getByRole('tab')).toHaveCount(9);
   await expect(page.getByTestId('module-diagram')).toBeVisible();
   await expect(page.getByTestId('module-redis')).toBeVisible();
   await expect(page.getByTestId('module-sql')).toBeVisible();
   await expect(page.getByTestId('module-ssh')).toBeVisible();
   await expect(page.getByTestId('module-agents')).toBeVisible();
+  // ⚠️ 这两个的顺序是**刻意的**：接口调试排在占位模块之前 ——
+  // 占位模块是「加模块只要一个目录 + 一行」的活样本，永远该排最后
+  await expect(page.getByTestId('module-request')).toBeVisible();
   await expect(page.getByTestId('module-devplaceholder')).toBeVisible();
 });
 
@@ -59,7 +62,7 @@ test('当前模块在图标栏上有选中标记', async ({ page }) => {
   await expect(page.getByTestId('module-diagram')).toHaveAttribute('aria-selected', 'false');
 });
 
-test('Ctrl+1..8 也能切换模块', async ({ page }) => {
+test('Ctrl+1..9 也能切换模块', async ({ page }) => {
   // 序号就是注册表里的顺序
   await page.keyboard.press('Control+2');
   // 认主区的根节点，不是命令台 —— 命令台只是 Redis 模块里的一个页签
@@ -80,8 +83,11 @@ test('Ctrl+1..8 也能切换模块', async ({ page }) => {
   await page.keyboard.press('Control+7');
   await expect(page.getByTestId('assistant-main')).toBeVisible();
 
-  // 占位模块排最后（注册表顺序 = 图标栏顺序 = Ctrl+数字的顺序）
   await page.keyboard.press('Control+8');
+  await expect(page.getByTestId('request-main')).toBeVisible();
+
+  // 占位模块排最后（注册表顺序 = 图标栏顺序 = Ctrl+数字的顺序）
+  await page.keyboard.press('Control+9');
   await expect(page.getByTestId('placeholder-main')).toBeVisible();
 
   await page.keyboard.press('Control+1');

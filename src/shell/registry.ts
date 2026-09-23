@@ -13,6 +13,7 @@ import { assistantModule } from '../modules/assistant';
 import { diagramModule } from '../modules/diagram';
 import { devPlaceholderModule } from '../modules/devplaceholder';
 import { redisModule } from '../modules/redis';
+import { requestModule } from '../modules/request';
 import { sqlModule } from '../modules/sql';
 import { sshModule } from '../modules/ssh';
 import { tasksModule } from '../modules/tasks';
@@ -26,6 +27,9 @@ export const MODULES: readonly Module[] = [
   agentsModule,
   tasksModule,
   assistantModule,
+  // ⚠️ **插在占位模块之前**：注册表顺序 = 图标栏顺序 = Ctrl+数字的顺序，
+  // 占位模块是「验证加模块只要一个目录 + 一行」用的，永远该排最后
+  requestModule,
   devPlaceholderModule,
 ];
 

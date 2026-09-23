@@ -3123,3 +3123,418 @@ textarea:focus {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* --------------------------------------------------------- 接口调试模块
+ *
+ * 只追加。用到的类一律 `rd-req-` 开头（先 grep 过：这个前缀之前没有），
+ * 和上面几节共用同一套变量（--panel / --border / --accent / --muted / --danger）。
+ *
+ * ⚠️ `.rd-btn-primary` 在 `.rd-req-url-group` 里**作用域内**定义了一条 ——
+ * 全局那条类名（`rd-btn-primary`）全仓 7 个 tsx 挂着但 CSS 里一个字都没有
+ *（按钮样式一直走 `button` 元素选择器，所以那些「主按钮」和普通按钮长得一样）。
+ * 全局补一条会顺手改掉别的模块弹框的外观，所以这里只给自己的工具栏加，
+ * 见 HANDOFF「新建连接是个弹框」那节末尾。
+ */
+
+/* 上：请求   下：响应
+ *
+ * ⚠️ `min-width: 0` 和 `min-height: 0` 一个都不能少（见 HANDOFF 里那条：
+ * flex 子项的 min-width 默认是 auto，里面有个宽东西就能一路把整页撑开）。
+ * 响应体是任意长的单行字符串，正是会撑开的那一类。 */
+.rd-req-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rd-req-url-group {
+  flex: 1;
+  min-width: 0;
+  gap: 6px;
+}
+
+.rd-req-method {
+  width: 96px;
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
+}
+
+.rd-req-url {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rd-req-url-group .rd-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  padding: 3px 14px;
+}
+
+.rd-req-url-group .rd-btn-primary:disabled {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* 「为什么不能发」那句话。⚠️ 它和按钮的禁用条件是同一个判断（`canSend`） */
+.rd-req-blocker {
+  color: var(--danger);
+  font-size: 12px;
+  flex: none;
+}
+
+/* ---------------------------------------------------------------- 请求编辑器 */
+
+.rd-req-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 45%;
+  min-height: 90px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-req-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+}
+
+/* 一行头：开关 / 名字 / 值 / 删 */
+.rd-req-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.rd-req-header-toggle {
+  flex: none;
+}
+
+.rd-req-header-name {
+  flex: 0 0 180px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.rd-req-header-value {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* 「加一行」：一整条虚线框，看起来就是「这儿能加东西」 */
+.rd-req-add {
+  margin-top: 4px;
+  padding: 5px;
+  flex: none;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 5px;
+}
+
+.rd-req-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rd-req-body-input {
+  flex: 1;
+  min-height: 120px;
+  resize: none;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.rd-hint code {
+  padding: 0 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+/* ---------------------------------------------------------------- 响应区 */
+
+.rd-req-response {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 55%;
+  min-height: 90px;
+}
+
+.rd-req-status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: none;
+  padding: 6px 10px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 状态码那粒标签。色档按 2xx/3xx/4xx/5xx 分，另外两种是「失败」和「保存的请求」 */
+.rd-req-tag {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.rd-req-tag.is-ok {
+  color: #1f7a3d;
+  border-color: #1f7a3d;
+}
+
+.rd-req-tag.is-redirect {
+  color: #8a6d1f;
+  border-color: #8a6d1f;
+}
+
+.rd-req-tag.is-client,
+.rd-req-tag.is-failed {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.rd-req-tag.is-server {
+  color: #a03b6b;
+  border-color: #a03b6b;
+}
+
+.rd-req-tag.is-saved {
+  min-width: 62px;
+  text-align: center;
+}
+
+/* 深色下那几个色号太暗，提亮一档 */
+:root[data-theme='dark'] .rd-req-tag.is-ok {
+  color: #6dd28f;
+  border-color: #6dd28f;
+}
+
+:root[data-theme='dark'] .rd-req-tag.is-redirect {
+  color: #e0c268;
+  border-color: #e0c268;
+}
+
+:root[data-theme='dark'] .rd-req-tag.is-server {
+  color: #e58cb4;
+  border-color: #e58cb4;
+}
+
+.rd-req-response-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px;
+}
+
+.rd-req-response-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 撞上 2 MiB 上限那条横幅：它是个**说明**，不是错误 —— 用警告色描边 */
+.rd-req-notice {
+  flex: none;
+  margin: 6px 10px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--danger);
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.rd-req-error {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  margin: 6px 10px 0;
+  padding: 7px 9px;
+  border: 1px solid var(--danger);
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* 证书开关开着时的红字（在检查器里） */
+.rd-req-danger {
+  padding: 7px 9px;
+  border: 1px solid var(--danger);
+  border-radius: 5px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.rd-req-binary .rd-muted {
+  margin-bottom: 6px;
+}
+
+.rd-req-binary pre {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 响应头的两列（名字 / 值） */
+.rd-req-kv {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-req-kv-name {
+  flex: 0 0 180px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.rd-req-kv-value {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.rd-req-redirect {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+/* ---------------------------------------------------------------- 侧栏 */
+
+/* 小块标题（「已保存」「历史」） */
+.rd-req-section {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 3px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: none;
+}
+
+/* 看起来像链接的按钮（「清空」） */
+.rd-req-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* 历史 / 保存的请求，一行 */
+.rd-req-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px 5px 10px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.rd-req-row:hover {
+  background: var(--accent-soft);
+}
+
+.rd-req-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.rd-req-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rd-req-row-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rd-req-row-title b {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.rd-req-row-meta {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 行上那个 ×。默认**不显示** —— 历史列表里每行挂一个叉，扫起来很吵 */
+.rd-req-row-x {
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 4px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.rd-req-row:hover .rd-req-row-x {
+  visibility: visible;
+}
+
+.rd-req-row-x:hover {
+  color: var(--danger);
+}
+
+/* 「这条带着凭据类的头」那个 ⚠ */
+.rd-req-warn {
+  flex: none;
+  color: var(--danger);
+  font-size: 11px;
+}
+
+/* 侧栏底部那句实话（明文存在本机的提醒） */
+.rd-req-hint {
+  padding: 10px;
+  font-size: 11px;
+}
