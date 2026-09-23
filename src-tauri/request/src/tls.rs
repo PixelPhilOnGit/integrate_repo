@@ -25,8 +25,27 @@
 //! 内网自签证书的服务、本地开发服务器 —— 调接口时天天遇到。界面上的开关
 //! **带红字提示**，而且默认关着。
 //!
-//! ⚠️ 它**只跳过证书链的验证，不跳过签名验证**：拿别人的证书来冒充仍然会被挡下。
-//! 那是有意的 —— 一个连签名都不看的开关，等于把 TLS 降级成明文。
+//! ## ⚠️⚠️ 它到底跳过了什么（这一段改过一次，之前写少了一半）
+//!
+//! 我们换掉的是 [`ServerCertVerifier::verify_server_cert`] 这**一个**回调，
+//! 而 rustls 在那个函数里做**两件事**（读过 `webpki/server_verifier.rs`）：
+//!
+//! 1. `verify_server_cert_signed_by_trust_anchor_impl` —— 链：这张证书是不是
+//!    可信 CA 签的；
+//! 2. `verify_server_name` —— 名：这张证书是不是**发给这个主机的**。
+//!
+//! 两件都在它里面，所以开关一开**两件都不查了**。原来这里的注释只写了第 1 条，
+//! 还顺手得出「拿别人的证书来冒充仍然会被挡下」—— **那是错的**：
+//! 名字不查之后，中间人**自己生成一张自签证书**就能冒充任何一个域名。
+//!
+//! 签名验证（[`ServerCertVerifier::verify_tls13_signature`]）确实还转发给内层，
+//! 但它证的是「对端手里有**这张证书**对应的私钥」，**不是身份** ——
+//! 它挡的只是「照抄一张证书、拿不到私钥」这一种。
+//!
+//! 一句话：**开着它等于接受任何人的证书**。所以界面上那句红字写的是
+//! 「中间人能看到和改掉全部内容」，不是「只影响自签证书」。
+//! （这条有测试钉着：`tests/tls_self_signed.rs` —— 一张**主机名对不上**的
+//! 自签证书，开关打开时必须**通过**。那是这个开关的真实代价。）
 
 use std::sync::Arc;
 
@@ -38,7 +57,8 @@ use rustls::{DigitallySignedStruct, SignatureScheme};
 
 /// 建一份客户端 TLS 配置。**HTTP 和 WS 都走它。**
 ///
-/// `accept_invalid_certs` 见模块文档（只跳过链验证，不跳过签名）。
+/// `accept_invalid_certs` 见模块文档 —— ⚠️ 它跳过的是**链和主机名两样**，
+/// 不是「只跳链」。
 ///
 /// 返回 `Err(String)` 而不是 crate 的错误类型：这个文件不该认识 `HttpError`
 /// （WS 那边也有自己的错误类型），调用方自己包一层。
@@ -61,7 +81,7 @@ pub fn client_config(accept_invalid_certs: bool) -> Result<Arc<rustls::ClientCon
 
         builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(SkipChainVerification(inner)))
+            .with_custom_certificate_verifier(Arc::new(TrustAnyCert(inner)))
             .with_no_client_auth()
     } else {
         builder.with_root_certificates(root_store()).with_no_client_auth()
@@ -81,14 +101,19 @@ fn root_store() -> rustls::RootCertStore {
     roots
 }
 
-/// 「跳过证书链验证」的包装器。
+/// 「谁的证书都收」的包装器。
 ///
-/// ⚠️ **它只把 `verify_server_cert` 换成恒真**，签名验证**转发给内层** ——
-/// 所以「拿一张别的网站的合法证书来冒充」仍然会被挡下。见模块文档。
+/// ⚠️ 名字从前叫 `SkipChainVerification`，**改掉是因为那个名字说的是假的**：
+/// 它把 `verify_server_cert` 换成了恒真，而 rustls 在那个回调里同时做
+/// **链验证**和**主机名校验** —— 见模块文档那段（名字少说了一半，害得注释
+/// 也跟着错了一半：冒充是挡不住的）。
+///
+/// 签名验证**转发给内层**：它证的是「对端手里有这张证书对应的私钥」，
+/// 挡住的是「照抄一张证书」那一种，**不是身份**。
 #[derive(Debug)]
-struct SkipChainVerification(Arc<WebPkiServerVerifier>);
+struct TrustAnyCert(Arc<WebPkiServerVerifier>);
 
-impl ServerCertVerifier for SkipChainVerification {
+impl ServerCertVerifier for TrustAnyCert {
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
@@ -97,7 +122,8 @@ impl ServerCertVerifier for SkipChainVerification {
         _ocsp_response: &[u8],
         _now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        // 唯一的让步：链不查了（自签证书就是卡在这一步）。
+        // 唯一的让步：**链和主机名都不查了**（自签证书卡在前者，
+        // 内网 IP 上的证书卡在后者）。签名那两条在上面转发给内层。
         Ok(ServerCertVerified::assertion())
     }
 
@@ -130,22 +156,22 @@ mod tests {
 
     /// 两种模式都建得出来，而且**拿得到握手里要用的那几样东西**。
     ///
-    /// ⚠️ 这条测的不是「能不能连上」（那要真证书，见 `tests/http_over_socket.rs`
-    /// 头部那段），它挡的是另一半：**加密后端没钉死时，
+    /// ⚠️ 这条测的不是「能不能连上」（那在 `tests/tls_self_signed.rs` 里，
+    /// 用真证书真握手），它挡的是另一半：**加密后端没钉死时，
     /// `builder_with_provider` 之外的那条路会在第一次握手时 panic** ——
     /// 编译期看不出来，而这里至少能在毫秒级单测里证明
-    /// 「配置建得出来、verifier 在里面、密码套件列表非空」。
+    /// 「配置建得出来、verifier 在里面」。
     ///
     /// 用 `Debug` 形态断言是刻意的：`ClientConfig` 内部结构不对外，
     /// 而我们要的正是「里面塞的是我们那个包装器」这件事。
     #[test]
     fn 两种模式都建得出配置() {
         let strict = client_config(false).expect("严格校验那份建不出来");
-        assert!(!format!("{strict:?}").contains("SkipChainVerification"));
+        assert!(!format!("{strict:?}").contains("TrustAnyCert"));
 
         let lax = client_config(true).expect("跳过链校验那份建不出来");
         assert!(
-            format!("{lax:?}").contains("SkipChainVerification"),
+            format!("{lax:?}").contains("TrustAnyCert"),
             "开了开关却没换上我们的校验器"
         );
     }

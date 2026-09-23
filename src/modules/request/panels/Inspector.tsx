@@ -9,9 +9,10 @@
  *
  * # 证书那个开关为什么必须有红字
  *
- * ⚠️ 它**只跳过证书链校验，不跳过签名校验**（拿别人的合法证书来冒充仍然会被挡下，
- * 见 `request/src/tls.rs`）。即便如此，它关了之后**中间人**就能看到全部内容 ——
- * 所以这里写清楚，而且默认是关的。
+ * ⚠️ **开着它等于接受任何人的证书**（链和主机名都不查了，见
+ * `request/src/tls.rs` 模块文档那段 —— 这里原来写着「只跳过链、冒充挡得住」，
+ * 是错的：名字不查之后，中间人自己签一张就能冒充任何一个域名）。
+ * 所以红字写的是「中间人能看到和改掉全部内容」，默认关着。
  */
 
 import { useState, type ReactNode } from 'react';
@@ -118,8 +119,9 @@ export function RequestInspectorView({ state, store }: RequestInspectorProps): R
           </label>
           {opts.acceptInvalidCerts && (
             <div className="rd-req-danger" data-testid="request-insecure-warning">
-              ⚠️ 这一条开着：证书链不校验了，中间人能看到全部内容。
-              内网自签证书调完就关掉。签名仍然校验（拿别人的证书冒充挡得住）。
+              ⚠️ 这一条开着的时候，<b>谁的证书都算数</b>（不只自签的：主机名对不上
+              也放行）—— 中间人能看到、也能改掉全部内容。
+              内网那个自签服务调完就关掉。
             </div>
           )}
         </div>
