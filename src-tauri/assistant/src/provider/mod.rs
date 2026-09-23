@@ -16,46 +16,72 @@ pub mod openai;
 
 use crate::session::{EventSink, ProviderError, RunEvent};
 use crate::sse::Frame;
-use crate::transport::{Transport, TransportRequest};
+use crate::transport::{ErrorKind, HttpRequest, HttpTransport};
 use crate::turn::{Delta, Turn, TurnAccum};
+
+/// 非 2xx 时，最多从响应体里读多少字节当错误说明。
+///
+/// ⚠️ 必须有上限：错误正文是**对端说了算**的长度，放一个 1 GB 的进来
+/// 就是一次内存事故。64 KiB 足够装下任何一家的错误 JSON（它们的原话都很短）。
+const MAX_ERROR_BODY: usize = 64 * 1024;
 
 /// 请求体、地址、请求头都准备好了，跑一次流式请求。
 ///
 /// `translate` 由各 provider 提供：把一个 Sse 帧翻成零个或多个 [`Delta`]。
 pub(crate) async fn run_stream<T>(
     transport: &T,
-    request: TransportRequest,
+    request: HttpRequest,
     events: &EventSink,
     mut translate: impl FnMut(&Frame) -> Result<Vec<Delta>, ProviderError>,
 ) -> Result<Turn, ProviderError>
 where
-    T: Transport,
+    T: HttpTransport,
 {
-    let response = transport.post(request).await.map_err(to_provider_error)?;
+    let response = transport.send(request).await.map_err(to_provider_error)?;
 
     if !response.is_ok() {
         // ⚠️ 错误正文**要读出来**：两家都是把「key 不对」「模型名写错了」
         // 这类信息放在响应体里的，只报一个状态码等于让用户去猜。
+        //
+        // ⚠️ 传输层**不再替我们读**它了（泛化之后 4xx/5xx 的 body 也是一条
+        // 流，见 `HttpResponse::body` 的文档）—— 所以「读多少」这件事
+        // 从传输层搬到了这里，上限见 [`MAX_ERROR_BODY`]。
+        // 读不出来（连接断了）不算错：那就只剩状态码可报，和以前一样。
         let status = response.status;
-        let detail = response.error_body.unwrap_or_default();
+        let detail = response
+            .read_all(MAX_ERROR_BODY)
+            .await
+            .map(|body| String::from_utf8_lossy(&body.bytes).into_owned())
+            .unwrap_or_default();
         return Err(ProviderError {
             message: describe_status(status, &detail),
             retryable: crate::transport::status_is_retryable(status),
         });
     }
 
-    let Some(mut body) = response.body else {
-        return Err(ProviderError {
-            message: "对端返回了空响应".to_string(),
-            retryable: true,
-        });
-    };
+    // ⚠️ 泛化之后 body **永远是一条流**（不再是 `Option`）：
+    // 「4xx 有正文、2xx 有流」那个二选一是旧形状，见 `HttpResponse` 的文档。
+    let mut body = response.body;
 
     let mut sse = crate::sse::SseBuffer::new();
     let mut accum = TurnAccum::new();
 
     while let Some(chunk) = body.recv().await {
-        let bytes = chunk.map_err(to_provider_error)?;
+        let bytes = match chunk {
+            Ok(b) => b,
+            // ⚠️ **读断了（`ErrorKind::Body`）在这里不当失败** —— 这是刻意的。
+            //
+            // 很多网关（CLI 代理、自己写的转发）把 SSE 的事件吐完就直接关
+            // socket，**不发 chunked 的终止符**。传输层如实报了「字节流是被截断
+            // 结束的」（那是对的说法），但对这一层来说：一轮是不是完整，
+            // 判据在**内容**上 —— `message_stop` / `[DONE]` 到了没有、
+            // 有没有半截帧。那两个判断就在下面几行。
+            //
+            // 拿传输层的收尾方式当判据的话，那种网关上的每一次对话都会变成
+            // 「连接在响应中途断了」，而模型的原话明明已经收全了。
+            Err(e) if e.kind == ErrorKind::Body => break,
+            Err(e) => return Err(to_provider_error(e)),
+        };
         for frame in sse.push(&bytes) {
             for delta in translate(&frame)? {
                 // 边收边报 —— 界面要的是"正在打字"的效果，不是等整轮结束。
@@ -125,10 +151,18 @@ pub(crate) fn clip(s: &str) -> String {
     format!("{head}…")
 }
 
-fn to_provider_error(e: crate::transport::TransportError) -> ProviderError {
+/// 传输层的错 → provider 的错。
+///
+/// ⚠️ 「值不值得重发」现在**由错误种类推出来**（[`HttpError::is_retryable`]），
+/// 不再是构造这个错误的人当场填的一个布尔 —— 以前那个形状的问题是：
+/// 每加一个出错的地方，都要由写那行代码的人自己判断填 true 还是 false，
+/// 而「填错」在行为上只表现为「重试了/没重试」，看不出来。
+fn to_provider_error(e: crate::transport::HttpError) -> ProviderError {
+    // 先把种类问出来再搬 `message`（它是 `String`，move 之后 `e` 就没了）。
+    let retryable = e.is_retryable();
     ProviderError {
         message: e.message,
-        retryable: e.retryable,
+        retryable,
     }
 }
 

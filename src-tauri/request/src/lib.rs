@@ -44,6 +44,7 @@
 
 pub mod http;
 pub mod sse;
+pub mod tls;
 
 #[cfg(test)]
 mod wiring {

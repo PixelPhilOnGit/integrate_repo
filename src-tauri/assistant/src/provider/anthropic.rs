@@ -25,7 +25,7 @@ use crate::message::{Block, Message, Role, Usage};
 use crate::provider::{clip, parse_data, run_stream};
 use crate::session::{EventSink, Provider, ProviderError, ProviderRequest};
 use crate::sse::Frame;
-use crate::transport::{Transport, TransportRequest};
+use crate::transport::{HttpRequest, HttpTransport};
 use crate::turn::{Delta, Turn};
 
 /// Anthropic 的接口版本。**写死不要动** —— 它管的是线格式的兼容性。
@@ -57,16 +57,16 @@ impl Default for AnthropicConfig {
 
 /// Anthropic 的 provider。
 ///
-/// 泛型而不是 `dyn Transport`：那两个 trait 的方法都用了 RPITIT，
+/// 泛型而不是 `dyn HttpTransport`：那两个 trait 的方法都用了 RPITIT，
 /// 不是对象安全的。泛型在这里没有代价（调用点只实例化一次）。
-pub struct AnthropicProvider<T: Transport> {
+pub struct AnthropicProvider<T: HttpTransport> {
     transport: T,
     base_url: String,
     config: AnthropicConfig,
     api_key: String,
 }
 
-impl<T: Transport> AnthropicProvider<T> {
+impl<T: HttpTransport> AnthropicProvider<T> {
     /// 建一个。
     pub fn new(transport: T, base_url: String, config: AnthropicConfig, api_key: String) -> Self {
         AnthropicProvider {
@@ -78,7 +78,7 @@ impl<T: Transport> AnthropicProvider<T> {
     }
 
     /// 编请求。
-    pub fn build_request(&self, request: &ProviderRequest) -> Result<TransportRequest, ProviderError> {
+    pub fn build_request(&self, request: &ProviderRequest) -> Result<HttpRequest, ProviderError> {
         let body = json!({
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
@@ -94,22 +94,27 @@ impl<T: Transport> AnthropicProvider<T> {
             "output_config": { "effort": self.config.effort },
         });
 
-        Ok(TransportRequest {
-            url: join(&self.base_url, "/v1/messages"),
-            headers: vec![
+        let body = serde_json::to_string(&body).map_err(|e| ProviderError {
+            message: format!("请求编不出来：{e}"),
+            retryable: false,
+        })?;
+
+        // `HttpRequest::post` 就是助手要的那条捷径：POST + 一段 UTF-8 文本。
+        // 泛化之后请求**不再只能是** POST 了（接口调试要任意方法），
+        // 但这个构造器把「助手这边永远是这样」写在一处，见它的文档。
+        Ok(HttpRequest::post(
+            join(&self.base_url, "/v1/messages"),
+            vec![
                 ("content-type".into(), "application/json".into()),
                 ("x-api-key".into(), self.api_key.clone()),
                 ("anthropic-version".into(), API_VERSION.into()),
             ],
-            body: serde_json::to_string(&body).map_err(|e| ProviderError {
-                message: format!("请求编不出来：{e}"),
-                retryable: false,
-            })?,
-        })
+            body,
+        ))
     }
 }
 
-impl<T: Transport> Provider for AnthropicProvider<T> {
+impl<T: HttpTransport> Provider for AnthropicProvider<T> {
     async fn stream(
         &self,
         request: ProviderRequest,
@@ -459,11 +464,11 @@ mod tests {
     }
 
     struct NoTransport;
-    impl Transport for NoTransport {
-        async fn post(
+    impl HttpTransport for NoTransport {
+        async fn send(
             &self,
-            _r: TransportRequest,
-        ) -> Result<crate::transport::HttpResponse, crate::transport::TransportError> {
+            _r: HttpRequest,
+        ) -> Result<crate::transport::HttpResponse, crate::transport::HttpError> {
             unreachable!("测试只编请求，不发")
         }
     }
@@ -476,7 +481,7 @@ mod tests {
     fn the_request_puts_system_outside_messages() {
         // Anthropic 要求 messages 首条是 user，system 是独立字段。
         let body: Value =
-            serde_json::from_str(&provider().build_request(&req(vec![Message::user_text("hi")])).unwrap().body)
+            serde_json::from_slice(&provider().build_request(&req(vec![Message::user_text("hi")])).unwrap().body)
                 .unwrap();
         assert_eq!(body["system"], "你是助手");
         assert_eq!(body["messages"][0]["role"], "user");
@@ -487,7 +492,7 @@ mod tests {
     fn the_request_asks_for_summarized_thinking() {
         // ⚠️ 不显式要的话默认是 omitted —— 界面上会是一段莫名其妙的长空白。
         let body: Value =
-            serde_json::from_str(&provider().build_request(&req(vec![Message::user_text("hi")])).unwrap().body)
+            serde_json::from_slice(&provider().build_request(&req(vec![Message::user_text("hi")])).unwrap().body)
                 .unwrap();
         assert_eq!(body["thinking"]["display"], "summarized");
     }
@@ -502,7 +507,7 @@ mod tests {
             side_effect: crate::tool::SideEffect::Read,
         }];
         let body: Value =
-            serde_json::from_str(&provider().build_request(&r).unwrap().body).unwrap();
+            serde_json::from_slice(&provider().build_request(&r).unwrap().body).unwrap();
         // 开了它服务端才不缓冲大参数；代价是校验归我们自己做。
         assert_eq!(body["tools"][0]["eager_input_streaming"], true);
         assert_eq!(body["tools"][0]["name"], "read_file");

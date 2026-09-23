@@ -29,7 +29,7 @@ use crate::message::{Block, Message, Role, Usage};
 use crate::provider::{clip, parse_data, run_stream};
 use crate::session::{EventSink, Provider, ProviderError, ProviderRequest};
 use crate::sse::Frame;
-use crate::transport::{Transport, TransportRequest};
+use crate::transport::{HttpRequest, HttpTransport};
 use crate::turn::{Delta, Turn};
 
 /// 思考占这个桶。
@@ -58,14 +58,14 @@ impl Default for OpenAiConfig {
 }
 
 /// OpenAI 兼容的 provider。
-pub struct OpenAiProvider<T: Transport> {
+pub struct OpenAiProvider<T: HttpTransport> {
     transport: T,
     base_url: String,
     config: OpenAiConfig,
     api_key: String,
 }
 
-impl<T: Transport> OpenAiProvider<T> {
+impl<T: HttpTransport> OpenAiProvider<T> {
     /// 建一个。
     pub fn new(transport: T, base_url: String, config: OpenAiConfig, api_key: String) -> Self {
         OpenAiProvider {
@@ -77,7 +77,7 @@ impl<T: Transport> OpenAiProvider<T> {
     }
 
     /// 编请求。
-    pub fn build_request(&self, request: &ProviderRequest) -> Result<TransportRequest, ProviderError> {
+    pub fn build_request(&self, request: &ProviderRequest) -> Result<HttpRequest, ProviderError> {
         let mut messages = Vec::new();
         // system 在 Anthropic 那边是独立字段，这边是 messages 的第一条。
         // 中立模型里它不在 messages 里，所以在这里补。
@@ -100,21 +100,23 @@ impl<T: Transport> OpenAiProvider<T> {
             body["tools"] = tools_to_json(&request.tools);
         }
 
-        Ok(TransportRequest {
-            url: join(&self.base_url, "/v1/chat/completions"),
-            headers: vec![
+        let body = serde_json::to_string(&body).map_err(|e| ProviderError {
+            message: format!("请求编不出来：{e}"),
+            retryable: false,
+        })?;
+
+        Ok(HttpRequest::post(
+            join(&self.base_url, "/v1/chat/completions"),
+            vec![
                 ("content-type".into(), "application/json".into()),
                 ("authorization".into(), format!("Bearer {}", self.api_key)),
             ],
-            body: serde_json::to_string(&body).map_err(|e| ProviderError {
-                message: format!("请求编不出来：{e}"),
-                retryable: false,
-            })?,
-        })
+            body,
+        ))
     }
 }
 
-impl<T: Transport> Provider for OpenAiProvider<T> {
+impl<T: HttpTransport> Provider for OpenAiProvider<T> {
     async fn stream(
         &self,
         request: ProviderRequest,
@@ -426,11 +428,11 @@ mod tests {
     use super::*;
 
     struct NoTransport;
-    impl Transport for NoTransport {
-        async fn post(
+    impl HttpTransport for NoTransport {
+        async fn send(
             &self,
-            _r: TransportRequest,
-        ) -> Result<crate::transport::HttpResponse, crate::transport::TransportError> {
+            _r: HttpRequest,
+        ) -> Result<crate::transport::HttpResponse, crate::transport::HttpError> {
             unreachable!("测试只编请求，不发")
         }
     }
@@ -457,7 +459,10 @@ mod tests {
     }
 
     fn body_of(r: &ProviderRequest) -> Value {
-        serde_json::from_str(&provider().build_request(r).unwrap().body).unwrap()
+        // ⚠️ `from_slice` 而不是 `from_str`：请求体现在是**字节**
+        //（接口调试要发二进制），助手这条路上它一定是合法 UTF-8，
+        // 但类型上不该再假设这件事。
+        serde_json::from_slice(&provider().build_request(r).unwrap().body).unwrap()
     }
 
     fn frame(data: &str) -> Frame {
