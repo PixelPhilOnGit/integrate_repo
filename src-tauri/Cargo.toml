@@ -121,7 +121,7 @@ resolver = "2"
 # 「在 src-tauri 下敲 cargo test 只跑 app crate」。这个错在写这一段的当天
 # 就犯了一次，是靠编译输出里那两行 warning 抓回来的。
 [workspace.package]
-version = "0.9.3"
+version = "0.9.4"
 
 [profile.release]
 codegen-units = 1
