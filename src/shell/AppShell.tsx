@@ -13,6 +13,7 @@
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import { ModuleRail } from './ModuleRail';
 import { MODULES, moduleById } from './registry';
+import { ResizableSlot } from './ResizableSlot';
 import { shellStore } from './shellInstance';
 
 export function AppShell(): ReactNode {
@@ -60,10 +61,22 @@ export function AppShell(): ReactNode {
         <div className="rd-content">
           {Toolbar && <Toolbar />}
 
+          {/*
+            左右两个槽位都可以拖宽（双击回默认），宽度按**模块**记在偏好里 ——
+            见 `ResizableSlot.tsx` 和 `shared/platform/panelWidths.ts` 的头部。
+            ⚠️ 槽位包在模块自己那层 `.rd-panel` **外面**：`width` 是槽位的，
+            面板在里面 `width: 100%`（CSS 里那两条作用域规则）。
+          */}
           <div className="rd-main">
-            <Sidebar />
+            <ResizableSlot side="left" moduleId={mod.id}>
+              <Sidebar />
+            </ResizableSlot>
             <Main />
-            {Inspector && <Inspector />}
+            {Inspector && (
+              <ResizableSlot side="right" moduleId={mod.id}>
+                <Inspector />
+              </ResizableSlot>
+            )}
           </div>
         </div>
       </div>

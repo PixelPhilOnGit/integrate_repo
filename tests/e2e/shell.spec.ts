@@ -176,3 +176,74 @@ test('模块报的错显示在外壳的错误条里', async ({ page }) => {
   await page.getByTestId('error-banner').getByRole('button').click();
   await expect(page.getByTestId('error-banner')).toHaveCount(0);
 });
+
+/**
+ * 侧栏可以拖宽 —— 用户提的（「例如数据库这种，左侧窗口不能左右拉来调节宽度吗」）。
+ *
+ * 这一组验三件事：**拖得动**、**按模块分开记**、**双击回默认**。
+ * 拖动用的是真鼠标事件（pointerdown → pointermove → pointerup），
+ * 所以 `setPointerCapture` 那条路也一起走了一遍。
+ */
+test('拖动分隔条能改侧栏宽度，而且按模块分开记', async ({ page }) => {
+  const slot = page.getByTestId('panel-slot-left');
+  const handle = page.getByTestId('panel-handle-left');
+  const before = (await slot.boundingBox())?.width ?? 0;
+  expect(before).toBeGreaterThan(100);
+
+  const box = await handle.boundingBox();
+  if (box === null) throw new Error('拿不到分隔条的位置');
+
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 120, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+
+  const after = (await slot.boundingBox())?.width ?? 0;
+  expect(after).toBeGreaterThan(before + 100);
+
+  // 换个模块：那边还是默认宽度（宽度是**按模块**存的）
+  await page.getByTestId('module-redis').click();
+  await expect(page.getByTestId('redis-main')).toBeVisible();
+  const redis = (await page.getByTestId('panel-slot-left').boundingBox())?.width ?? 0;
+  expect(redis).toBeLessThan(after);
+
+  // 切回来宽度还在
+  await page.getByTestId('module-diagram').click();
+  await expect(page.getByTestId('canvas-svg')).toBeVisible();
+  const back = (await page.getByTestId('panel-slot-left').boundingBox())?.width ?? 0;
+  expect(Math.abs(back - after)).toBeLessThan(2);
+});
+
+test('双击分隔条回到默认宽度', async ({ page }) => {
+  const slot = page.getByTestId('panel-slot-left');
+  const handle = page.getByTestId('panel-handle-left');
+  const before = (await slot.boundingBox())?.width ?? 0;
+
+  const box = await handle.boundingBox();
+  if (box === null) throw new Error('拿不到分隔条的位置');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 150, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  expect((await slot.boundingBox())?.width ?? 0).toBeGreaterThan(before + 100);
+
+  await handle.dblclick();
+  const reset = (await slot.boundingBox())?.width ?? 0;
+  expect(Math.abs(reset - before)).toBeLessThan(2);
+});
+
+test('右侧检查器也能拖，方向是反的（往左拖变宽）', async ({ page }) => {
+  const slot = page.getByTestId('panel-slot-right');
+  const handle = page.getByTestId('panel-handle-right');
+  const before = (await slot.boundingBox())?.width ?? 0;
+
+  const box = await handle.boundingBox();
+  if (box === null) throw new Error('拿不到分隔条的位置');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 - 100, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+
+  const after = (await slot.boundingBox())?.width ?? 0;
+  expect(after).toBeGreaterThan(before + 80);
+});

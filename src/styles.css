@@ -3538,3 +3538,63 @@ textarea:focus {
   padding: 10px;
   font-size: 11px;
 }
+
+/* --------------------------------------------------------- 侧栏宽度的拖动
+ *
+ * 槽位包在模块自己那层 `.rd-panel` 外面：`width` 归槽位管，面板填满它。
+ * ⚠️ 这是**作用域规则**，不是改 `.rd-panel` 本身 —— 那个类还用在别处
+ *（弹框里、检查器里），把它的 `width: 240px` 改成 100% 会让那些地方塌掉。
+ *
+ * ⚠️ 用 `> *:not(.rd-slot-handle)` 而不是 `> .rd-panel`：模块的侧栏根节点
+ * 都是 `.rd-panel`，但**不该由外壳替它们假设这一点**（少一个类名的话，
+ * 槽位会变宽而内容原样宽 240px，看着像「拖了没反应」）。`:not()` 另外还
+ * 顺手把分隔条排除掉 —— 它是绝对定位的 7px，被 `width: 100%` 涂掉就点不着了。
+ */
+.rd-slot {
+  position: relative;
+  display: flex;
+  flex: none;
+  min-height: 0;
+  min-width: 0;
+}
+
+.rd-slot > *:not(.rd-slot-handle) {
+  width: 100%;
+  min-width: 0;
+}
+
+/* 分隔条：视觉上只有 1px（和面板边框重合），但**可点的范围是 7px** ——
+ * 1px 的拖动目标是在为难用户（尤其是触控板和高分屏） */
+.rd-slot-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  /* 鼠标不在上面时不吃事件：面板边缘那几个像素不该被这条缝抢走 */
+  z-index: 2;
+}
+
+.rd-slot-left .rd-slot-handle {
+  right: -3px;
+}
+
+.rd-slot-right .rd-slot-handle {
+  left: -3px;
+}
+
+.rd-slot-handle:hover,
+.rd-slot-handle:active {
+  background: var(--accent);
+  opacity: 0.35;
+}
+
+/* 拖动中：整页不许选中文字（不然会顺手把侧栏的文字选中，看着像坏了） */
+body.rd-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+body.rd-resizing * {
+  cursor: col-resize !important;
+}

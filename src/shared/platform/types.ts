@@ -30,12 +30,26 @@ export interface Prefs {
    * 认不出来的值由 `parseThemeChoice` 兜住（旧版本、手改过的文件）。
    */
   theme: string;
+  /**
+   * 左侧栏的宽度，**按模块 id 存**（`{ sql: 320, redis: 240 }`）。
+   *
+   * ⚠️ 为什么不全局一份：五个模块的侧栏深度差得远 —— SQL 是
+   * 「引擎 → 连接 → 库 → 表」四层，顺序图那一栏全是长路径，而 Redis 只要
+   * 一个连接名。全局一份的话，为 SQL 拖宽会把画布那边挤掉一大块。
+   *
+   * 认不出来的模块 id 就是没存过（第一次拖之前不在这个表里），给默认宽度。
+   */
+  sidePanelWidths: Record<string, number>;
+  /** 右侧检查器的宽度，同样按模块 id 存。理由同上。 */
+  inspectorPanelWidths: Record<string, number>;
 }
 
 export const EMPTY_PREFS: Prefs = {
   recentWorkspaces: [],
   lastWorkspace: null,
   theme: 'system',
+  sidePanelWidths: {},
+  inspectorPanelWidths: {},
 };
 
 export interface Platform {

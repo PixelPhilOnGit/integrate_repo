@@ -9,6 +9,7 @@
  */
 
 import { platform } from '../shared/platform';
+import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from '../shared/platform/panelWidths';
 import { applyTheme, parseThemeChoice, resolveTheme, systemPrefersDark, type ThemeChoice } from './theme';
 import type { ShellApi } from './types';
 
@@ -24,6 +25,13 @@ export interface ShellState {
    * 而不是勾在当下解析出来的「深色」上。
    */
   theme: ThemeChoice;
+  /**
+   * 左右两个侧栏的宽度（按**模块 id** 存）。没拖过的模块不在表里。
+   *
+   * 为什么按模块存、为什么要夹取，见 `shared/platform/panelWidths.ts` 的头部。
+   */
+  sideWidths: Record<string, number>;
+  inspectorWidths: Record<string, number>;
 }
 
 export class ShellStore implements ShellApi {
@@ -34,7 +42,14 @@ export class ShellStore implements ShellApi {
   private themeLoaded = false;
 
   constructor(initialModule: string) {
-    this.state = { activeModule: initialModule, status: null, error: null, theme: 'system' };
+    this.state = {
+      activeModule: initialModule,
+      status: null,
+      error: null,
+      theme: 'system',
+      sideWidths: {},
+      inspectorWidths: {},
+    };
 
     // **默认值在这里就应用**，不等读盘：它要在 React 渲染之前生效，
     // 否则系统是深色的用户会先看到一帧白底再跳成黑的。
@@ -83,7 +98,8 @@ export class ShellStore implements ShellApi {
   // ---------------------------------------------------------------- 外观
 
   /**
-   * 读回上次的选择并监听系统主题。由 `AppShell` 挂载时调一次。
+   * 读回上次的选择（**外观 + 两个侧栏的宽度**）并监听系统主题。
+   * 由 `AppShell` 挂载时调一次。
    *
    * 重复调用只跑一次：它订阅了一个媒体查询，跑两次会挂上两个监听。
    */
@@ -102,7 +118,11 @@ export class ShellStore implements ShellApi {
     try {
       const prefs = await platform.getPrefs();
       const theme = parseThemeChoice(prefs.theme);
-      this.set({ theme });
+      this.set({
+        theme,
+        sideWidths: prefs.sidePanelWidths,
+        inspectorWidths: prefs.inspectorPanelWidths,
+      });
       this.applyCurrentTheme();
     } catch {
       // 读不到就用默认值（构造时已经应用过了）。这里不弹错误条：
@@ -120,6 +140,58 @@ export class ShellStore implements ShellApi {
 
   private applyCurrentTheme(): void {
     applyTheme(resolveTheme(this.state.theme, systemPrefersDark()));
+  }
+
+  // ---------------------------------------------------------------- 侧栏宽度
+
+  /** 这个模块的左侧栏宽度（没拖过就是默认值）。 */
+  sideWidth(moduleId: string): number {
+    return this.state.sideWidths[moduleId] ?? DEFAULT_PANEL_WIDTH;
+  }
+
+  /** 同上，右侧检查器。 */
+  inspectorWidth(moduleId: string): number {
+    return this.state.inspectorWidths[moduleId] ?? DEFAULT_PANEL_WIDTH;
+  }
+
+  /**
+   * 记下用户拖出来的宽度。
+   *
+   * ⚠️ 夹取在这里做（不是只靠界面）：宽度会进 CSS，0 和几千像素**都会存进
+   * 偏好**，下次打开还是坏的。见 `panelWidths.ts`。
+   *
+   * ⚠️ 落盘失败**不报错**（`catch` 掉了）：这是一次拖动，用户要的是宽度变了，
+   * 而不是弹一条错误条 —— 大不了下次打开回到默认宽度。
+   */
+  setSideWidth(moduleId: string, width: number): void {
+    const w = clampPanelWidth(width);
+    if (this.state.sideWidths[moduleId] === w) return;
+    const sideWidths = { ...this.state.sideWidths, [moduleId]: w };
+    this.set({ sideWidths });
+    void platform.setPrefs({ sidePanelWidths: sideWidths }).catch(() => undefined);
+  }
+
+  setInspectorWidth(moduleId: string, width: number): void {
+    const w = clampPanelWidth(width);
+    if (this.state.inspectorWidths[moduleId] === w) return;
+    const inspectorWidths = { ...this.state.inspectorWidths, [moduleId]: w };
+    this.set({ inspectorWidths });
+    void platform.setPrefs({ inspectorPanelWidths: inspectorWidths }).catch(() => undefined);
+  }
+
+  /** 双击分隔条：回到默认宽度（拖坏了有个出口，不用一点点拖回来）。 */
+  resetSideWidth(moduleId: string): void {
+    const sideWidths = { ...this.state.sideWidths };
+    delete sideWidths[moduleId];
+    this.set({ sideWidths });
+    void platform.setPrefs({ sidePanelWidths: sideWidths }).catch(() => undefined);
+  }
+
+  resetInspectorWidth(moduleId: string): void {
+    const inspectorWidths = { ...this.state.inspectorWidths };
+    delete inspectorWidths[moduleId];
+    this.set({ inspectorWidths });
+    void platform.setPrefs({ inspectorPanelWidths: inspectorWidths }).catch(() => undefined);
   }
 }
 

@@ -11,6 +11,7 @@ import type { FileNode, Platform, Prefs } from './types';
 import { EMPTY_PREFS } from './types';
 import { createSqliteKeyValue } from './kv';
 import { invoke } from './invoke';
+import { readWidths } from './panelWidths';
 
 type DialogModule = typeof import('@tauri-apps/plugin-dialog');
 
@@ -118,10 +119,14 @@ export function createTauriPlatform(): Platform {
       const recent = await prefsKv.get<string[]>('recentWorkspaces');
       const last = await prefsKv.get<string | null>('lastWorkspace');
       const theme = await prefsKv.get<string>('theme');
+      const sidePanelWidths = await prefsKv.get<Record<string, number>>('sidePanelWidths');
+      const inspectorPanelWidths = await prefsKv.get<Record<string, number>>('inspectorPanelWidths');
       return {
         recentWorkspaces: Array.isArray(recent) ? recent : [],
         lastWorkspace: typeof last === 'string' ? last : null,
         theme: typeof theme === 'string' ? theme : EMPTY_PREFS.theme,
+        sidePanelWidths: readWidths(sidePanelWidths),
+        inspectorPanelWidths: readWidths(inspectorPanelWidths),
       };
     },
 
@@ -131,6 +136,8 @@ export function createTauriPlatform(): Platform {
       await prefsKv.set('recentWorkspaces', next.recentWorkspaces);
       await prefsKv.set('lastWorkspace', next.lastWorkspace);
       await prefsKv.set('theme', next.theme);
+      await prefsKv.set('sidePanelWidths', next.sidePanelWidths);
+      await prefsKv.set('inspectorPanelWidths', next.inspectorPanelWidths);
     },
   };
 }

@@ -21,6 +21,7 @@ import {
   uniqueName,
 } from './path';
 import { isListedFile, platformConfig } from './config';
+import { readWidths } from './panelWidths';
 
 const TREE_KEY = 'devtoolkit.workspace.v1';
 const PREFS_KEY = 'devtoolkit.prefs.v1';
@@ -331,6 +332,8 @@ export function createWebPlatform(): Platform {
             ? parsed.recentWorkspaces.filter((x): x is string => typeof x === 'string')
             : [VIRTUAL_ROOT],
           lastWorkspace: typeof parsed.lastWorkspace === 'string' ? parsed.lastWorkspace : VIRTUAL_ROOT,
+          sidePanelWidths: readWidths(parsed.sidePanelWidths),
+          inspectorPanelWidths: readWidths(parsed.inspectorPanelWidths),
           // 旧版本存的没有这个字段，给默认值就完事 —— 至于值认不认得出来，
           // 是 `parseThemeChoice` 的事
           theme: typeof parsed.theme === 'string' ? parsed.theme : EMPTY_PREFS.theme,
