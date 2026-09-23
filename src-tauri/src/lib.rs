@@ -55,6 +55,72 @@ pub fn run() {
         // 助手：审批闸门 + 正在跑的 run + 会话记录库。包一层 Arc 是因为
         // 跑一次对话要活到 run 结束（转发任务得把 run 从表里摘掉）。
         .manage(std::sync::Arc::new(assistant_commands::AssistantRuntime::new()))
+        // ⚠️ **为什么要建一个（在 Linux 上还看不见的）菜单**
+        //
+        // 用户报过「输入的时候 Ctrl+V 不会被识别为粘贴，例如终端那个页面」。
+        // 查下来根因不在前端（七个全局键盘监听没有一处碰 C/V）：**Linux 的
+        // webkit2gtk 和 macOS 上，webview 里的剪贴板快捷键要应用注册了带加速键的
+        // 菜单项才认** —— 这个应用此前一个菜单都没有，于是三个平台里有两个是坏的
+        // （Windows 的 WebView2 自己处理，所以那边一直好的）。
+        //
+        // 修法是 Hoppscotch 踩过同一个坑之后的办法：**建一个 Edit 菜单带标准加速键，
+        // 然后在 Linux 上立刻藏起来**。GTK 把加速键绑在 accel map 里、和菜单栏可不可见
+        // 无关，所以藏起来之后快捷键照样能用，界面上一个字都不多。
+        //
+        // ⚠️ macOS 上**不藏**：那边的惯例是应用必须有菜单栏（在屏幕顶部），
+        // 藏了反而怪。而它同样需要那些加速键才认 Cmd+C/V。
+        .setup(|app| {
+            use tauri::menu::{Menu, PredefinedMenuItem, Submenu};
+
+            // ⚠️ **窗口在这里手动建，不在 `tauri.conf.json` 的 `app.windows` 里。**
+            //
+            // 因为 `enable_clipboard_access()`（下面那一句，**Windows 和 Linux 上
+            // 就是「Ctrl+V 不被识别为粘贴」的修法**）**只有 builder 上有** ——
+            // 配置里没有对应的项。改回配置建窗口的话，这个能力会**静默消失**：
+            // 应用照常起，只是粘贴又坏了。
+            //
+            // 官方源码原话（`tauri/src/webview/mod.rs`）：
+            //   Enables clipboard access for the page rendered on **Linux** and **Windows**.
+            //   **macOS** doesn't provide such method and is always enabled by default,
+            //   but you still need to add menu item accelerators to use shortcuts.
+            //
+            // 也就是说**三个平台各有各的缺口，这个应用一个都没补**（此前没有菜单、
+            // 窗口又是配置建的）。用户报的就是 Windows 上那一个。
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                .title("Devtoolkit")
+                .inner_size(1280.0, 800.0)
+                .min_inner_size(900.0, 600.0)
+                .resizable(true)
+                .center()
+                // 对应配置里原来的 `"dragDropEnabled": false`
+                .disable_drag_drop_handler()
+                .enable_clipboard_access()
+                .build()?;
+
+            let edit = Submenu::with_items(
+                app,
+                "编辑",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &PredefinedMenuItem::paste(app, None)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
+            app.set_menu(Menu::with_items(app, &[&edit])?)?;
+
+            #[cfg(target_os = "linux")]
+            {
+                // 藏起来 —— 这个应用的设计里没有菜单栏，用户不该看见它。
+                // （加速键不跟着消失，见上面那段。）
+                let _ = app.hide_menu();
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
             commands::read_text_file,

@@ -1272,6 +1272,47 @@ let mut builder = hyper::Request::builder()
 ⚠️ 这类「绿着的空测试」比红着的难发现得多，而且只在**重构改变了语义**时出现
 （改 bug 时通常不会）。改完之后要回头看一遍：**每条测试断言的东西现在还成立吗。**
 
+**⑮ 剪贴板：三个平台各有各的缺口，这个应用一个都没补。**
+
+用户报的：「输入的时候 Ctrl+V 不会被识别为粘贴，例如终端那个页面」（Windows 桌面版）。
+
+排查路径本身值得记：**先把前端排干净** —— 全仓 7 处全局 keydown 监听逐个看有没有
+`preventDefault` 掉 C/V（一处都没有）；`agents` 那个挂在**捕获阶段**的最可疑，
+但它的 `shortcutFor` 要求 `shiftKey` 且只认 D/E/W/N/U 和方向键。
+
+真根因在 Tauri 层，而且**三个平台是三种原因**（`tauri/src/webview/mod.rs` 原话）：
+
+> Enables clipboard access for the page rendered on **Linux** and **Windows**.
+> **macOS** doesn't provide such method and is always enabled by default,
+> but you still need to add menu item accelerators to use shortcuts.
+
+* **Windows / Linux** 要 `WebviewWindowBuilder::enable_clipboard_access()`。
+  ⚠️ **它只有 builder 上有，配置里没有对应的项** —— 而这个窗口此前是
+  `tauri.conf.json` 的 `app.windows` 建的，**所以从来没设过**。
+  现在窗口改成在 `setup` 里用 builder 建（原来那 7 个字段照搬）。
+  ⚠️ **改回配置建窗口的话这个能力会静默消失** —— 应用照常起，只是粘贴又坏了。
+* **macOS** 要**菜单加速键**（那边 `enable_clipboard_access` 恒开）。
+  这个应用此前**一个菜单都没有**，所以 macOS 上也不通。修法是 Hoppscotch 那套：
+  建一个带标准加速键的 Edit 菜单，**Linux 上建完立刻 `hide_menu()`** ——
+  GTK 把加速键绑在 accel map 里、和菜单栏可不可见无关，所以藏起来之后快捷键
+  照样能用、界面上一个字不多；macOS 上**不藏**（那边惯例是必须有菜单栏）。
+
+⚠️ **「快捷键真的通了」我在这台机器上验不了** —— `xdotool` 的合成按键在
+WebKitGTK 里不生效（同一个原因让 `ctrl+7` 切模块也一直没成功过）。
+验到的是「菜单建好且藏好了」+「窗口用新方式建能正常起来」。真按键盘要真机过。
+
+**⑯ 树列表里的 `user-select: none` 是个副作用大于收益的默认。**
+
+用户提「应该可以复制的都能选中，然后用 ctrl+c」时发现的：`.rd-tree-row` 上有一句
+`user-select: none`（**没写理由**，大概是「行是拿来点的，不是选的」）——
+副作用是**连接名 / 路径 / 主机名一个都选不中**，想复制只能手打。已去掉。
+
+⚠️ 另外两处 `user-select: none` **理由是真的，别顺手一起删**：
+* `.rd-canvas > svg` —— 画布上拖动会把经过的 SVG 文字选中并画上蓝选区，
+  看起来像渲染坏了。而画布上「点空白 = 平移画布、点元素 = 拖它」，
+  根本没有「拖选一段文字」的位置 —— 那里的复制只能以**选中的元素**为单位。
+* `.rd-sql-table .rd-sql-rownum` —— 行号列不是内容。
+
 ### 前端
 
 - **`noUncheckedIndexedAccess` 开着**，`arr[i]` 一律是 `T | undefined`。
