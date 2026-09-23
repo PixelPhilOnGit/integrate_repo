@@ -1379,6 +1379,29 @@ let mut builder = hyper::Request::builder()
 WebKitGTK 里不生效（同一个原因让 `ctrl+7` 切模块也一直没成功过）。
 验到的是「菜单建好且藏好了」+「窗口用新方式建能正常起来」。真按键盘要真机过。
 
+**⑱ 发版改完版本号，`Cargo.lock` 要跟着重新生成 —— 否则 CI 直接红。**
+
+v0.9.4 推上去 **40 秒就红了两个测试 job**，而且**一步都没跑到测试**：
+CI 用的是 `cargo test --locked`，而我改了 `[workspace.package] version`
+却**没让 cargo 更新锁文件**，于是：
+
+    error: cannot update the lock file ... because --locked was passed to prevent this
+
+⚠️ **这个错在本地永远看不见** —— 本机跑 `cargo test`（不带 `--locked`）
+会顺手把锁文件更新掉，一切正常。只有 CI 会红，而且红得很快、看不出和版本号有关。
+和「CI 只在推 tag 时跑」叠在一起就是：**你推了 tag 才知道**。
+
+**发版动作的完整清单**（和 ⑰ 合起来看，三件事都不是"顺手就对了"的）：
+
+```bash
+# 1. 改完版本号之后，让 cargo 更新锁文件（本地不带 --locked 就行）
+cargo check -p devtoolkit-core
+# 2. 验 --locked 能过 —— CI 就是这么跑的
+cargo test --locked -p devtoolkit-core
+# 3. 前端那两个（见 ⑰）
+grep -n '"version"' package-lock.json && npm install --package-lock-only
+```
+
 **⑰ 全局 sed 版本号，会撞上恰好同号的依赖。**
 
 发版时一句 `sed -i 's/"version": "0.9.3"/"version": "0.9.4"/' package-lock.json` ——

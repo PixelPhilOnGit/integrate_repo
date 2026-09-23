@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "base64 0.22.1",
  "devtoolkit-agents",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-agents"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "base64 0.22.1",
  "devtoolkit-ssh",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-assistant"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "devtoolkit-core",
  "devtoolkit-request",
@@ -1388,7 +1388,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-core"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-redis"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "redis",
  "serde",
@@ -1406,7 +1406,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-request"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "bytes",
  "http-body-util",
@@ -1420,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-sql"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "base64 0.22.1",
  "clickhouse",
@@ -1435,7 +1435,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-ssh"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.8",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-store"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "keyring",
  "rusqlite",
@@ -1457,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "devtoolkit-tasks"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "rusqlite",
  "serde",
