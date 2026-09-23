@@ -45,7 +45,8 @@ use devtoolkit_assistant::message::Message;
 use devtoolkit_assistant::provider::anthropic::{AnthropicConfig, AnthropicProvider};
 use devtoolkit_assistant::provider::openai::{OpenAiConfig, OpenAiProvider};
 use devtoolkit_assistant::provider_config::{
-    api_key_id, ProviderConfig, ProviderKind, KEYCHAIN_MODULE,
+    api_key_id, legacy_api_key_id, plan_key_move, KeyMove, ProviderConfig, ProviderKind,
+    KEYCHAIN_MODULE,
 };
 use devtoolkit_assistant::session::{
     run, stream_once, ApprovalOutcome, ApproveGate, EventSink, ProviderRequest, RunEvent, RunSpec,
@@ -83,17 +84,39 @@ fn parse_kind(kind: &str) -> Result<ProviderKind, String> {
     }
 }
 
-/// 这个提供方的 key 配到什么程度了。
+/// 配置 id 的合法形状。
+///
+/// ⚠️ 它进到钥匙串条目名里（`api_key:<id>`，完整形式 `assistant/api_key:<id>`）——
+/// **含 `/` 的 id 能跳到别的模块的命名空间去**。前端传的是它自己生成的 id，
+/// 但这条边界值得卡一道（agents 那边卡会话 id 的字符集是同一个理由）。
+fn check_profile_id(id: &str) -> Result<(), String> {
+    let ok = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("配置 id「{id}」的形状不对"))
+    }
+}
+
+/// 这份**配置**的 key 配到什么程度了。
+///
+/// ⚠️ 收的是 `profile_id` 而不是 `kind` —— key 挂在**配置**上：同一家可以有好几份
+/// 配置，「工作用 Anthropic」和「自己的 Anthropic」不能共用一把。理由见
+/// [`devtoolkit_assistant::provider_config::api_key_id`]。
 #[tauri::command]
-pub async fn assistant_api_key_status(kind: String) -> Result<AssistantKeyStatus, String> {
-    let kind = parse_kind(&kind)?;
+pub async fn assistant_api_key_status(profile_id: String) -> Result<AssistantKeyStatus, String> {
+    check_profile_id(&profile_id)?;
 
     tauri::async_runtime::spawn_blocking(move || {
         // 「有没有钥匙串」和「读得到读不到」要分开：
         // 没有钥匙串时 `get` 会返回 Unavailable，那是**环境问题**，
         // 不能当成「用户没配」—— 前端要给的是两句不同的话。
         let available = secrets::available();
-        let configured = match secrets::get(KEYCHAIN_MODULE, &api_key_id(kind)) {
+        let configured = match secrets::get(KEYCHAIN_MODULE, &api_key_id(&profile_id)) {
             Ok(Some(v)) => !v.trim().is_empty(),
             Ok(None) => false,
             // 钥匙串用不了：这里回 false，由 `available` 说明原因。
@@ -110,11 +133,11 @@ pub async fn assistant_api_key_status(kind: String) -> Result<AssistantKeyStatus
 
 /// 存一把 key。**空串 = 删掉**（和前端假实现同一套语义）。
 #[tauri::command]
-pub async fn assistant_set_api_key(kind: String, key: String) -> Result<(), String> {
-    let kind = parse_kind(&kind)?;
+pub async fn assistant_set_api_key(profile_id: String, key: String) -> Result<(), String> {
+    check_profile_id(&profile_id)?;
 
     tauri::async_runtime::spawn_blocking(move || {
-        let id = api_key_id(kind);
+        let id = api_key_id(&profile_id);
         let trimmed = key.trim();
         let result = if trimmed.is_empty() {
             secrets::delete(KEYCHAIN_MODULE, &id)
@@ -125,6 +148,53 @@ pub async fn assistant_set_api_key(kind: String, key: String) -> Result<(), Stri
     })
     .await
     .map_err(|e| format!("存凭据时出错了：{e}"))?
+}
+
+/// 把老版**按提供方**命名的凭据搬到**按配置**命名的条目上（升级用）。
+///
+/// ⚠️ **幂等，可以反复调。** 调用方**什么都不用记** —— 前端只在这份配置
+/// 「还没有 key 且它正是从旧版迁过来的那一份」时才调它，搬没搬成从
+/// [`assistant_api_key_status`] 看得出来。于是「搬到一半崩了」「钥匙串当时锁着」
+/// 都能在下次自动重试，直到成功为止。
+///
+/// ⚠️ 顺序恒为 **读来源 → 写目标（目标非空就不写）→ 删来源**：
+/// 任何一个中间态都不能「两边都没有」，那就是用户的 key 凭空蒸发。
+/// 分支决策在 `plan_key_move` 里（纯函数，有穷举测试）。
+#[tauri::command]
+pub async fn assistant_migrate_api_key(
+    from_kind: String,
+    to_profile_id: String,
+) -> Result<(), String> {
+    let kind = parse_kind(&from_kind)?;
+    check_profile_id(&to_profile_id)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let from = legacy_api_key_id(kind);
+        let to = api_key_id(&to_profile_id);
+
+        // 钥匙串读不了就直接说 —— 调用方下次还会再试
+        let source = secrets::get(KEYCHAIN_MODULE, &from).map_err(|e| e.to_string())?;
+        let target = secrets::get(KEYCHAIN_MODULE, &to).map_err(|e| e.to_string())?;
+
+        match plan_key_move(source.as_deref(), target.as_deref()) {
+            // 老条目本来就空：用户没配过，什么都不用做
+            KeyMove::Nothing => Ok(()),
+            KeyMove::CopyThenDelete => {
+                // ⚠️ **先写目标**；写失败就返回 Err，老条目原封不动
+                secrets::set(KEYCHAIN_MODULE, &to, source.as_deref().unwrap_or_default())
+                    .map_err(|e| e.to_string())?;
+                // 写成了才删来源。删失败**不算错**（下次调用走 JustDelete 再试）
+                let _ = secrets::delete(KEYCHAIN_MODULE, &from);
+                Ok(())
+            }
+            KeyMove::JustDelete => {
+                let _ = secrets::delete(KEYCHAIN_MODULE, &from);
+                Ok(())
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("搬凭据时出错了：{e}"))?
 }
 
 // ============================================================ 跑一次对话
@@ -228,20 +298,23 @@ pub struct ConnectionReport {
 #[tauri::command]
 pub async fn assistant_test_connection(
     config: ProviderConfig,
+    profile_id: String,
 ) -> Result<ConnectionReport, String> {
     config.validate()?;
+    check_profile_id(&profile_id)?;
 
-    let kind = config.kind;
     let key = tauri::async_runtime::spawn_blocking(move || {
-        secrets::get(KEYCHAIN_MODULE, &api_key_id(kind))
+        secrets::get(KEYCHAIN_MODULE, &api_key_id(&profile_id))
     })
     .await
     .map_err(|e| format!("读凭据时出错了：{e}"))?
     .map_err(|e| e.to_string())?
     .filter(|k| !k.trim().is_empty())
     .ok_or_else(|| {
+        // ⚠️ 报的是**这份配置**没配 key，不是「Anthropic 没配」——
+        // 同一家可以有好几份，说成后者会让人以为是另一份的问题。
         format!(
-            "还没配「{}」的 API key —— 在下面的输入框里填一把再试。",
+            "这份配置（{}）还没配 API key —— 在这里的输入框里填一把再试。",
             provider_label(config.kind)
         )
     })?;
@@ -453,12 +526,16 @@ pub async fn assistant_send(
     workspace: String,
     prompt: String,
     config: ProviderConfig,
+    // 用哪一份**配置**的 key —— key 挂在配置上，不挂在提供方上
+    //（同一家可以有好几份配置，见 `provider_config::api_key_id`）
+    profile_id: String,
     strategy: String,
     channel: Channel<RunEvent>,
 ) -> Result<u64, String> {
     // ① 配置先过一遍。缺东西的话现在就说，别等转到网络上才报一个
     //    「和配置毫无关系」的错。
     config.validate()?;
+    check_profile_id(&profile_id)?;
 
     // ② 工作区（路径闸门在 `Workspace::open` 里：canonicalize + 必须是目录）。
     let ws = Workspace::open(&workspace).map_err(|e| e.to_string())?;
@@ -466,19 +543,18 @@ pub async fn assistant_send(
     // ③ key 从**系统钥匙串**拿 —— 在 Rust 侧拿，永远不经过 webview。
     let kind = config.kind;
     let key = tauri::async_runtime::spawn_blocking(move || {
-        secrets::get(KEYCHAIN_MODULE, &api_key_id(kind))
+        secrets::get(KEYCHAIN_MODULE, &api_key_id(&profile_id))
     })
     .await
     .map_err(|e| format!("读凭据时出错了：{e}"))?
     .map_err(|e| e.to_string())?
     .filter(|k| !k.trim().is_empty())
     .ok_or_else(|| {
+        // ⚠️ 报的是**这份配置**没配 key，不是「Anthropic 没配」——
+        // 同一家可以有好几份，说成后者会让人以为是另一份的问题。
         format!(
-            "还没配「{}」的 API key —— 在右侧的「模型」面板里填一把。",
-            match kind {
-                ProviderKind::Anthropic => "Anthropic",
-                ProviderKind::OpenAi => "OpenAI 兼容",
-            }
+            "这份配置（{}）还没配 API key —— 在右侧的「模型」面板里填一把。",
+            provider_label(kind)
         )
     })?;
 

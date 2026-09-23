@@ -61,7 +61,9 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   // 组件内的状态会让用户刚点开的那一行又合上（这条是 e2e 抓出来的）
   const [renaming, setRenaming] = useState<string | null>(null);
   /** 「新建会话」对话框是给哪个工作目录开的。null = 没开着 */
-  const [newFor, setNewFor] = useState<AgentWorkspace | null>(null);
+  // ⚠️ 只存 id 不存整个目录对象：对话框开着的时候目录可能被改名 ——
+  // 存对象的话它会拿着旧名字（`workspaces` 那个列表才是活的）
+  const [newFor, setNewFor] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   /** 「加一个远端目录」那个表单开着没有 */
   const [addingRemote, setAddingRemote] = useState(false);
@@ -197,10 +199,10 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
                       setMenu({
                         x,
                         y,
-                        items: workspaceMenu(store, workspace, allSessions, () => setNewFor(workspace)),
+                        items: workspaceMenu(store, workspace, allSessions, () => setNewFor(workspace.id)),
                       })
                     }
-                    onNewSession={() => setNewFor(workspace)}
+                    onNewSession={() => setNewFor(workspace.id)}
                   />
 
                   {expanded &&
@@ -238,7 +240,9 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
         <NewSessionDialog
           state={state}
           store={store}
-          workspace={newFor}
+          initialWorkspaceId={newFor}
+          // 侧栏那个顺序（含置顶）
+          workspaces={sortWorkspaces(state.workspaces)}
           onClose={() => setNewFor(null)}
         />
       )}

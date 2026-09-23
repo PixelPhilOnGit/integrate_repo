@@ -1107,6 +1107,31 @@ describe('一次新建一批（createMany）', () => {
     ]);
   });
 
+  it('⚠️ 建到**另一个**目录：会话属于它、主区切过去、原来那个的布局不动', async () => {
+    // 「新建会话」对话框里能选工作目录之后，这是那条路的核心语义。
+    // （`putGridOnScreen` 从「第一个建成的会话」推 workspaceId —— 选了别处
+    // 却留在原窗口才是 bug：刚建的东西必须看得见。）
+    const h = make();
+    const alpha = await withWorkspace(h, 'D:\\work\\alpha');
+    await h.store.createMany(alpha, [{ kind: 'claude', count: 1 }]);
+    const alphaBefore = h.store.getSnapshot().layouts[alpha];
+
+    const beta = await withWorkspace(h, 'D:\\work\\beta');
+    // 加目录会把当前窗口切到新的那个 —— 手动切回 alpha，
+    // 这样下面断言的「切过去了」才是 `createMany` 干的
+    h.store.setActiveWorkspace(alpha);
+    expect(h.store.getSnapshot().activeWorkspaceId).toBe(alpha);
+
+    await h.store.createMany(beta, [{ kind: 'claude', count: 2 }]);
+
+    const snap = h.store.getSnapshot();
+    expect(snap.activeWorkspaceId).toBe(beta);
+    expect(snap.sessions.filter((s) => s.workspaceId === beta)).toHaveLength(2);
+    expect(snap.sessions.filter((s) => s.workspaceId === alpha)).toHaveLength(1);
+    // alpha 那套布局**原样没动**
+    expect(snap.layouts[alpha]).toEqual(alphaBefore);
+  });
+
   it('全部铺在屏幕上，铺的顺序和建的顺序一致', async () => {
     const h = make();
     const ws = await withWorkspace(h);

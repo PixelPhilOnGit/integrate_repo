@@ -117,16 +117,55 @@ impl ProviderConfig {
     }
 }
 
-/// 这个 provider 的 API key 在钥匙串里的条目名。
+/// 一份**配置**的 API key 在钥匙串里的条目名。
 ///
 /// 条目名的完整形式是 `"{模块}/{id}"`（见 `store/src/secrets.rs`），
-/// 所以实际存的是 `assistant/api_key:anthropic`。
+/// 所以实际存的是 `assistant/api_key:p_default`。
 ///
-/// ⚠️ **按 provider 分开存**：`anthropic` 和 `openai` 各一把 key，
-/// 用户来回切的时候不会互相覆盖（覆盖了的话，症状是"我明明填过，怎么又要填"，
-/// 而且要等到下次发请求才发现）。
-pub fn api_key_id(kind: ProviderKind) -> String {
+/// ⚠️ **按配置分开存，不是按 provider。** 同一个 provider 可以有好几份配置
+/// （「工作用 Anthropic」「自己的 Anthropic」），按 provider 命名会让它们
+/// **互相顶掉** —— 症状是「我明明填过，怎么又要填」，而且要等到下次发请求才发现。
+/// 和当年「按 provider 分开存」的理由是同一个，只是粒度又细了一层。
+pub fn api_key_id(profile_id: &str) -> String {
+    format!("api_key:{profile_id}")
+}
+
+/// 老版本按 **provider** 命名的条目名（`api_key:anthropic`）。
+///
+/// ⚠️ **留着它、并且用测试钉住** —— 从旧版本升上来的用户，那把 key 就躺在
+/// 这个名字底下，搬迁（`assistant_migrate_api_key`）全靠这个名字对上老数据。
+/// 觉得「反正没人读了」把它删掉 = 所有老用户的 key 静默消失。
+pub fn legacy_api_key_id(kind: ProviderKind) -> String {
     format!("api_key:{}", kind.as_str())
+}
+
+/// 搬迁一条 key 时该做什么。
+///
+/// 抽成纯函数是为了能**穷举测试**：这段代码唯一的使命是**别把用户的 key 弄丢**，
+/// 而它跑在真实钥匙串上（没法反复试着重调）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyMove {
+    /// 老条目本来就是空的（用户没配过）—— 什么都不用做。
+    Nothing,
+    /// 把老条目搬到新条目上（**写完才删**）。
+    CopyThenDelete,
+    /// 新条目已经有值了（用户自己填过、或者上次搬了一半）—— 只把老条目删掉。
+    JustDelete,
+}
+
+/// 决定怎么搬。见 [`KeyMove`]。
+///
+/// ⚠️ 不变量：**任何分支都不会让「老条目没了、新条目也没有」同时成立** ——
+/// 那就是用户的 key 凭空蒸发。有测试钉着（那一条是这段代码存在的全部意义）。
+pub fn plan_key_move(source: Option<&str>, target: Option<&str>) -> KeyMove {
+    match (source, target) {
+        // 老条目空的：没东西可搬；新条目有没有都不关我们的事
+        (None, _) => KeyMove::Nothing,
+        // 新条目已经有值：**不覆盖** —— 那可能是用户后来自己重新填的一把，
+        // 而老那把是旧的。只清掉老条目（清不掉也无所谓，它不会再被读到）
+        (Some(_), Some(_)) => KeyMove::JustDelete,
+        (Some(_), None) => KeyMove::CopyThenDelete,
+    }
 }
 
 /// 这个模块在钥匙串里的名字（配合 [`api_key_id`] 用）。
@@ -137,13 +176,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_two_providers_get_separate_key_entries() {
-        // 覆盖了的话症状是「我明明填过，怎么又要填」——而且要到下次发请求才发现。
-        assert_ne!(
-            api_key_id(ProviderKind::Anthropic),
-            api_key_id(ProviderKind::OpenAi)
-        );
-        assert_eq!(api_key_id(ProviderKind::Anthropic), "api_key:anthropic");
+    fn a_key_entry_is_named_after_the_profile_id() {
+        assert_eq!(api_key_id("p_default"), "api_key:p_default");
+    }
+
+    #[test]
+    fn two_profiles_of_the_same_provider_do_not_share_an_entry() {
+        // ⚠️ 这条是「按配置存」的全部理由：同一个 provider 可以有好几份配置
+        //（「工作用 Anthropic」「自己的 Anthropic」），按 provider 命名会让它们
+        // **互相顶掉** —— 症状是「我明明填过，怎么又要填」，要到下次发请求才发现。
+        assert_ne!(api_key_id("p_work"), api_key_id("p_home"));
+    }
+
+    #[test]
+    fn the_legacy_name_is_still_what_old_versions_wrote() {
+        // ⚠️ 搬迁（`assistant_migrate_api_key`）靠这两个名字对上老数据。
+        // 改了它们 = 所有老用户升级之后 key 静默消失。
+        assert_eq!(legacy_api_key_id(ProviderKind::Anthropic), "api_key:anthropic");
+        assert_eq!(legacy_api_key_id(ProviderKind::OpenAi), "api_key:openai");
+        // 新旧两种名字不会撞（配置 id 都带前缀）
+        assert_ne!(legacy_api_key_id(ProviderKind::Anthropic), api_key_id("p_default"));
+    }
+
+    #[test]
+    fn the_key_move_never_loses_both_copies() {
+        // ⚠️ 这是搬迁**唯一不能破**的不变量：任何分支都不该让「老条目没了、
+        // 新条目也没有」同时成立 —— 那就是用户的 key 凭空蒸发了。
+        //
+        // 穷举四种组合（老条目有/没有 × 新条目有/没有），逐个检查分支的**前提**。
+        for source in [None, Some("sk-old")] {
+            for target in [None, Some("sk-new")] {
+                let plan = plan_key_move(source, target);
+                match plan {
+                    // 老条目本来就空 —— 搬之前就是「没有」，谈不上丢
+                    KeyMove::Nothing => assert!(source.is_none(), "{source:?} {target:?}"),
+                    // 先写新的、再删老的：中间态是「两边都有」，不是「两边都没有」
+                    KeyMove::CopyThenDelete => {
+                        assert!(source.is_some() && target.is_none(), "{source:?} {target:?}")
+                    }
+                    // 只删老的前提是新条目已经有值
+                    KeyMove::JustDelete => {
+                        assert!(source.is_some() && target.is_some(), "{source:?} {target:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_existing_target_is_never_overwritten() {
+        // 用户可能在老条目还在的时候自己重填过一把 —— 那把比老的**新**，
+        // 覆盖它等于把用户刚做的事抹掉。所以目标非空时只删来源。
+        assert_eq!(plan_key_move(Some("sk-old"), Some("sk-new")), KeyMove::JustDelete);
+        assert_eq!(plan_key_move(Some("sk-old"), None), KeyMove::CopyThenDelete);
+        assert_eq!(plan_key_move(None, None), KeyMove::Nothing);
     }
 
     #[test]

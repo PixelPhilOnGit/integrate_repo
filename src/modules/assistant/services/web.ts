@@ -29,7 +29,22 @@ import type {
   SendRequest,
 } from './types';
 
-const keys = new Map<ProviderKind, string>();
+/**
+ * 假钥匙串：**按配置 id** 存（和真实现一样 —— key 挂在配置上）。
+ *
+ * ⚠️ 从 `Map<ProviderKind, string>` 改过来的。旧版按提供方存，同一家的两份配置
+ * 会互相顶掉；e2e 里「两份配置各有一把 key」那条就是钉这个的。
+ */
+const keys = new Map<string, string>();
+
+/**
+ * 老版本按**提供方**命名的那一份 —— 只为了让 e2e 跑得到「升级搬迁」那条路。
+ *
+ * ⚠️ 这是浏览器版**唯一**主动模拟旧数据的地方：真机上那个老条目躺在系统钥匙串
+ * 里（前端根本看不到），而这里得有个东西可搬，否则 `migrateApiKey` 那条路
+ * 在 e2e 里永远是空转。
+ */
+const legacyKeys = new Map<ProviderKind, string>();
 
 /** 假 agent 的节奏。够慢到能看见流式效果，又不至于拖慢 e2e。 */
 const TICK = 12;
@@ -69,15 +84,26 @@ const sessions = new Map<string, number>();
 
 export function createWebAssistantClient(): AssistantClient {
   return {
-    async keyStatus(kind: ProviderKind): Promise<AssistantKeyStatus> {
-      return { available: false, configured: keys.has(kind) };
+    async keyStatus(profileId: string): Promise<AssistantKeyStatus> {
+      // 浏览器**没有钥匙串**，所以 available 恒为 false。这不是偷懒，是事实 ——
+      // 界面因此会挂一个「存不住」的警告（`assistant-no-keychain`）。
+      return { available: false, configured: keys.has(profileId) };
     },
 
-    async setApiKey(kind: ProviderKind, key: string): Promise<void> {
+    async migrateApiKey(fromKind: ProviderKind, toProfileId: string): Promise<void> {
+      // 和 Rust 侧 `plan_key_move` 同一套语义：读来源 → 写目标（非空就不写）→ 删来源。
+      // 目标已经有值就**不覆盖** —— 那可能是用户后来自己填的一把。
+      const source = legacyKeys.get(fromKind);
+      if (source === undefined) return;
+      if (!keys.has(toProfileId)) keys.set(toProfileId, source);
+      legacyKeys.delete(fromKind);
+    },
+
+    async setApiKey(profileId: string, key: string): Promise<void> {
       const trimmed = key.trim();
       // 空串 = 删掉（和 Rust 那边一致：空 key 存进去等于没配）
-      if (trimmed === '') keys.delete(kind);
-      else keys.set(kind, trimmed);
+      if (trimmed === '') keys.delete(profileId);
+      else keys.set(profileId, trimmed);
     },
 
     async send(request: SendRequest): Promise<number> {
@@ -121,7 +147,10 @@ export function createWebAssistantClient(): AssistantClient {
       sessions.delete(session);
     },
 
-    async testConnection(config: ProviderConfig): Promise<ConnectionReport> {
+    async testConnection(
+      config: ProviderConfig,
+      profileId: string,
+    ): Promise<ConnectionReport> {
       // ⚠️ 真机上是**真的发一个最小请求**（见 `assistant_commands.rs`），
       // 这里只是把「几种结局」模拟出来，好让 e2e 走得到三条分支。
       //
@@ -134,7 +163,7 @@ export function createWebAssistantClient(): AssistantClient {
 
       await sleep(120);
 
-      if (!keys.has(config.kind)) {
+      if (!keys.has(profileId)) {
         return {
           ok: false,
           millis: 120,
@@ -254,6 +283,7 @@ async function drive(run: number, request: SendRequest): Promise<void> {
 /** 给 e2e 用的重置钩子（单 worker 串行跑，每个用例开始前清一次）。 */
 export function __resetAssistantForTest(): void {
   keys.clear();
+  legacyKeys.clear();
   runs.clear();
   requests.clear();
   sessions.clear();

@@ -9,46 +9,22 @@
 
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { basename, platform } from '../../shared/platform';
-import { PROVIDER_LABEL, validateConfig } from './core/config';
+import { selectedProfile, validateConfig } from './core/config';
 import { assistantStore } from './state/store';
 import type { AssistantState, PendingApproval } from './state/store';
+import { AssistantProfileList } from './panels/AssistantProfileList';
 
 function useAssistant(): ReturnType<typeof assistantStore.getSnapshot> {
   return useSyncExternalStore(assistantStore.subscribe, assistantStore.getSnapshot);
 }
 
+/**
+ * 左侧栏就是**配置名单**（`AssistantProfileList`）——
+ * 侧栏这个槽位放列表、检查器编辑选中项，和连接类模块同一个分工。
+ */
 export function AssistantSidebar(): ReactNode {
   const state = useAssistant();
-  const configured = state.keyStatus?.configured ?? false;
-
-  return (
-    <div className="rd-panel rd-sidebar" data-testid="assistant-sidebar">
-      <div className="rd-panel-head">
-        <span>助手</span>
-      </div>
-      <div className="rd-panel-body">
-        <div className="rd-form">
-          <div className="rd-field">
-            <span>模型</span>
-            <span data-testid="assistant-sidebar-provider">
-              {PROVIDER_LABEL[state.config.kind]}
-            </span>
-          </div>
-          <div className="rd-field">
-            <span>key</span>
-            <span data-testid="assistant-sidebar-key">
-              {state.keyStatus === null ? '…' : configured ? '已配置' : '还没配'}
-            </span>
-          </div>
-          {!ready(state) && <p className="rd-hint">正在读配置…</p>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ready(state: { ready: boolean }): boolean {
-  return state.ready;
+  return <AssistantProfileList state={state} store={assistantStore} />;
 }
 
 export function AssistantMain(): ReactNode {
@@ -145,10 +121,21 @@ function sendBlockers(state: AssistantState): string[] {
   if (state.workspace === null) {
     out.push('还没选工作目录 —— 助手要有个地方干活，它碰不到那个目录以外的任何文件。');
   }
-  const problem = validateConfig(state.config);
-  if (problem !== null) out.push(problem);
+
+  // ⚠️「一份配置都没有」和「选中那份配置有问题」是**两件事**，分开说 ——
+  // 混成一句的话，用户会去改一份根本不存在的配置。
+  const profile = selectedProfile(state);
+  if (profile === null) {
+    out.push('还没有模型配置 —— 在左边的「配置」栏里点「新建」加一份。');
+  } else {
+    const problem = validateConfig(profile);
+    if (problem !== null) out.push(problem);
+  }
+
   if (state.keyStatus === null) {
-    out.push('读不到 key 的状态 —— 右边那个面板里应该有更具体的原因。');
+    if (profile !== null) {
+      out.push('读不到 key 的状态 —— 右边那个面板里应该有更具体的原因。');
+    }
   } else if (!state.keyStatus.configured) {
     out.push('还没配 API key —— 在右边的「模型」面板里填一把。');
   }
@@ -386,9 +373,12 @@ function ApprovalSheet({ pending }: { pending: PendingApproval }): ReactNode {
 
 export function AssistantStatusItems(): ReactNode {
   const state = useAssistant();
+  const profile = selectedProfile(state);
   return (
     <span data-testid="assistant-status">
-      {PROVIDER_LABEL[state.config.kind]} · {state.config.model || '（没填模型）'}
+      {profile === null
+        ? '还没有模型配置'
+        : `${profile.name} · ${profile.model || '（没填模型）'}`}
     </span>
   );
 }
@@ -401,7 +391,8 @@ export function AssistantStatusItems(): ReactNode {
  * 1. **它在等你点确认** —— 这是 `Module.badge` 注释的原话那个场景，
  *    而且审批**默认不超时**（它一直等下去），所以这件事最急：
  *    不亮的话用户根本不知道去点哪儿。
- * 2. 还没配 key —— 「配错了要等很久才发现」是同一类问题，放在同一个位置。
+ * 2. 还没配 key（**或者一份配置都没有**）——「配错了要等很久才发现」是同一类
+ *    问题，放在同一个位置。
  *
  * ⚠️ 两件事共用一个槽位（外壳只给一个），所以要有优先级 ——
  * 「在等你」比「还没配」急：前者是进行中的事，后者是还没开始的事。
@@ -422,7 +413,9 @@ export function AssistantBadge(): ReactNode {
     );
   }
 
-  if (state.keyStatus === null || state.keyStatus.configured) return null;
+  // ⚠️「一份配置都没有」也算 —— 不加这条的话，删光配置之后角标反而灭了，
+  // 而那时助手**完全不能用**（比「没配 key」还严重）。
+  if (state.profiles.length > 0 && state.keyStatus?.configured === true) return null;
   return (
     <span
       className="rd-module-badge"

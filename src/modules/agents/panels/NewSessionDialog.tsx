@@ -24,6 +24,7 @@ import { platform } from '../../../shared/platform';
 import {
   KIND_LABEL,
   MAX_SESSIONS_PER_KIND,
+  remoteOf,
   type AgentWorkspace,
   type LaunchArgs,
 } from '../core/types';
@@ -40,11 +41,20 @@ type CountedKind = (typeof KINDS)[number];
 interface Props {
   state: AgentsState;
   store: AgentsStore;
-  workspace: AgentWorkspace;
+  /** 打开时预选哪个工作目录（点哪一行的「＋」就是哪一个）。 */
+  initialWorkspaceId: string;
+  /** 能选的全部目录（侧栏那个顺序，含置顶）。 */
+  workspaces: readonly AgentWorkspace[];
   onClose: () => void;
 }
 
-export function NewSessionDialog({ state, store, workspace, onClose }: Props): ReactNode {
+export function NewSessionDialog({
+  state,
+  store,
+  initialWorkspaceId,
+  workspaces,
+  onClose,
+}: Props): ReactNode {
   // 默认一个 claude：侧栏那个「＋」以前就是直接开一个 claude，
   // 用户的手感是「点一下 = 来一个」，别让他在对话框里再点一次
   const [counts, setCounts] = useState<Record<CountedKind, number>>({
@@ -52,8 +62,19 @@ export function NewSessionDialog({ state, store, workspace, onClose }: Props): R
     codex: 0,
     shell: 0,
   });
+  /**
+   * 开在哪个工作目录里。
+   *
+   * ⚠️ 预选的是「你点的那一行」，但**可以改** —— 之前这里没有选择器，
+   * 入口绑死在那一行上，想开在别处只能关掉重来。
+   */
+  const [targetId, setTargetId] = useState(initialWorkspaceId);
   const [argsOpen, setArgsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  // 目录在对话框开着的时候被删掉了（右键菜单能在别的窗口删）→ 退回第一条。
+  // 一条都没有的话入口就不该开得出来，这里是防御。
+  const target = workspaces.find((w) => w.id === targetId) ?? workspaces[0];
 
   const total = KINDS.reduce((sum, kind) => sum + counts[kind], 0);
 
@@ -67,11 +88,11 @@ export function NewSessionDialog({ state, store, workspace, onClose }: Props): R
   };
 
   const submit = (): void => {
-    if (total === 0 || busy) return;
+    if (total === 0 || busy || target === undefined) return;
     setBusy(true);
     void store
       .createMany(
-        workspace.id,
+        target.id,
         KINDS.map((kind) => ({ kind, count: counts[kind] })),
       )
       .finally(onClose);
@@ -87,9 +108,27 @@ export function NewSessionDialog({ state, store, workspace, onClose }: Props): R
         <h2 className="rd-modal-title" id="agent-new-title">
           新建会话
         </h2>
-        <p className="rd-hint">
-          在 <span className="rd-mono">{workspace.name}</span> 里一次开几个：
+        <label className="rd-field">
+          <span>工作目录</span>
+          <select
+            data-testid="agent-new-workspace"
+            value={target?.id ?? ''}
+            onChange={(e) => setTargetId(e.target.value)}
+          >
+            {workspaces.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+                {remoteOf(w) !== null ? '（远端）' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {/* 路径单独一行：目录名可能重名（两个项目都叫 `app`），路径不会 */}
+        <p className="rd-hint rd-muted" data-testid="agent-new-workspace-path">
+          {target?.path}
         </p>
+
+        <p className="rd-hint">一次开几个：</p>
 
         {KINDS.map((kind) => (
           <label className="rd-field rd-count" key={kind}>

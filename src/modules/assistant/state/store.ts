@@ -1,8 +1,7 @@
 /**
  * 助手模块自己的状态。
  *
- * 现在装的只有**配置**（用哪家模型、key 配没配）。会话和消息流是后面的事 ——
- * 但配置得先能用：没有它，后面所有东西连不上模型。
+ * 两大块：**模型配置**（可以有好几份，用哪一份）和**对话**。
  *
  * 几条和别的模块一致的规矩：
  *
@@ -10,21 +9,43 @@
  * * `init()` **幂等**，切走再切回来不会把用户正在改的东西重置掉
  * * 落盘用 `createKeyValue`（桌面端走 SQLite，浏览器端走 localStorage），
  *   **key 本身不走这里** —— 它在系统钥匙串里，而且只写不读
+ *
+ * # 配置是「改了就存」，没有保存按钮
+ *
+ * 原来有 `config`（编辑中）/ `saved`（已落盘）两份 + `isDirty()` 逐字段比。
+ * 有了**列表**之后那套不能要了：在 A 上改半截、点侧栏切到 B —— 那半截要么
+ * 被静默丢掉（最糟），要么得弹「有未保存的修改」（烦）。
+ * 现在只有一份真身（`profiles` 里那条），「眼前那份 = 发出去那份 = 存着那份」。
  */
 
 import type { ShellApi } from '../../../shell/types';
+import { platform } from '../../../shared/platform';
 import { createKeyValue } from '../../../shared/platform/kv';
-import { coerceConfig, defaultConfig, validateConfig } from '../core/config';
-import type { ProviderConfig, ProviderKind } from '../core/config';
+import type { KeyValueStore } from '../../../shared/platform/kv';
+import {
+  LEGACY_CONFIG_KEY,
+  SELECTED_KEY,
+  configOf,
+  defaultConfig,
+  defaultProfile,
+  isLegacyProfile,
+  profileFromLegacy,
+  selectedProfile,
+  validateConfig,
+} from '../core/config';
+import type { ProviderKind, ProviderProfile } from '../core/config';
 import { reduceChat } from '../core/chat';
 import type { ChatMessage, PendingApproval } from '../core/chat';
 import { assistantClient } from '../services';
+import { createAssistantProfileStore } from '../services/profiles';
 import type {
   ApprovalDecision,
   AssistantEvent,
   AssistantKeyStatus,
+  AssistantClient,
   ConnectionReport,
 } from '../services/types';
+import type { ProfileStore } from '../../../shared/connections/types';
 
 // 对话那部分的类型定义在 `core/chat.ts` 里（和那个纯函数的 reducer 放一起）。
 // 这里 re-export 一份 —— 界面照旧从 store 这边拿，不用知道它住在哪儿。
@@ -33,11 +54,11 @@ export type { ChatMessage, PendingApproval, ToolTrace } from '../core/chat';
 export interface AssistantState {
   /** 初始化跑完没有 */
   ready: boolean;
-  /** 界面上正在编辑的那份 */
-  config: ProviderConfig;
-  /** 已经落到 KV 里的那份（用来算「有没有改过」） */
-  saved: ProviderConfig;
-  /** key 配到什么程度了 */
+  /** 配置名单（照连接档案：整个数组存一个键）。 */
+  profiles: ProviderProfile[];
+  /** 现在用的是哪一份。 */
+  selectedId: string | null;
+  /** **选中那份**的 key 配到什么程度了 */
   keyStatus: AssistantKeyStatus | null;
   /** 正在存 key */
   savingKey: boolean;
@@ -70,7 +91,6 @@ export interface AssistantState {
   pending: PendingApproval | null;
 }
 
-const CONFIG_KEY = 'provider';
 const WORKSPACE_KEY = 'workspace';
 const KEY_NOTICE_MS = 2500;
 
@@ -91,8 +111,8 @@ export class AssistantStore {
   private listeners = new Set<() => void>();
   private state: AssistantState = {
     ready: false,
-    config: defaultConfig('anthropic'),
-    saved: defaultConfig('anthropic'),
+    profiles: [],
+    selectedId: null,
     keyStatus: null,
     savingKey: false,
     test: null,
@@ -129,10 +149,27 @@ export class AssistantStore {
    */
   private sessionId = newSessionId();
 
-  private kv = createKeyValue({
-    tauriFile: 'assistant.json',
-    webKey: 'devtoolkit.assistant.v1',
-  });
+  private kv: KeyValueStore;
+  private client: AssistantClient;
+  private profileStore: ProfileStore<ProviderProfile>;
+
+  /**
+   * 两个依赖都可以注入 —— 单测里塞假的 KV 和假的 client 就不必碰 localStorage
+   * 和平台层（照 `AgentsStore` 的 `constructor(services)`）。
+   * 两个默认值都**不碰平台**（`createKeyValue` 只是个包装），所以构造过程
+   * 依然可以在模块被 import 的那一刻跑。
+   */
+  constructor(
+    client: AssistantClient = assistantClient,
+    kv: KeyValueStore = createKeyValue({
+      tauriFile: 'assistant.json',
+      webKey: 'devtoolkit.assistant.v1',
+    }),
+  ) {
+    this.client = client;
+    this.kv = kv;
+    this.profileStore = createAssistantProfileStore(kv);
+  }
 
   attachShell(shell: ShellApi): void {
     this.shell = shell;
@@ -158,29 +195,88 @@ export class AssistantStore {
     return this.initPromise;
   }
 
+  /**
+   * 读盘 + **升级迁移**。
+   *
+   * 迁移的顺序是有讲究的（见下面每一步的注释）：**先写名单、成功之后才消费
+   * 旧键** —— 反过来的话，「写名单失败」就变成「用户配置丢了」。
+   */
   private async load(): Promise<void> {
-    let config = defaultConfig('anthropic');
+    let profiles: ProviderProfile[] = [];
+    let selectedId: string | null = null;
     let workspace: string | null = null;
+
     try {
-      const raw = await this.kv.get<unknown>(CONFIG_KEY);
-      if (raw !== null && raw !== undefined) config = coerceConfig(raw);
+      profiles = await this.profileStore.load();
+
+      if (profiles.length === 0) {
+        // 名单是空的：要么是全新安装，要么是**从旧版升上来的**（旧版把那一份
+        // 裸配置存在另一个键里）。
+        const legacy = await this.kv.get<unknown>(LEGACY_CONFIG_KEY);
+        const adopted = profileFromLegacy(legacy);
+        profiles = [adopted ?? defaultProfile([])];
+
+        // ⚠️ **先写名单。** 这一步失败会抛出去，旧键一个字没动 ——
+        // 下次启动从头再来一遍，用户什么都没丢。
+        await this.profileStore.save(profiles);
+
+        // ⚠️ 名单写成了**才**消费旧键。这里失败没有副作用：
+        // 名单已经非空，下次不会再采纳它（旧键就成个孤儿，不伤任何事）。
+        if (adopted !== null) {
+          await this.kv.set(LEGACY_CONFIG_KEY, null);
+        }
+      }
+
+      const savedSelected = await this.kv.get<unknown>(SELECTED_KEY);
+      selectedId =
+        typeof savedSelected === 'string' && profiles.some((p) => p.id === savedSelected)
+          ? savedSelected
+          : (profiles[0]?.id ?? null);
+
       const savedWorkspace = await this.kv.get<unknown>(WORKSPACE_KEY);
       if (typeof savedWorkspace === 'string' && savedWorkspace !== '') {
         workspace = savedWorkspace;
       }
     } catch (e) {
-      // 读配置失败不该让模块打不开：用默认值，把错误说出来
+      // 读配置失败不该让模块打不开：兜一份默认的，把错误说出来
       this.shell.reportError(e);
+      if (profiles.length === 0) {
+        profiles = [defaultProfile([])];
+        selectedId = profiles[0]?.id ?? null;
+      }
     }
-    this.set({ ready: true, config, saved: config, workspace });
+
+    this.set({ ready: true, profiles, selectedId, workspace });
     await this.refreshKeyStatus();
   }
 
-  /** 重新问一次 key 的状态。 */
+  /**
+   * 重新问一次**选中那份**的 key 状态。
+   *
+   * ⚠️ 顺带做一件升级的事：从旧版迁过来的那一份如果**还没有 key**，那把 key
+   * 可能还在老条目（`api_key:<提供方>`）里躺着 —— 这里再试一次搬迁。
+   *
+   * **刻意不落任何「搬过了」的标记**：重试条件从「现在还没有 key」推导，
+   * 于是「搬到一半崩了」「钥匙串当时锁着」都能在下次自动自愈，直到成功为止。
+   * 搬迁本身是幂等的（`plan_key_move`）。
+   */
   async refreshKeyStatus(): Promise<void> {
+    const profile = this.selected();
+    if (profile === null) {
+      this.set({ keyStatus: null });
+      return;
+    }
+
+    const id = profile.id;
     try {
-      const keyStatus = await assistantClient.keyStatus(this.state.config.kind);
-      this.set({ keyStatus });
+      let status = await this.client.keyStatus(id);
+      if (!status.configured && isLegacyProfile(profile)) {
+        await this.client.migrateApiKey(profile.kind, id);
+        status = await this.client.keyStatus(id);
+      }
+      // ⚠️ 问的过程中用户可能切到别份了 —— 那次答案不该写进现在这份的状态里
+      if (this.state.selectedId !== id) return;
+      this.set({ keyStatus: status });
     } catch (e) {
       this.set({ keyStatus: null });
       this.shell.reportError(e);
@@ -207,9 +303,14 @@ export class AssistantStore {
       return;
     }
 
+    const profile = this.selected();
+    if (profile === null) return;
+
     this.set({ testing: true, test: null });
     try {
-      const report = await assistantClient.testConnection(this.state.config);
+      // 一次往返，而且**不走 Channel**（理由见 `services/types.ts`）。
+      // `configOf` 只取那三个字段 —— id 单独传，它只用来定位钥匙串条目。
+      const report = await this.client.testConnection(configOf(profile), profile.id);
       this.set({ test: report });
     } catch (e) {
       this.set({
@@ -220,64 +321,134 @@ export class AssistantStore {
     }
   }
 
-  // ---------------------------------------------------------------- 编辑
+  // ---------------------------------------------------------------- 配置名单
 
-  /** 换提供方：地址和模型跟着换成那一家的默认值。 */
-  setKind(kind: ProviderKind): void {
-    if (kind === this.state.config.kind) return;
-    // `test: null` —— 换了一家之后，上一次的「通了」不再代表任何事。
-    this.set({ config: defaultConfig(kind), notice: null, error: null, test: null });
-    // 两家的 key 是分开存的，所以状态得重新问一次
+  /** 现在用的那一份（`null` = 一份都没有）。 */
+  selected(): ProviderProfile | null {
+    return selectedProfile(this.state);
+  }
+
+  /** 按 id 找一份。 */
+  profileById(id: string): ProviderProfile | null {
+    return this.state.profiles.find((p) => p.id === id) ?? null;
+  }
+
+  /**
+   * 新建一份配置，自动选中。名字自动去重（「新建配置」「新建配置 2」……）——
+   * 侧栏里两条同名的话，用户分不清哪条是哪条。
+   */
+  async createProfile(kind: ProviderKind = 'anthropic'): Promise<string> {
+    const profile = defaultProfile(this.state.profiles, kind);
+    const profiles = [...this.state.profiles, profile];
+    this.set({
+      profiles,
+      selectedId: profile.id,
+      keyStatus: null,
+      test: null,
+      error: null,
+    });
+    await this.persist(profiles);
+    void this.kv.set(SELECTED_KEY, profile.id).catch(() => undefined);
+    // key 是**按配置**存的，所以新那份的状态必须单独问一次
+    await this.refreshKeyStatus();
+    return profile.id;
+  }
+
+  /** 换一份用。 */
+  select(id: string | null): void {
+    if (id === this.state.selectedId) return;
+    // ⚠️ 一并清掉 key 状态和测试结果：它们说的都是**上一份**，
+    // 留着的话用户会看着 A 的「已配置」去发 B 的消息。
+    this.set({ selectedId: id, keyStatus: null, test: null, notice: null, error: null });
+    void this.kv.set(SELECTED_KEY, id).catch(() => undefined);
     void this.refreshKeyStatus();
   }
 
-  setBaseUrl(baseUrl: string): void {
-    this.set({
-      config: { ...this.state.config, baseUrl },
-      notice: null,
-      test: null,
-    });
+  /**
+   * 改一份配置。**改了就存**（没有保存按钮 —— 理由见文件头那段）。
+   *
+   * ⚠️ 换提供方时地址和模型会跟着换成那一家的默认值。这**不是**
+   * `applyKindSwitch` 那种「只改用户没动过的」：那三个字段是绑在一起的，
+   * 「Anthropic 的地址 + openai 的模型名」不是一个有意义的组合。
+   *
+   * ⚠️ **换提供方不影响这一份的 key** —— 条目挂在配置 id 上，不挂在提供方上。
+   * 这是刻意的（用户建了一份、填了 key、后来换了家，不该让他重填）。
+   */
+  async updateProfile(
+    id: string,
+    patch: Partial<Omit<ProviderProfile, 'id'>>,
+  ): Promise<void> {
+    const current = this.profileById(id);
+    if (current === null) return;
+
+    const next: ProviderProfile = { ...current, ...patch, id: current.id };
+    if (patch.kind !== undefined && patch.kind !== current.kind) {
+      next.baseUrl = patch.baseUrl ?? defaultConfig(patch.kind).baseUrl;
+      next.model = patch.model ?? defaultConfig(patch.kind).model;
+    }
+
+    const profiles = this.state.profiles.map((p) => (p.id === id ? next : p));
+    // ⚠️ 配置一改，上一次那个「通了」就不再代表现在这套了
+    this.set({ profiles, test: null, notice: null, error: null });
+    await this.persist(profiles);
   }
 
-  setModel(model: string): void {
-    this.set({
-      config: { ...this.state.config, model },
-      notice: null,
-      test: null,
-    });
-  }
+  /**
+   * 删一份配置。
+   *
+   * ⚠️ **连着钥匙串里那条一起删** —— id 随机生成、永不复用，留着就是纯垃圾。
+   * 但那不可逆，所以配过 key 的时候先问一句。
+   *
+   * ⚠️ **先落盘、后删钥匙串**：反过来的话，落盘失败就成了「配置还在、key 没了」。
+   */
+  async deleteProfile(id: string): Promise<void> {
+    const profile = this.profileById(id);
+    if (profile === null) return;
 
-  /** 有没改过（没改就不用给「保存」按钮亮起来）。 */
-  isDirty(): boolean {
-    const { config, saved } = this.state;
-    return (
-      config.kind !== saved.kind ||
-      config.baseUrl !== saved.baseUrl ||
-      config.model !== saved.model
-    );
+    // 配过才问：没配过就没什么可丢的，多一次确认只是烦
+    let hasKey = false;
+    try {
+      hasKey = (await this.client.keyStatus(id)).configured;
+    } catch {
+      // 问不出来就当没有（钥匙串用不了时本来就存不住）
+    }
+    if (hasKey) {
+      const ok = await platform.confirm(
+        `「${profile.name}」已经配了 API key，删掉这份配置会连钥匙串里那把一起删。继续？`,
+        '删除配置',
+      );
+      if (!ok) return;
+    }
+
+    const profiles = this.state.profiles.filter((p) => p.id !== id);
+    // 删的是选中的那份 → 落到第一条（和 redis 的 deleteProfile 同一个口径）
+    const selectedId =
+      this.state.selectedId === id ? (profiles[0]?.id ?? null) : this.state.selectedId;
+
+    this.set({ profiles, selectedId, keyStatus: null, test: null, error: null });
+    await this.persist(profiles);
+
+    // 落盘成功了才动钥匙串。空串 = 删（幂等：本来就没有也算成功）
+    try {
+      await this.client.setApiKey(id, '');
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+    if (selectedId !== null) await this.refreshKeyStatus();
   }
 
   /** 配置本身有没有问题（界面在输入框下面显示它）。 */
   configProblem(): string | null {
-    return validateConfig(this.state.config);
+    const profile = this.selected();
+    return profile === null
+      ? '还没有模型配置 —— 在左边点「新建」加一份'
+      : validateConfig(profile);
   }
 
-  /** 保存配置。**先校验再落盘** —— 存一份发不出请求的配置没有意义。 */
-  async saveConfig(): Promise<void> {
-    const problem = this.configProblem();
-    if (problem !== null) {
-      this.set({ error: problem });
-      return;
-    }
-    const config: ProviderConfig = {
-      kind: this.state.config.kind,
-      baseUrl: this.state.config.baseUrl.trim(),
-      model: this.state.config.model.trim(),
-    };
+  /** 整份名单落盘。 */
+  private async persist(profiles: readonly ProviderProfile[]): Promise<void> {
     try {
-      await this.kv.set(CONFIG_KEY, config);
-      this.set({ config, saved: config, error: null });
-      this.flashNotice('已保存');
+      await this.profileStore.save(profiles);
     } catch (e) {
       this.set({ error: '保存失败' });
       this.shell.reportError(e);
@@ -294,6 +465,11 @@ export class AssistantStore {
    * 否则用户会以为存上了。
    */
   async saveApiKey(key: string): Promise<void> {
+    const profile = this.selected();
+    if (profile === null) {
+      this.set({ error: '还没有模型配置 —— 在左边点「新建」加一份' });
+      return;
+    }
     const trimmed = key.trim();
     if (trimmed === '') {
       this.set({ error: 'key 是空的' });
@@ -301,7 +477,15 @@ export class AssistantStore {
     }
     this.set({ savingKey: true, error: null });
     try {
-      await assistantClient.setApiKey(this.state.config.kind, trimmed);
+      await this.client.setApiKey(profile.id, trimmed);
+
+      // ⚠️ 用户自己填了之后，老条目（`api_key:<提供方>`）就再也没人读了 ——
+      // 顺手让搬迁再跑一次：这回走的是 `JustDelete` 分支（目标非空 → 只删来源），
+      // **不会**覆盖刚填的这把。失败无所谓，它只是个清理。
+      if (isLegacyProfile(profile)) {
+        await this.client.migrateApiKey(profile.kind, profile.id).catch(() => undefined);
+      }
+
       await this.refreshKeyStatus();
       this.flashNotice('key 已存进系统钥匙串');
     } catch (e) {
@@ -312,11 +496,14 @@ export class AssistantStore {
     }
   }
 
-  /** 删掉这个提供方的 key。 */
+  /** 删掉**这一份配置**的 key。 */
   async clearApiKey(): Promise<void> {
+    const profile = this.selected();
+    if (profile === null) return;
+
     this.set({ savingKey: true, error: null });
     try {
-      await assistantClient.setApiKey(this.state.config.kind, '');
+      await this.client.setApiKey(profile.id, '');
       await this.refreshKeyStatus();
       this.flashNotice('key 已删除');
     } catch (e) {
@@ -353,7 +540,7 @@ export class AssistantStore {
     // 那比不清更让人困惑。
     const previous = this.sessionId;
     this.sessionId = newSessionId();
-    void assistantClient.clearSession(previous).catch(() => undefined);
+    void this.client.clearSession(previous).catch(() => undefined);
     this.set({ messages: [], error: null });
   }
 
@@ -388,19 +575,27 @@ export class AssistantStore {
       return;
     }
 
+    // ⚠️ **在 await 之前把配置抓在手里**：起跑之后用户切到别的份也不影响这一句
+    //（配置是「改了就存」，所以抓的这一份就是当时眼前那份）。
+    const profile = this.selected();
+    if (profile === null) {
+      this.set({ error: '还没有模型配置 —— 在右边「模型」面板里加一份。' });
+      return;
+    }
+
     // 用户那句先上去 —— 界面立刻有反应，不用等网络。
     this.openMessageId = null;
     this.appendMessage({ id: newMessageId(), role: 'user', text, tools: [] });
     this.set({ running: true, error: null, pending: null });
 
     try {
-      const run = await assistantClient.send({
+      const run = await this.client.send({
         session: this.sessionId,
         workspace,
         prompt: text,
-        // ⚠️ 用**已经保存**的那份配置，不是正在编辑的那份 ——
-        // 用户改了一半还没点保存，不该影响这一句。
-        config: this.state.saved,
+        // `config` 是 IPC 那三个字段的契约，`profileId` 只用来定位钥匙串条目
+        config: configOf(profile),
+        profileId: profile.id,
         strategy: this.state.strategy,
         onEvent: (event) => this.onEvent(event),
       });
@@ -423,7 +618,7 @@ export class AssistantStore {
     // （后端返回 `false` 是个**契约**，不是错误 —— 见 `services/types.ts`。）
     this.set({ pending: null });
     try {
-      await assistantClient.approve(pending.key.run, pending.key.call, decision);
+      await this.client.approve(pending.key.run, pending.key.call, decision);
     } catch (e) {
       this.shell.reportError(e);
     }
@@ -438,7 +633,7 @@ export class AssistantStore {
     // 那条到了之后走的是同一个分支，幂等。
     this.set({ running: false, runId: null, pending: null });
     try {
-      await assistantClient.cancel(run);
+      await this.client.cancel(run);
     } catch (e) {
       this.shell.reportError(e);
     }

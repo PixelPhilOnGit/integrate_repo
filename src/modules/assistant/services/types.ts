@@ -25,17 +25,34 @@ export interface AssistantKeyStatus {
 }
 
 export interface AssistantClient {
-  /** 这个提供方的 key 配到什么程度了。 */
-  keyStatus(kind: ProviderKind): Promise<AssistantKeyStatus>;
+  /**
+   * **这份配置**的 key 配到什么程度了。
+   *
+   * ⚠️ 收的是配置 id 而不是提供方 —— key 挂在**配置**上：同一家可以有好几份
+   *（「工作用 Anthropic」「自己的 Anthropic」），按提供方存会让它们互相顶掉。
+   */
+  keyStatus(profileId: string): Promise<AssistantKeyStatus>;
 
   /**
-   * 存一把 key。
+   * 存一把 key。**空串 = 删掉**。
    *
    * ⚠️ **没有对应的「读回来」** —— 这是和连接密码故意不一样的地方：
    * 密码要回填进编辑框让用户改，而 key 只需要「换一把」。
    * 少一个读接口，就少一条密钥经过 webview 的路。
    */
-  setApiKey(kind: ProviderKind, key: string): Promise<void>;
+  setApiKey(profileId: string, key: string): Promise<void>;
+
+  /**
+   * 把**老版按提供方命名的凭据**搬到**按配置命名的条目**上（升级用）。
+   *
+   * ⚠️ **幂等，可以反复调。** 调用方什么都不用记：只在这份配置「还没有 key
+   * 且它正是从旧版迁过来的那一份」时才调它，搬没搬成从 `keyStatus` 看得出来。
+   * 于是「搬到一半崩了」「钥匙串当时锁着」都能在下次自动重试。
+   *
+   * 为什么在 Rust 侧做：前端**拿不到 key 的值**（只写不读）。搬法（读来源 →
+   * 写目标 → 删来源）在 Rust 的 `plan_key_move` 里，有穷举测试。
+   */
+  migrateApiKey(fromKind: ProviderKind, toProfileId: string): Promise<void>;
 
   /**
    * 发一句话，跑一次。
@@ -82,7 +99,7 @@ export interface AssistantClient {
    * 「网络根本不通」是两回事，而走 Channel 的话这两种会表现成同一个样子
    * （都卡着、都不报错）。一个直接返回结果的命令才能把它们分开。
    */
-  testConnection(config: ProviderConfig): Promise<ConnectionReport>;
+  testConnection(config: ProviderConfig, profileId: string): Promise<ConnectionReport>;
 }
 
 /**
@@ -189,6 +206,14 @@ export interface SendRequest {
   workspace: string;
   prompt: string;
   config: ProviderConfig;
+  /**
+   * 用哪一份**配置**的 key（key 挂在配置上，不挂在提供方上）。
+   *
+   * ⚠️ 和 `config` 分开传是刻意的：`config` 是 IPC 那三个字段的契约（Rust 那边
+   * 用它建 provider），而 id 只用来定位钥匙串条目 —— 两者混在一起会让
+   * 「配置的形状」和「凭据的名字」纠缠，将来各自要变时互相绊住。
+   */
+  profileId: string;
   /**
    * 上下文策略。
    *

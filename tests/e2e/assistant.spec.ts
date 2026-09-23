@@ -48,29 +48,35 @@ test('切到 OpenAI 兼容：地址被清空，并且说清为什么必须自己
   await expect(page.getByTestId('assistant-config-error')).toContainText('没有默认值');
 });
 
-test('地址填错时给出能照着改的提示，并且存不下去', async ({ page }) => {
+test('地址填错时给出能照着改的提示，而且**发不出去**', async ({ page }) => {
   await page.getByTestId('assistant-kind').selectOption('openai');
   await page.getByTestId('assistant-base-url').fill('api.deepseek.com');
 
-  const err = page.getByTestId('assistant-config-error');
-  await expect(err).toContainText('http');
+  await expect(page.getByTestId('assistant-config-error')).toContainText('http');
 
-  // 点保存也不该把它存下去：再切回来还是那份没保存的编辑值
-  await page.getByTestId('assistant-save-config').click();
-  await expect(err).toBeVisible();
-  await expect(page.getByTestId('assistant-notice')).toHaveCount(0);
+  // ⚠️ 这个值**会**被存下来（改了就存），拦的是「发消息」那一步 ——
+  // 不让存的话，用户改到一半切到别的配置就白改了。
+  await expect(page.getByTestId('assistant-blockers')).toContainText('http');
 });
 
-test('填齐之后能保存，按钮从「保存」变成「已保存」', async ({ page }) => {
-  // ⚠️ 要真的改一个**不一样**的值：填回默认值的话配置没变、按钮不会亮，
-  // 那样这个用例就在测一个没发生的事
+test('⚠️ 改了立刻落盘 —— 没有「保存」按钮了', async ({ page }) => {
+  // 有列表之后，「编辑中 / 已保存」两份状态会在切换配置时丢掉半截改动 ——
+  // 所以改成改了就存（和连接表单一个做法）。
   await page.getByTestId('assistant-model').fill('claude-sonnet-5');
-  await expect(page.getByTestId('assistant-save-config')).toHaveText('保存');
 
-  await page.getByTestId('assistant-save-config').click();
+  // ⚠️ **不能靠 `page.reload()` 验这件事**：`beforeEach` 里那个
+  // `addInitScript(() => localStorage.clear())` 在**每次导航**时都会跑，
+  // reload 之后 localStorage 是空的 —— 那样子验的是「清空之后回到默认值」。
+  //
+  // 所以：直接看落盘结果（「改了就存」是异步的，先等它真写进去），
+  // 再用**切模块**（不导航）验一次回来还在。
+  await expect
+    .poll(async () => page.evaluate(() => localStorage.getItem('devtoolkit.assistant.v1')))
+    .toContain('claude-sonnet-5');
 
-  await expect(page.getByTestId('assistant-save-config')).toHaveText('已保存');
-  await expect(page.getByTestId('assistant-notice')).toContainText('已保存');
+  await page.getByTestId('module-tasks').click();
+  await page.getByTestId('module-assistant').click();
+  await expect(page.getByTestId('assistant-model')).toHaveValue('claude-sonnet-5');
 });
 
 test('浏览器版明说没有钥匙串 —— 不能假装存上了', async ({ page }) => {
@@ -101,18 +107,34 @@ test('存 key → 显示已配置 → 换一把 → 删除', async ({ page }) =>
   await expect(page.getByTestId('assistant-key-status')).toContainText('没配');
 });
 
-test('两家的 key 分开：换了提供方，状态跟着变', async ({ page }) => {
-  // ⚠️ 共用一条的话，来回切会互相覆盖 —— 症状是「我明明填过，怎么又要填」。
+test('⚠️ key 挂在**配置**上，不在提供方上', async ({ page }) => {
+  // 这条的语义变了：以前 key 按提供方存（两家各一把），现在按配置存 ——
+  // 同一家的两份配置各能有一把，那正是「多份配置」要解决的。
   await page.getByTestId('assistant-key-input').fill('sk-ant');
   await page.getByTestId('assistant-key-save').click();
   await expect(page.getByTestId('assistant-key-status')).toContainText('已配置');
 
+  // 同一份配置换个提供方：key **不变**（条目挂在配置 id 上）
+  // —— 用户不该因为换了家就重填一把
   await page.getByTestId('assistant-kind').selectOption('openai');
-  // 换成 openai 之后是**另一条凭据**，还没配
+  await expect(page.getByTestId('assistant-key-status')).toContainText('已配置');
+});
+
+test('⚠️ 两份配置各有一把 key —— 新建的那份是「还没配」', async ({ page }) => {
+  await page.getByTestId('assistant-key-input').fill('sk-第一份');
+  await page.getByTestId('assistant-key-save').click();
+  await expect(page.getByTestId('assistant-key-status')).toContainText('已配置');
+
+  await page.getByTestId('assistant-profile-new').click();
+
+  // ⚠️ 新建的那份**不共用**上一把 —— 共用的话两份 Anthropic 配置会互相顶掉，
+  // 症状是「我明明填过，怎么又要填」。这条就是按配置存的全部意义。
   await expect(page.getByTestId('assistant-key-status')).toHaveText(/还没配|没配/);
 
-  await page.getByTestId('assistant-kind').selectOption('anthropic');
-  // 切回来，anthropic 那把还在
+  // 切回第一份，那把还在。
+  // ⚠️ 用位置而不是 id：全新安装那份的 id 是随机生成的（`p_default` 只属于
+  // 「从旧版迁过来」的那一份）。
+  await page.locator('[data-profile-selected]').first().click();
   await expect(page.getByTestId('assistant-key-status')).toContainText('已配置');
 });
 
@@ -323,4 +345,67 @@ test('等确认的时候图标栏上亮角标 —— 用户在别的模块里也
     'data-reason',
     'waiting',
   );
+});
+
+// ---------------------------------------------------------------- 多份配置
+//
+// ⚠️ 这一组里最要紧的是**升级**那条：用户从旧版（只有一份配置、key 按提供方存）
+// 升上来时，配置和钥匙串里那把 key 都得跟着过来。
+
+test('侧栏是配置名单：新建一份、看得出哪份在用', async ({ page }) => {
+  await expect(page.locator('[data-profile-selected]')).toHaveCount(1);
+
+  await page.getByTestId('assistant-profile-new').click();
+  await expect(page.locator('[data-profile-selected]')).toHaveCount(2);
+  // 名字自动去重（侧栏里两条同名的话，用户分不清哪条是哪条）
+  await expect(page.getByTestId('assistant-profile-name')).toHaveValue('新建配置 2');
+});
+
+test('⚠️ 升级：旧版那份配置会被搬过来，一个字段都不丢', async ({ page }) => {
+  // 预埋旧版的 KV —— 它只有一份**裸配置**，存在键 `provider` 里
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'devtoolkit.assistant.v1',
+      JSON.stringify({
+        provider: {
+          kind: 'openai',
+          baseUrl: 'https://api.deepseek.com',
+          model: 'deepseek-chat',
+        },
+      }),
+    );
+  });
+  await page.reload();
+  await page.getByTestId('module-assistant').click();
+
+  // 那份配置被采纳成第一条（固定 id、名字「默认配置」），字段原样
+  await expect(page.getByTestId('assistant-kind')).toHaveValue('openai');
+  await expect(page.getByTestId('assistant-base-url')).toHaveValue(
+    'https://api.deepseek.com',
+  );
+  await expect(page.getByTestId('assistant-model')).toHaveValue('deepseek-chat');
+  await expect(page.getByTestId('assistant-profile-name')).toHaveValue('默认配置');
+
+  // ⚠️ 而旧键被**消费掉**了（置成 null）—— 不消费的话下次启动还会再采纳一遍，
+  // 而那时用户可能已经改过这份配置了。
+  // （键本身还在、值是 null —— 所以断言的是值不是键）
+  const left = await page.evaluate(() => localStorage.getItem('devtoolkit.assistant.v1'));
+  const parsed = JSON.parse(left ?? '{}') as { provider?: unknown; profiles?: unknown[] };
+  expect(parsed.provider ?? null).toBeNull();
+  expect(parsed.profiles).toHaveLength(1);
+});
+
+test('删除一份配置：右键 → 删除，落到第一条', async ({ page }) => {
+  await page.getByTestId('assistant-profile-new').click();
+  await expect(page.locator('[data-profile-selected]')).toHaveCount(2);
+
+  // 删掉第二份（它没配过 key，所以不会弹确认）
+  const second = page.locator('[data-profile-selected]').nth(1);
+  await second.click({ button: 'right' });
+  await page.getByTestId('menu-删除').click();
+
+  await expect(page.locator('[data-profile-selected]')).toHaveCount(1);
+  // 删的是选中的那份 → 落到第一条（也就是剩下那条现在在用）。
+  // ⚠️ 断言「有且只有一条在用」，而不是某个具体 id —— 全新安装的 id 是随机的。
+  await expect(page.locator('[data-profile-selected="true"]')).toHaveCount(1);
 });

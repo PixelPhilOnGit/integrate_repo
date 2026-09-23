@@ -2901,6 +2901,16 @@ textarea:focus {
   font-size: 12px;
 }
 
+/* 配置列表里那个「在用」标记。小字、次要色 —— 它是**状态提示**不是按钮，
+   做得抢眼反而让人以为能点 */
+.rd-assistant-picked {
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
 /* --- 助手：对话 ------------------------------------------------------------ */
 
 /*

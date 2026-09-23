@@ -776,3 +776,48 @@ test('同一个远端目录加两次只会有一条（不会堆出两个一样�
 
   await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
 });
+
+test('⚠️ 新建会话时能选工作目录 —— 选哪个就开在哪个里', async ({ page }) => {
+  // 用户的原话：「多个工作目录也要可以有智能体会话」。多目录多会话本身早就支持，
+  // 缺的是这个**选择器** —— 以前入口绑死在「你点的那一行」上，想开在别处
+  // 只能关掉重来。
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      'devtoolkit.agents.v1',
+      JSON.stringify({
+        workspaces: [
+          { id: 'ws_alpha', path: 'D:\\work\\alpha', name: 'alpha' },
+          { id: 'ws_beta', path: 'D:\\work\\beta', name: 'beta' },
+        ],
+      }),
+    );
+  });
+  await page.reload();
+  await page.getByTestId('module-agents').click();
+
+  // 从 alpha 那一行点「＋」—— 预选的是 alpha
+  await page.getByTestId('agent-new-session-ws_alpha').click();
+  await expect(page.getByTestId('agent-new-workspace')).toHaveValue('ws_alpha');
+  await expect(page.getByTestId('agent-new-workspace-path')).toContainText('alpha');
+
+  // 改成 beta。路径那一行跟着换 —— 目录名可能重名（两个项目都叫 app），路径不会
+  await page.getByTestId('agent-new-workspace').selectOption('ws_beta');
+  await expect(page.getByTestId('agent-new-workspace-path')).toContainText('beta');
+
+  await page.getByTestId('agent-new-confirm').click();
+
+  // ⚠️ 主区切到了 beta：刚建的东西**必须看得见**（留着原窗口才是 bug）
+  await expect(page.getByTestId('agent-ws-head-ws_beta')).toHaveAttribute(
+    'data-workspace-active',
+    'true',
+  );
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(1);
+
+  // 切回 alpha：它是**空的** —— 会话来 beta 里去了，没开错地方
+  await page.getByTestId('agent-ws-head-ws_alpha').click();
+  await expect(page.getByTestId('agent-ws-head-ws_alpha')).toHaveAttribute(
+    'data-workspace-active',
+    'true',
+  );
+  await expect(page.locator('.rd-agent-pane')).toHaveCount(0);
+});

@@ -118,6 +118,8 @@ pub fn run() {
             // 助手的凭据。**只写不读** —— 理由见 assistant_commands.rs
             assistant_commands::assistant_api_key_status,
             assistant_commands::assistant_set_api_key,
+            // 升级：把老版「按提供方」存的 key 搬到「按配置」的条目上（幂等）
+            assistant_commands::assistant_migrate_api_key,
             // 助手跑一次对话 / 回答审批 / 停止 / 清空这个会话的历史。
             // 事件走 `Channel` 流式推回来
             assistant_commands::assistant_send,

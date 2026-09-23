@@ -18,12 +18,16 @@ import type {
 
 export function createTauriAssistantClient(): AssistantClient {
   return {
-    async keyStatus(kind: ProviderKind): Promise<AssistantKeyStatus> {
-      return await invoke<AssistantKeyStatus>('assistant_api_key_status', { kind });
+    async keyStatus(profileId: string): Promise<AssistantKeyStatus> {
+      return await invoke<AssistantKeyStatus>('assistant_api_key_status', { profileId });
     },
 
-    async setApiKey(kind: ProviderKind, key: string): Promise<void> {
-      await invoke<null>('assistant_set_api_key', { kind, key });
+    async setApiKey(profileId: string, key: string): Promise<void> {
+      await invoke<null>('assistant_set_api_key', { profileId, key });
+    },
+
+    async migrateApiKey(fromKind: ProviderKind, toProfileId: string): Promise<void> {
+      await invoke<null>('assistant_migrate_api_key', { fromKind, toProfileId });
     },
 
     async send(request: SendRequest): Promise<number> {
@@ -43,6 +47,7 @@ export function createTauriAssistantClient(): AssistantClient {
         workspace: request.workspace,
         prompt: request.prompt,
         config: request.config,
+        profileId: request.profileId,
         strategy: request.strategy,
         channel,
       });
@@ -64,9 +69,15 @@ export function createTauriAssistantClient(): AssistantClient {
       await invoke<null>('assistant_clear_session', { session });
     },
 
-    async testConnection(config: ProviderConfig): Promise<ConnectionReport> {
+    async testConnection(
+      config: ProviderConfig,
+      profileId: string,
+    ): Promise<ConnectionReport> {
       // 一次往返，拿到就返回 —— 不起通道（理由见 `types.ts`）。
-      return await invoke<ConnectionReport>('assistant_test_connection', { config });
+      return await invoke<ConnectionReport>('assistant_test_connection', {
+        config,
+        profileId,
+      });
     },
   };
 }
