@@ -19,6 +19,7 @@ mod clickhouse;
 mod conn;
 mod error;
 mod mongo;
+mod mongo_shell;
 mod result;
 
 pub use conn::{ConnectionConfig, ConnectionRegistry, ServerInfo, SqlKind, TableInfo, CONNECT_TIMEOUT};

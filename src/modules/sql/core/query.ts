@@ -70,9 +70,23 @@ export function displayName(kind: SqlKind, database: string, schema: string, nam
   return needsSchema ? `${schema}.${name}` : name;
 }
 
-/** Mongo 那边点一个集合时塞进查询框的 JSON */
+/**
+ * Mongo 那边点一个集合时塞进查询框的东西。
+ *
+ * ⚠️ 2026-10-13 从 JSON 改成了 **mongosh 写法**（用户的原话：「查询不应该是
+ * db.xxx 语法吗」）。老写法 `{"collection":"users"}` 仍然认（用户的历史里躺着它，
+ * 见 `mongo_shell.rs` 的文件头），但**新生成的**一律是能直接粘进任何地方的这一种。
+ *
+ * 集合名带 `-` 或 `.` 的时候要用 `db.getCollection("…")`：那种名字在 JS 里
+ * 不是合法标识符（mongosh 自己也这么要求）。
+ */
 export function suggestMongoQuery(collection: string): string {
-  return JSON.stringify({ collection, filter: {}, limit: 50 }, null, 2);
+  // ⚠️ 用**解析器那同一条**规则（Unicode 字母也认）：中文集合名走 `db.用户.find({})`
+  // 是合法的，而且比 `db.getCollection("用户")` 好读得多。带 `-` / `.` 的才必须走
+  // getCollection（那种名字在 JS 里不是标识符）
+  const safe = /^[\p{L}_$][\p{L}\p{N}_$]*$/u.test(collection);
+  const target = safe ? `db.${collection}` : `db.getCollection(${JSON.stringify(collection)})`;
+  return `${target}.find({}).limit(50)`;
 }
 
 /** SQL 标识符加引号（双引号翻倍转义） */

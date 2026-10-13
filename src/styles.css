@@ -2864,20 +2864,7 @@ textarea:focus {
   padding-left: 8px;
 }
 
-/* Mongo 的文档列表：一份一块，带缩进地排开（不是网格 —— 文档是参差的） */
-.rd-mongo-doc {
-  margin: 0 0 10px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 420px;
-  overflow: auto;
-}
+
 
 /* 「这台机器上没有系统钥匙串」那个小提醒。不占地方，悬浮才展开说明了什么 */
 .rd-keychain-warn {

@@ -237,52 +237,87 @@ async fn 连上_列库_列集合() {
 }
 
 #[tokio::test]
-async fn 查文档_形状按契约来() {
+async fn 查文档_结果是一张表() {
     let container = shared();
     let registry = ConnectionRegistry::new();
     registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
     seed(container.port, "app", "users_shape").await;
 
+    // ⚠️ 2026-10-13 起结果是一张**表**（用户：「不应该是类似于表格一样展示吗」），
+    // 不再是「一列、每行一整段 JSON」
     let result = registry
-        .query("m", r#"{"collection":"users_shape","filter":{"age":{"$gt":25}},"sort":{"age":1}}"#)
+        .query("m", "db.users_shape.find({ age: { $gt: 25 } }).sort({ age: 1 })")
         .await
         .expect("应当查成功");
 
-    assert!(result.error.is_none());
-    // ⚠️ 契约：一列，名字 document、类型 json（前端那个标签页靠它认）
-    assert_eq!(result.columns.len(), 1);
-    assert_eq!(result.columns[0].name, "document");
-    assert_eq!(result.columns[0].type_name, "json");
-    assert_eq!(result.rows.len(), 2, "30 和 40 那两条");
+    assert!(result.error.is_none(), "{:?}", result.error);
 
-    // 每行是一段**美化过的** JSON 文本
-    let first = result.rows[0][0].text.clone().expect("有文本");
-    assert!(first.contains('\n'), "契约要求美化过，前端不再自己缩进");
-    let parsed: serde_json::Value = serde_json::from_str(&first).expect("必须是合法 JSON");
-    assert_eq!(parsed["name"], "张三");
-    assert_eq!(parsed["age"], 30);
-    // _id 按 bson 的扩展 JSON 给（Mongo 世界的通用写法）
-    assert!(parsed["_id"]["$oid"].is_string(), "ObjectId 要给 $oid：{first}");
+    // 列是顶层字段的并集，`_id` 排最前
+    let names: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names[0], "_id", "扫一行文档先看的就是它：{names:?}");
+    assert!(names.contains(&"name"), "{names:?}");
+    assert!(names.contains(&"age"), "{names:?}");
+    assert!(names.contains(&"blob"), "_id / name / age / blob 是并集：{names:?}");
+    // ⚠️ 没有固定类型，所以这一列的类型名一律是 any（不是编一个具体类型）
+    assert_eq!(result.columns[0].type_name, "any");
+
+    assert_eq!(result.rows.len(), 2, "30 和 40 那两条");
+    let row0 = &result.rows[0];
+    let cell = |name: &str| -> Option<String> {
+        let at = names.iter().position(|n| *n == name).expect("列在");
+        row0[at].text.clone()
+    };
+    assert_eq!(cell("name").as_deref(), Some("张三"));
+    assert_eq!(cell("age").as_deref(), Some("30"));
+    // ⚠️ ObjectId 给的是**十六进制**（不是 bson 那套 `{"$oid": …}`）——
+    // 表格里每一格少一层噪音
+    let id = cell("_id").expect("_id 在");
+    assert_eq!(id.len(), 24, "ObjectId 应当是 24 位十六进制：{id}");
+    assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
     assert_eq!(result.affected, None, "Mongo 没有影响行数");
 }
 
 #[tokio::test]
-async fn 二进制值按契约用_binary_加_base64() {
+async fn 参差的文档_缺的那格是_null() {
+    let container = shared();
+    let registry = ConnectionRegistry::new();
+    registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
+    seed(container.port, "app", "users_ragged").await;
+
+    let result = registry
+        .query("m", "db.users_ragged.find({}).sort({ age: 1 })")
+        .await
+        .expect("查成功");
+    let names: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+    let blob = names.iter().position(|n| *n == "blob").expect("blob 那一列要在（并集）");
+
+    // 李四没有 blob —— 那一格是 NULL，不是空字符串（那是两件事）
+    let li = result
+        .rows
+        .iter()
+        .find(|row| {
+            let at = names.iter().position(|n| *n == "name").expect("name 在");
+            row[at].text.as_deref() == Some("李四")
+        })
+        .expect("李四在结果里");
+    assert_eq!(li[blob].text, None, "缺的字段是 NULL");
+}
+
+#[tokio::test]
+async fn 二进制值按_mongosh_的样子给() {
     let container = shared();
     let registry = ConnectionRegistry::new();
     registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
     seed(container.port, "app", "users_binary").await;
 
     let result = registry
-        .query("m", r#"{"collection":"users_binary","filter":{"name":"王五"}}"#)
+        .query("m", "db.users_binary.find({ name: \"王五\" })")
         .await
         .expect("查成功");
-
-    let text = result.rows[0][0].text.clone().expect("有文本");
-    let parsed: serde_json::Value = serde_json::from_str(&text).expect("合法 JSON");
-    // 契约：`{"$binary": "<base64>"}` —— 不是 bson 那一层嵌套的 {base64, subType}
-    let encoded = parsed["blob"]["$binary"].as_str().expect("按 $binary 给");
-    assert_eq!(encoded, "//4=", "0xff 0xfe 的 base64");
+    let names: Vec<&str> = result.columns.iter().map(|c| c.name.as_str()).collect();
+    let blob = names.iter().position(|n| *n == "blob").expect("blob 在");
+    // Base64 的 `//4=`，外面套 mongosh 打印的那种 `BinData(子类型, "…")`
+    assert_eq!(result.rows[0][blob].text.as_deref(), Some("BinData(0, \"//4=\")"));
 }
 
 #[tokio::test]
@@ -292,9 +327,188 @@ async fn limit_和截断标记() {
     registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
     seed(container.port, "app", "users_limit").await;
 
-    let result = registry.query("m", r#"{"collection":"users_limit","limit":2}"#).await.expect("查成功");
+    let result = registry.query("m", "db.users_limit.find({}).limit(2)").await.expect("查成功");
     assert_eq!(result.rows.len(), 2);
     assert!(result.truncated, "还有第三条没取，要标出来");
+}
+
+#[tokio::test]
+async fn 老_json_写法也还能查() {
+    let container = shared();
+    let registry = ConnectionRegistry::new();
+    registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
+    seed(container.port, "app", "users_legacy").await;
+
+    // ⚠️ 用户的历史里躺着老写法 —— 它必须继续能用（见 `mongo_shell.rs` 的文件头）
+    let result = registry
+        .query("m", r#"{"collection":"users_legacy","filter":{"age":{"$gt":25}}}"#)
+        .await
+        .expect("查成功");
+    assert!(result.error.is_none());
+    assert_eq!(result.rows.len(), 2);
+}
+
+#[tokio::test]
+async fn 计数_去重_分组() {
+    let container = shared();
+    let registry = ConnectionRegistry::new();
+    registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
+    seed(container.port, "app", "users_agg").await;
+
+    // 计数：一行一列
+    let count = registry
+        .query("m", "db.users_agg.countDocuments({ age: { $gte: 30 } })")
+        .await
+        .expect("查成功");
+    assert_eq!(count.columns[0].name, "count");
+    assert_eq!(count.rows[0][0].text.as_deref(), Some("2"), "30 和 40");
+
+    // 去重：列名就是那个字段
+    let distinct = registry
+        .query("m", "db.users_agg.distinct(\"age\")")
+        .await
+        .expect("查成功");
+    assert_eq!(distinct.columns[0].name, "age");
+    assert_eq!(distinct.rows.len(), 3);
+
+    // 分组：$group 出来的还是文档，照样一张表
+    let grouped = registry
+        .query(
+            "m",
+            "db.users_agg.aggregate([{ $group: { _id: null, n: { $sum: 1 }, avg: { $avg: \"$age\" } } }])",
+        )
+        .await
+        .expect("查成功");
+    assert!(grouped.error.is_none(), "{:?}", grouped.error);
+    let names: Vec<&str> = grouped.columns.iter().map(|c| c.name.as_str()).collect();
+    assert!(names.contains(&"n"), "{names:?}");
+    assert!(names.contains(&"avg"), "{names:?}");
+    assert_eq!(grouped.rows[0][names.iter().position(|n| *n == "n").unwrap()].text.as_deref(), Some("3"));
+}
+
+#[tokio::test]
+async fn 写入真的生效() {
+    let container = shared();
+    let registry = ConnectionRegistry::new();
+    registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
+
+    // ⚠️ 真写库，所以用**这个用例自己的集合**（容器是整个二进制共用的，
+    // 而且 cargo 默认并发跑用例）
+    let insert = registry
+        .query("m", "db.users_write.insertOne({ name: \"张三\", age: 30 })")
+        .await
+        .expect("往返成功");
+    assert!(insert.error.is_none(), "{:?}", insert.error);
+    assert!(insert.columns.iter().any(|c| c.name == "insertedId"), "要回 insertedId");
+
+    registry
+        .query("m", "db.users_write.insertMany([{ name: \"李四\", age: 20 }, { name: \"王五\", age: 40 }])")
+        .await
+        .expect("插第二条");
+
+    // 数一下 —— 这是「真的写进去了」的证据
+    let count = registry.query("m", "db.users_write.countDocuments({})").await.expect("数");
+    assert_eq!(count.rows[0][0].text.as_deref(), Some("3"));
+
+    // 改一条
+    let update = registry
+        .query("m", "db.users_write.updateOne({ name: \"张三\" }, { $set: { age: 31 } })")
+        .await
+        .expect("往返成功");
+    let names: Vec<&str> = update.columns.iter().map(|c| c.name.as_str()).collect();
+    let modified = update.rows[0][names.iter().position(|n| *n == "modifiedCount").expect("有这一列")]
+        .text
+        .clone();
+    assert_eq!(modified.as_deref(), Some("1"));
+
+    // 删一条
+    let deleted = registry
+        .query("m", "db.users_write.deleteMany({ age: { $lt: 25 } })")
+        .await
+        .expect("往返成功");
+    let names: Vec<&str> = deleted.columns.iter().map(|c| c.name.as_str()).collect();
+    let count = deleted.rows[0][names.iter().position(|n| *n == "deletedCount").expect("有这一列")]
+        .text
+        .clone();
+    assert_eq!(count.as_deref(), Some("1"), "李四 20 岁");
+
+    // ⚠️ upsert 建出来的新文档要**带着 filter 的等值条件**（Mongo 的规矩）
+    registry
+        .query("m", "db.users_write.updateOne({ name: \"新人\" }, { $set: { age: 1 } }, { upsert: true })")
+        .await
+        .expect("往返成功");
+    let fresh = registry
+        .query("m", "db.users_write.find({ name: \"新人\" })")
+        .await
+        .expect("查");
+    assert_eq!(fresh.rows.len(), 1, "upsert 出来的那条查得到");
+}
+
+#[tokio::test]
+async fn 索引_增删查() {
+    let container = shared();
+    let registry = ConnectionRegistry::new();
+    registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
+    // ⚠️ 这三条**带 email**：建唯一索引时字段缺失的话三条都是 `null`，
+    // 服务端会以 duplicate key 拒绝（这条是测试自己撞出来的）
+    registry
+        .query(
+            "m",
+            "db.users_index.insertMany([{ email: \"a@x.com\" }, { email: \"b@x.com\" }, { email: \"c@x.com\" }])",
+        )
+        .await
+        .expect("插数据");
+
+    let before = registry.query("m", "db.users_index.getIndexes()").await.expect("查");
+    assert_eq!(before.rows.len(), 1, "一开始只有 _id_ 那个");
+
+    let created = registry
+        .query("m", "db.users_index.createIndex({ email: 1 }, { unique: true })")
+        .await
+        .expect("建索引");
+    // ⚠️ 建索引失败是**一条结果**（不是断连），所以要显式断言这一条没报错 ——
+    // 不查的话「索引没建上」会被后面那句 rows 数不对误报成别的问题
+    assert!(created.error.is_none(), "建索引失败：{:?}", created.error);
+    let names: Vec<&str> = created.columns.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        created.rows[0][names.iter().position(|n| *n == "createdIndex").expect("有这一列")]
+            .text
+            .as_deref(),
+        Some("email_1")
+    );
+
+    let after = registry.query("m", "db.users_index.getIndexes()").await.expect("查");
+    assert_eq!(after.rows.len(), 2);
+    let names: Vec<&str> = after.columns.iter().map(|c| c.name.as_str()).collect();
+    let name_at = names.iter().position(|n| *n == "name").expect("有 name 列");
+    assert!(after.rows.iter().any(|r| r[name_at].text.as_deref() == Some("email_1")));
+
+    registry.query("m", "db.users_index.dropIndex(\"email_1\")").await.expect("删索引");
+    let final_ = registry.query("m", "db.users_index.getIndexes()").await.expect("查");
+    assert_eq!(final_.rows.len(), 1);
+}
+
+#[tokio::test]
+async fn drop_和_dropDatabase() {
+    let container = shared();
+    let registry = ConnectionRegistry::new();
+    // ⚠️ 自己一个库：dropDatabase 会把整个库干掉，而容器是整个二进制共用的
+    registry.connect("m", &config(container.port, Some("drop_me"))).await.expect("连上");
+    seed(container.port, "drop_me", "gone").await;
+
+    let dropped = registry.query("m", "db.gone.drop()").await.expect("往返成功");
+    assert!(dropped.error.is_none(), "{:?}", dropped.error);
+    // 没了之后再查 —— 我们那道存在性检查会说话
+    let after = registry.query("m", "db.gone.find({})").await.expect("往返成功");
+    assert!(
+        after.error.as_deref().is_some_and(|e| e.contains("没有这个集合")),
+        "{:?}",
+        after.error
+    );
+
+    let db = registry.query("m", "db.dropDatabase()").await.expect("往返成功");
+    assert!(db.error.is_none(), "{:?}", db.error);
+    assert!(registry.is_connected("m").expect("查状态"), "连接必须还在");
 }
 
 #[tokio::test]
@@ -303,11 +517,18 @@ async fn 查询写错时是结果不是断连() {
     let registry = ConnectionRegistry::new();
     registry.connect("m", &config(container.port, Some("app"))).await.expect("连上");
 
-    // filter 不是对象：解析阶段就能报，而且要点名是哪个字段
-    let result = registry.query("m", r#"{"collection":"users","filter":"张三"}"#).await.expect("往返成功");
+    // filter 给了字符串：解析阶段就报，而且要点名是哪儿
+    let result = registry.query("m", r#"db.users.find("张三")"#).await.expect("往返成功");
     let error = result.error.expect("应当把错误带回来");
-    assert!(error.contains("filter"), "要点名是哪儿写错了：{error}");
+    assert!(error.contains("对象"), "要说清 filter 该给什么：{error}");
     assert!(registry.is_connected("m").expect("查状态"), "连接必须还在");
+
+    // 不认识的算子：明说，别当成「什么都没匹配上」
+    let result = registry
+        .query("m", "db.users.find({ age: { $foo: 1 } })")
+        .await
+        .expect("往返成功");
+    assert!(result.error.is_some(), "不认识的算子要报出来，不能悄悄不匹配");
 
     // 集合不存在：服务端拒绝，同样是结果
     let result = registry.query("m", r#"{"collection":"没有这个集合"}"#).await.expect("往返成功");

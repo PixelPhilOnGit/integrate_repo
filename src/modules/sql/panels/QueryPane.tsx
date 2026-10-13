@@ -7,20 +7,21 @@
  * # 一个面板管两种引擎（按选中的连接分流）
  *
  * SQL 那三种（PG / MySQL / ClickHouse）和 **Mongo** 共用编辑器、执行按钮、
- * 历史快捷键那些 —— 它们是**同一个操作**（写点什么 → 执行 → 看结果），
- * 只是「写的东西」和「结果长什么样」不同：
+ * 历史快捷键那些 —— 它们是**同一个操作**（写点什么 → 执行 → 看结果）：
  *
- * | | 写什么 | 结果 |
- * |---|---|---|
- * | SQL | 一条 SQL | 表格 |
- * | Mongo | 一段 JSON 查询 | 一份份文档 |
+ * | | 写什么 |
+ * |---|---|
+ * | SQL | 一条 SQL |
+ * | Mongo | `db.users.find({}).limit(10)` 那种 |
  *
- * 所以只换这两处，其余一个字都不重复。
+ * 结果那一块现在也**共用**（`ResultGrid`）：2026-10-13 起 Mongo 的结果是一张
+ * 表格（列 = 文档顶层字段的并集，一行一份文档），不再是一列一整段 JSON ——
+ * 用户的原话是「不应该是类似于表格一样展示吗，一整个 json 怎么看」。
+ * 所以这个文件里连「Mongo 走哪套渲染」这个分流都不需要了。
  */
 
 import type { KeyboardEvent, ReactNode } from 'react';
 import type { SqlState, SqlStore } from '../state/store';
-import { DocumentList } from './DocumentList';
 import { ResultGrid } from './ResultGrid';
 
 interface Props {
@@ -66,7 +67,7 @@ export function QueryPane({ state, store }: Props): ReactNode {
             !connected
               ? '先连上一个数据库'
               : mongo
-                ? '在这里写 JSON 查询，比如 {"collection":"users","filter":{},"limit":50}'
+                ? 'db.users.find({ age: { $gt: 18 } }).sort({ age: -1 }).limit(50) —— Ctrl+Enter 执行'
                 : '在这里写 SQL，Ctrl+Enter 执行'
           }
           onChange={(e) => store.setEditor(e.target.value)}
@@ -82,7 +83,9 @@ export function QueryPane({ state, store }: Props): ReactNode {
             {state.running ? '执行中…' : '执行'}
           </button>
           <span className="rd-hint">
-            {mongo ? 'Ctrl+Enter 执行 · 点左边的集合会自动填一段查询' : 'Ctrl+Enter 执行 · Alt+↑↓ 翻历史'}
+            {mongo
+              ? 'Ctrl+Enter 执行 · 点左边的集合会自动填一段查询 · find / findOne / countDocuments / distinct / aggregate / insert / update / delete 都认'
+              : 'Ctrl+Enter 执行 · Alt+↑↓ 翻历史'}
           </span>
           {profile !== null && (
             <span className="rd-hint rd-right" data-testid="sql-target">
@@ -92,7 +95,7 @@ export function QueryPane({ state, store }: Props): ReactNode {
         </div>
       </div>
 
-      {mongo ? <DocumentList result={state.result} /> : <ResultGrid result={state.result} />}
+      <ResultGrid result={state.result} />
     </div>
   );
 }

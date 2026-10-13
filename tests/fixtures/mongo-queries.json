@@ -1,0 +1,306 @@
+{
+  "_说明": [
+    "Mongo 查询的**语法契约**：同一批例子，Rust 那边（src-tauri/sql/src/mongo_shell.rs）",
+    "和浏览器版假实现（src/modules/sql/core/fakeSql.ts）各自解析一遍，结果必须和这里一样。",
+    "",
+    "⚠️ 为什么要有这个文件：语法被实现了两遍（真实现走 mongosh 语法 + 驱动，浏览器版是",
+    "Playwright 唯一能驱动的那条路，必须自己解析一遍）。两遍就会漂移，而漂移的症状是",
+    "「e2e 绿的、真机上打不开」—— 那正是这个仓库反复记过的那条缝。",
+    "",
+    "⚠️ 期望值里**只写非默认的部分**：filter 没写就是不写（不是空对象），",
+    "两边都按「缺省即空」处理。"
+  ],
+  "cases": [
+    {
+      "query": "db.users.find({})",
+      "collection": "users",
+      "op": "find"
+    },
+    {
+      "query": "db.用户.find({ 城市: \"北京\" })",
+      "collection": "用户",
+      "op": "find",
+      "filter": {
+        "城市": "北京"
+      }
+    },
+    {
+      "query": "db.getCollection(\"审计-日志\").find({})",
+      "collection": "审计-日志",
+      "op": "find"
+    },
+    {
+      "query": "db.users.find({ age: { $gt: 18 }, city: \"北京\" })",
+      "collection": "users",
+      "op": "find",
+      "filter": {
+        "age": {
+          "$gt": 18
+        },
+        "city": "北京"
+      }
+    },
+    {
+      "query": "db.users.find({}, { name: 1, _id: 0 })",
+      "collection": "users",
+      "op": "find",
+      "projection": {
+        "name": 1,
+        "_id": 0
+      }
+    },
+    {
+      "query": "db.users.find({}).sort({ age: -1 }).limit(10).skip(5)",
+      "collection": "users",
+      "op": "find",
+      "sort": {
+        "age": -1
+      },
+      "limit": 10,
+      "skip": 5
+    },
+    {
+      "query": "db.users.find({}).project({ name: 1 })",
+      "collection": "users",
+      "op": "find",
+      "projection": {
+        "name": 1
+      }
+    },
+    {
+      "query": "db.users.findOne({ name: '张三' })",
+      "collection": "users",
+      "op": "findOne",
+      "filter": {
+        "name": "张三"
+      }
+    },
+    {
+      "query": "db.users.find({ name: \"张三\" }); // 分号 + 注释",
+      "collection": "users",
+      "op": "find",
+      "filter": {
+        "name": "张三"
+      }
+    },
+    {
+      "query": "db.users.find({ _id: ObjectId(\"507f1f77bcf86cd799439011\") })",
+      "collection": "users",
+      "op": "find",
+      "filter": {
+        "_id": "507f1f77bcf86cd799439011"
+      }
+    },
+    {
+      "query": "db.users.find({ createdAt: { $gte: ISODate(\"2026-01-01T00:00:00Z\") } })",
+      "collection": "users",
+      "op": "find",
+      "filter": {
+        "createdAt": {
+          "$gte": "2026-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "query": "db.users.find({ name: /^张/i })",
+      "collection": "users",
+      "op": "find",
+      "filter": {
+        "name": "/^张/i"
+      }
+    },
+    {
+      "query": "db.users.find({ tags: [\"a\", \"b\"], ok: true, gone: null, n: 1.5 })",
+      "collection": "users",
+      "op": "find",
+      "filter": {
+        "tags": [
+          "a",
+          "b"
+        ],
+        "ok": true,
+        "gone": null,
+        "n": 1.5
+      }
+    },
+    {
+      "query": "db[\"my-col\"].find({})",
+      "collection": "my-col",
+      "op": "find"
+    },
+    {
+      "query": "db.getCollection(\"logs-2026.10\").find({ level: \"error\" })",
+      "collection": "logs-2026.10",
+      "op": "find",
+      "filter": {
+        "level": "error"
+      }
+    },
+    {
+      "query": "db.users.countDocuments({ city: \"北京\" })",
+      "collection": "users",
+      "op": "count",
+      "filter": {
+        "city": "北京"
+      }
+    },
+    {
+      "query": "db.users.countDocuments({}, { limit: 5 })",
+      "collection": "users",
+      "op": "count",
+      "limit": 5
+    },
+    {
+      "query": "db.users.find({}).count()",
+      "collection": "users",
+      "op": "count"
+    },
+    {
+      "query": "db.users.distinct(\"city\")",
+      "collection": "users",
+      "op": "distinct",
+      "field": "city"
+    },
+    {
+      "query": "db.users.distinct(\"city\", { age: { $gte: 18 } })",
+      "collection": "users",
+      "op": "distinct",
+      "field": "city",
+      "filter": {
+        "age": {
+          "$gte": 18
+        }
+      }
+    },
+    {
+      "query": "db.users.aggregate([{ $match: { age: { $gte: 18 } } }, { $group: { _id: \"$city\", n: { $sum: 1 } } }])",
+      "collection": "users",
+      "op": "aggregate",
+      "pipeline": [
+        {
+          "$match": {
+            "age": {
+              "$gte": 18
+            }
+          }
+        },
+        {
+          "$group": {
+            "_id": "$city",
+            "n": {
+              "$sum": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "query": "db.users.insertOne({ name: \"张三\", age: 30 })",
+      "collection": "users",
+      "op": "insertOne",
+      "document": {
+        "name": "张三",
+        "age": 30
+      }
+    },
+    {
+      "query": "db.users.insertMany([{ name: \"a\" }, { name: \"b\" }])",
+      "collection": "users",
+      "op": "insertMany",
+      "documents": [
+        {
+          "name": "a"
+        },
+        {
+          "name": "b"
+        }
+      ]
+    },
+    {
+      "query": "db.users.updateMany({ city: \"北京\" }, { $set: { vip: true } })",
+      "collection": "users",
+      "op": "update",
+      "filter": {
+        "city": "北京"
+      },
+      "update": {
+        "$set": {
+          "vip": true
+        }
+      },
+      "many": true
+    },
+    {
+      "query": "db.users.updateOne({ name: \"张三\" }, { $set: { age: 31 } }, { upsert: true })",
+      "collection": "users",
+      "op": "update",
+      "filter": {
+        "name": "张三"
+      },
+      "update": {
+        "$set": {
+          "age": 31
+        }
+      },
+      "many": false,
+      "upsert": true
+    },
+    {
+      "query": "db.users.deleteMany({ vip: true })",
+      "collection": "users",
+      "op": "delete",
+      "filter": {
+        "vip": true
+      },
+      "many": true
+    },
+    {
+      "query": "db.users.findOneAndUpdate({ name: \"张三\" }, { $inc: { age: 1 } }, { returnDocument: \"after\" })",
+      "collection": "users",
+      "op": "findOneAndUpdate",
+      "filter": {
+        "name": "张三"
+      },
+      "update": {
+        "$inc": {
+          "age": 1
+        }
+      },
+      "returnAfter": true
+    },
+    {
+      "query": "db.users.createIndex({ email: 1 }, { unique: true })",
+      "collection": "users",
+      "op": "createIndex",
+      "keys": {
+        "email": 1
+      },
+      "unique": true
+    },
+    {
+      "query": "db.users.getIndexes()",
+      "collection": "users",
+      "op": "getIndexes"
+    },
+    {
+      "query": "db.users.dropIndex(\"email_1\")",
+      "collection": "users",
+      "op": "dropIndex",
+      "name": "email_1"
+    },
+    {
+      "query": "db.users.drop()",
+      "collection": "users",
+      "op": "drop"
+    },
+    {
+      "query": "db.dropDatabase()",
+      "op": "dropDatabase"
+    },
+    {
+      "query": "db.createCollection(\"审计日志\")",
+      "op": "createCollection",
+      "name": "审计日志"
+    }
+  ]
+}

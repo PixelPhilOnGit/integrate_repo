@@ -389,7 +389,7 @@ test('新建时可以选四种引擎，端口默认值跟着引擎走', async ({
   // ⚠️ 切换引擎时**用户没动过的字段**才跟着换（改过的不能抢方向盘）
 });
 
-test('MongoDB：点集合生成 JSON 查询，结果是文档而不是表格', async ({ page }) => {
+test('MongoDB：点集合生成 mongosh 查询，结果是一张表', async ({ page }) => {
   await connectNew(page, 'MongoDB');
 
   // 侧栏：连接挂在它那个引擎组下面，集合标着「集合」（不是「表」）
@@ -397,21 +397,98 @@ test('MongoDB：点集合生成 JSON 查询，结果是文档而不是表格', a
   await expect(page.getByTestId('sql-table-用户')).toBeVisible();
   await expect(page.getByTestId('sql-table-用户')).toContainText('集合');
 
-  // 点一个集合 → 编辑器里填的是 **JSON 查询**（Mongo 没有 SQL）
+  // 点一个集合 → 编辑器里填的是 **mongosh 写法**（用户要的就是这个）
   await page.getByTestId('sql-table-用户').click();
-  await expect(page.getByTestId('sql-editor')).toHaveValue(/"collection": "用户"/);
+  await expect(page.getByTestId('sql-editor')).toHaveValue(/db\.用户\.find\(\{\}\)/);
 
-  // 执行 → 一份份**文档**，不是结果表格
+  // 执行 → 一张**表格**（列 = 文档顶层字段的并集，一行一份文档）
   await page.getByTestId('btn-sql-run').click();
-  await expect(page.getByTestId('mongo-count')).toContainText('查到 2 份文档');
-  await expect(page.getByTestId('mongo-doc-0')).toContainText('zhang@example.com');
-  await expect(page.getByTestId('mongo-doc-1')).toContainText('李四');
-  // 参差是文档的本性：第二份没有 email，界面不该因此空一格（那是表格的做法）
-  await expect(page.getByTestId('sql-result-grid')).toHaveCount(0);
+  const table = page.getByTestId('sql-table');
+  await expect(table).toBeVisible();
+  // `_id` 排最前（扫一行文档先看的就是它）
+  // ⚠️ 表头里除了字段名还有一个类型名的小字（`any` —— 文档没有固定类型），
+  // 所以是 contains 不是 equals
+  await expect(table.locator('thead th').nth(1)).toContainText('_id');
+  await expect(table).toContainText('zhang@example.com');
+  await expect(table).toContainText('李四');
+  // ⚠️ 参差是文档的本性：李四没有 email，那一格是**空的**（不是空字符串）
+  // 找 email 那一列（表头文本是「字段名 + 类型名」，所以用 startsWith）
+  const emailColumn = await table
+    .locator('thead th')
+    .evaluateAll((cells) => cells.findIndex((c) => (c.textContent ?? '').startsWith('email')));
+  expect(emailColumn).toBeGreaterThan(0);
+  const rows = table.locator('tbody tr');
+  await expect(rows).toHaveCount(3);
 
   // 引擎报的错**显示在结果区**（那是一次成功的往返，不是外壳的错误条）
-  await run(page, '{"collection":"不存在的集合"}');
-  await expect(page.getByTestId('mongo-error')).toContainText('没有这个集合');
+  await run(page, 'db.不存在的集合.find({})');
+  await expect(page.getByTestId('sql-result')).toContainText('没有这个集合');
+});
+
+test('MongoDB：shell 语法那一族（过滤 / 排序 / 计数 / 分组 / 索引）', async ({ page }) => {
+  await connectNew(page, 'MongoDB');
+
+  // 过滤 + 排序：北京那两位，按年龄倒序
+  await run(page, 'db.用户.find({ city: "北京" }).sort({ age: -1 })');
+  let table = page.getByTestId('sql-table');
+  await expect(table.locator('tbody tr')).toHaveCount(2);
+  await expect(table.locator('tbody tr').first()).toContainText('王五');
+
+  // 计数
+  await run(page, 'db.用户.countDocuments({ city: "北京" })');
+  await expect(page.getByTestId('sql-table')).toContainText('2');
+
+  // 去重：列名就是那个字段
+  await run(page, 'db.用户.distinct("city")');
+  await expect(page.getByTestId('sql-table').locator('thead th').nth(1)).toContainText('city');
+
+  // 分组（aggregate）
+  await run(
+    page,
+    'db.用户.aggregate([{ $match: { city: "北京" } }, { $group: { _id: "$city", n: { $sum: 1 } } }])',
+  );
+  table = page.getByTestId('sql-table');
+  await expect(table).toContainText('北京');
+  await expect(table.locator('tbody tr').first()).toContainText('2');
+
+  // 索引
+  await run(page, 'db.用户.createIndex({ email: 1 }, { unique: true })');
+  await expect(page.getByTestId('sql-table')).toContainText('email_1');
+  await run(page, 'db.用户.getIndexes()');
+  await expect(page.getByTestId('sql-table').locator('tbody tr')).toHaveCount(2);
+
+  // 语法错原样给出来（用户要照着改）
+  await run(page, 'db.用户.find({ name: 张三 })');
+  await expect(page.getByTestId('sql-result')).toContainText('引号');
+});
+
+test('MongoDB：写操作真的改数据（插完再查看得见）', async ({ page }) => {
+  await connectNew(page, 'MongoDB');
+
+  // 先记住原来的条数
+  await run(page, 'db.用户.countDocuments({})');
+  await expect(page.getByTestId('sql-table')).toContainText('3');
+
+  await run(page, 'db.用户.insertOne({ name: "赵六", city: "广州" })');
+  await expect(page.getByTestId('sql-table')).toContainText('insertedId');
+
+  // ⚠️ 这条是重点：写完之后**真的**多了一条（不是「显示成功但什么也没发生」）
+  await run(page, 'db.用户.countDocuments({})');
+  await expect(page.getByTestId('sql-table')).toContainText('4');
+  await run(page, 'db.用户.find({ name: "赵六" })');
+  await expect(page.getByTestId('sql-table').locator('tbody tr')).toHaveCount(1);
+
+  // 改一条
+  await run(page, 'db.用户.updateOne({ name: "赵六" }, { $set: { city: "深圳" } })');
+  await expect(page.getByTestId('sql-table')).toContainText('modifiedCount');
+  await run(page, 'db.用户.find({ city: "深圳" })');
+  await expect(page.getByTestId('sql-table')).toContainText('赵六');
+
+  // 删掉（删两条：北京那两位）
+  await run(page, 'db.用户.deleteMany({ city: "北京" })');
+  await expect(page.getByTestId('sql-table')).toContainText('deletedCount');
+  await run(page, 'db.用户.countDocuments({})');
+  await expect(page.getByTestId('sql-table')).toContainText('2');
 });
 
 // ------------------------------------------------------------------ 分组

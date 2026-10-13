@@ -66,8 +66,19 @@ describe('显示名', () => {
 });
 
 describe('Mongo 的查询串', () => {
-  it('点一个集合给的是 JSON 查询，不是 SQL', () => {
-    const text = suggestMongoQuery('users');
-    expect(JSON.parse(text)).toEqual({ collection: 'users', filter: {}, limit: 50 });
+  // ⚠️ 2026-10-13 改成 mongosh 写法（用户：「查询不应该是 db.xxx 语法吗」）——
+  // 老写法是 `{"collection":"users",…}`，那是个我们自己发明的形状
+  it('点一个集合给的是 mongosh 写法，不是 SQL、也不是 JSON', () => {
+    expect(suggestMongoQuery('users')).toBe('db.users.find({}).limit(50)');
+  });
+
+  it('中文集合名照样是点号写法（Unicode 标识符是合法的）', () => {
+    expect(suggestMongoQuery('用户')).toBe('db.用户.find({}).limit(50)');
+  });
+
+  it('⚠️ 带 `-` / `.` 的集合名要走 getCollection（那种名字在 JS 里不是标识符）', () => {
+    expect(suggestMongoQuery('logs-2026.10')).toBe(
+      'db.getCollection("logs-2026.10").find({}).limit(50)',
+    );
   });
 });

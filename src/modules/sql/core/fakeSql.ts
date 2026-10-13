@@ -168,87 +168,10 @@ function truncate(text: string): string {
 
 
 // ---------------------------------------------------------------- 假的 Mongo
+//
+// 实现搬到了 `fakeMongo.ts`（解析在 `mongoShell.ts`）—— 这一摊加起来比 SQL 那边还大，
+// 留在这里会把 fakeSql 变成一个什么都有的大文件。
+//
+// 这里只**转发**：调用方（`services/web.ts`）的 import 一个字不用改。
 
-/**
- * 假的集合与文档。
- *
- * ⚠️ **够真是有意的**：这个假实现是 Playwright 唯一能驱动的那条路，Mongo 的
- * 界面（点集合 → 生成 JSON 查询 → 执行 → 读文档）全靠它才验得到。
- * 文档故意做成**参差的**（一份有 email、一份没有），因为那正是「文档不是表格」
- * 这件事的核心 —— 假数据要是整整齐齐，界面把它当表格渲染也看不出来。
- */
-const MONGO_COLLECTIONS: Record<string, ReadonlyArray<Record<string, unknown>>> = {
-  用户: [
-    { _id: 'u1', name: '张三', email: 'zhang@example.com' },
-    { _id: 'u2', name: '李四' },
-  ],
-  订单: [{ _id: 'o1', user: 'u1', total: 128.5 }],
-};
-
-/** Mongo 的集合列表（`schema` 就是库名，契约和另外三个引擎一致） */
-export function fakeCollections(database: string): TableInfo[] {
-  return Object.keys(MONGO_COLLECTIONS).map((name) => ({
-    name,
-    schema: database,
-    kind: 'collection' as const,
-  }));
-}
-
-/**
- * 跑一段 JSON 查询。
- *
- * 只认契约里那三个字段（`collection` / `filter` / `limit`）：`collection` 必填，
- * `filter` 只支持**顶层字段的等值匹配**（够 e2e 用了，真实现当然不止）。
- */
-export function runFakeMongoQuery(text: string): QueryResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (e) {
-    return errorResult(`查询不是合法的 JSON：${(e as Error).message}`);
-  }
-  if (typeof parsed !== 'object' || parsed === null) {
-    return errorResult('查询要是一个 JSON 对象，比如 {"collection":"用户"}');
-  }
-
-  const q = parsed as { collection?: unknown; filter?: unknown; limit?: unknown };
-  const collection = typeof q.collection === 'string' ? q.collection : '';
-  if (collection === '') {
-    return errorResult('查询里要写 collection，比如 {"collection":"用户"}');
-  }
-
-  const docs = MONGO_COLLECTIONS[collection];
-  if (docs === undefined) {
-    return errorResult(`没有这个集合：${collection}`);
-  }
-
-  const filter =
-    typeof q.filter === 'object' && q.filter !== null
-      ? (q.filter as Record<string, unknown>)
-      : {};
-  const limit = typeof q.limit === 'number' && q.limit > 0 ? q.limit : 50;
-
-  const matched = docs
-    .filter((doc) => Object.entries(filter).every(([k, v]) => doc[k] === v))
-    .slice(0, limit);
-
-  return {
-    columns: [{ name: 'document', typeName: 'json' }],
-    rows: matched.map((doc) => [{ text: JSON.stringify(doc) }]),
-    affected: null,
-    truncated: false,
-    elapsedMs: 1,
-  };
-}
-
-/** 引擎报的错走 `error`（**不是抛异常** —— 那是一次成功的往返，只是没执行成） */
-function errorResult(message: string): QueryResult {
-  return {
-    columns: [],
-    rows: [],
-    affected: null,
-    truncated: false,
-    elapsedMs: 0,
-    error: message,
-  };
-}
+export { fakeCollections, runFakeMongoQuery } from './fakeMongo';
