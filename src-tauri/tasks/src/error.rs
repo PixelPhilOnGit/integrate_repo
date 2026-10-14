@@ -21,11 +21,17 @@ pub enum TaskError {
     /// 读写某一行的失败
     Query { reason: String },
 
-    /// 这个 id 上没这条任务
+    /// 这个 id 上没有东西（任务、或者某条资料）
     NotFound { id: String },
 
     /// 标题是空的之类 —— 参数本身没法用
     BadInput { reason: String },
+
+    /// 文件那一侧的失败：拷贝、读、打开……
+    ///
+    /// `path` 放在「原因」之后显示（它主要是给排查看的）：`reason` 是用户读的
+    /// 那一句，`path` 是这件事发生在哪个文件上。
+    File { path: String, reason: String },
 }
 
 impl fmt::Display for TaskError {
@@ -40,8 +46,11 @@ impl fmt::Display for TaskError {
                 "任务库的结构不对，迁移没跑成：{reason}\n（这个文件被别的版本或手工改过？备份之后删掉它可以从头开始）"
             ),
             TaskError::Query { reason } => write!(f, "任务库读写失败：{reason}"),
-            TaskError::NotFound { id } => write!(f, "没有这条任务：{id}"),
+            TaskError::NotFound { id } => write!(f, "没有这条记录：{id}"),
             TaskError::BadInput { reason } => write!(f, "这条任务存不下去：{reason}"),
+            TaskError::File { path, reason } => {
+                write!(f, "文件这儿没成：{reason}\n（{path}）")
+            }
         }
     }
 }

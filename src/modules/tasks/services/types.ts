@@ -9,10 +9,10 @@
  * 在假实现上通过、到真机上全是 bug —— 这是这个仓库反复踩过的坑。
  */
 
-import type { Progress, Task, TaskPatch } from '../core/types';
+import type { Attachment, Progress, Task, TaskPatch } from '../core/types';
 
 export interface TasksClient {
-  /** 全部任务（最近改过的在前）。Rust 那边排好序 */
+  /** 全部任务（最近改过的在前，资料内嵌在里面）。Rust 那边排好序 */
   list(): Promise<Task[]>;
   create(title: string, body: string): Promise<Task>;
   update(id: string, patch: TaskPatch): Promise<Task>;
@@ -22,4 +22,29 @@ export interface TasksClient {
   progressOf(taskId: string): Promise<Progress[]>;
   /** 记一笔进度（时间由后端给） */
   addProgress(taskId: string, text: string): Promise<Progress>;
+
+  // ---------------------------------------------------------------- 资料
+
+  /** 加一条文字资料 */
+  addTextAttachment(taskId: string, text: string): Promise<Attachment>;
+  /**
+   * 挂一个文件。
+   *
+   * **桌面端这里会弹系统对话框**（在 Rust 侧开，见 `task_commands.rs` 的模块头）
+   * —— 所以这个调用可能悬着很久，返回 `null` 是**用户取消**，不是错误。
+   */
+  addFileAttachment(taskId: string): Promise<Attachment | null>;
+  /** 改一条文字资料的内容 */
+  updateAttachmentText(id: string, text: string): Promise<Attachment>;
+  /** 删一条资料（文件资料连盘上那份一起删）。返回「本来有没有」 */
+  removeAttachment(id: string): Promise<boolean>;
+  /**
+   * 读一条文件资料的字节（缩略图 / 应用内大图用）。
+   * 太大的文件后端会拒（32 MiB 上限）—— 那是明确报错，不是返回半截。
+   */
+  readAttachment(id: string): Promise<ArrayBuffer>;
+  /** 用系统默认程序打开一条文件资料 */
+  openAttachment(id: string): Promise<void>;
+  /** 用系统浏览器打开一个链接（资料文字里点出来的）。只放行 http/https */
+  openUrl(url: string): Promise<void>;
 }

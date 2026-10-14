@@ -177,6 +177,79 @@ export class TasksStore {
     }
   }
 
+  // ---------------------------------------------------------------- 资料
+  //
+  // 资料内嵌在任务里（见 `core/types.ts`），所以这四个动作都不用像进度那样
+  // 单独维护一份状态切片 —— 改完 `reload()`，界面从选中那条任务上自然读到。
+
+  /** 给当前选中那条加一条文字资料 */
+  async addTextAttachment(text: string): Promise<void> {
+    const id = this.state.selectedId;
+    if (id === null) return;
+    try {
+      await tasksClient.addTextAttachment(id, text);
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /**
+   * 给当前选中那条挂一个文件。
+   *
+   * ⚠️ 桌面端这一趟会**悬着等用户挑文件**（系统对话框在 Rust 侧开，见
+   * `services/tauri.ts`）—— 返回 `null` 是**用户取消**，静默收场。
+   */
+  async addFileAttachment(): Promise<void> {
+    const id = this.state.selectedId;
+    if (id === null) return;
+    try {
+      const att = await tasksClient.addFileAttachment(id);
+      if (att === null) return;
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /** 改一条文字资料 */
+  async updateAttachmentText(attId: string, text: string): Promise<void> {
+    try {
+      await tasksClient.updateAttachmentText(attId, text);
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /** 删一条资料（文件资料连盘上那份一起删） */
+  async removeAttachment(attId: string): Promise<void> {
+    try {
+      await tasksClient.removeAttachment(attId);
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /** 用系统默认程序打开一条文件资料 */
+  async openAttachment(attId: string): Promise<void> {
+    try {
+      await tasksClient.openAttachment(attId);
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  /** 用系统浏览器打开一个链接（资料文字里点出来的） */
+  async openUrl(url: string): Promise<void> {
+    try {
+      await tasksClient.openUrl(url);
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
   /**
    * **把一条任务交给某个 agent 会话去干**（用户说的「任务接 agent」）。
    *

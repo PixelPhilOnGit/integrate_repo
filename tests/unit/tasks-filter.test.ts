@@ -2,7 +2,8 @@
  * 任务的筛选和计数。
  *
  * 这一层是「搜出来的东西对不对」的全部依据，所以断言直接打在**结果集**上：
- * 搜标题能中、搜描述能中、搜备注也能中，而**不该中的一条都不能漏进来**。
+ * 搜标题能中、搜描述能中、搜资料（文字和文件名）也能中，而**不该中的一条
+ * 都不能漏进来**。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,27 +13,43 @@ import {
   filterTasks,
   openCount,
 } from '../../src/modules/tasks/core/filter';
-import type { Task } from '../../src/modules/tasks/core/types';
+import type { Attachment, Task } from '../../src/modules/tasks/core/types';
 
 function task(id: string, patch: Partial<Task> = {}): Task {
   return {
     id,
     title: `任务 ${id}`,
     body: '',
-    note: '',
     status: 'todo',
     createdAt: 1000,
     updatedAt: 1000,
     doneAt: null,
     archived: false,
+    attachments: [],
     ...patch,
+  };
+}
+
+function textAtt(text: string): Attachment {
+  return { id: `att_${text}`, taskId: 't', kind: 'text', text, fileName: '', fileSize: 0, createdAt: 1000 };
+}
+
+function fileAtt(fileName: string): Attachment {
+  return {
+    id: `att_${fileName}`,
+    taskId: 't',
+    kind: 'file',
+    text: '',
+    fileName,
+    fileSize: 100,
+    createdAt: 1000,
   };
 }
 
 const SAMPLE: Task[] = [
   task('a', { title: '写登录页', body: '手机号 + 验证码' }),
-  task('b', { title: '修连接池泄漏', status: 'doing', note: '是那个定时器没清' }),
-  task('c', { title: '画时序图', status: 'done', doneAt: 2000 }),
+  task('b', { title: '修连接池泄漏', status: 'doing', attachments: [textAtt('是那个定时器没清')] }),
+  task('c', { title: '画时序图', status: 'done', doneAt: 2000, attachments: [fileAtt('需求文档.pdf')] }),
 ];
 
 describe('筛选', () => {
@@ -53,8 +70,13 @@ describe('筛选', () => {
     expect(filterTasks(SAMPLE, { query: '验证码', status: 'all' }).map((t) => t.id)).toEqual(['a']);
   });
 
-  it('搜备注 —— 很多信息是做完之后才写进备注的', () => {
+  it('搜文字资料 —— 很多信息是做完之后才写进去的', () => {
     expect(filterTasks(SAMPLE, { query: '定时器', status: 'all' }).map((t) => t.id)).toEqual(['b']);
+  });
+
+  it('搜文件名 ——「那个 pdf 放哪了」问的是同一个问题', () => {
+    expect(filterTasks(SAMPLE, { query: '需求文档', status: 'all' }).map((t) => t.id)).toEqual(['c']);
+    expect(filterTasks(SAMPLE, { query: '.pdf', status: 'all' }).map((t) => t.id)).toEqual(['c']);
   });
 
   it('大小写不敏感；两头空白不算词', () => {

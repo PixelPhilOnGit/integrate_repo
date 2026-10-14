@@ -39,12 +39,12 @@ function task(patch: Partial<Task> = {}): Task {
     id: 't1',
     title: '修登录页那个 bug',
     body: '点提交之后偶尔不跳转',
-    note: '',
     status: 'todo',
     createdAt: 0,
     updatedAt: 0,
     doneAt: null,
     archived: false,
+    attachments: [],
     ...patch,
   };
 }

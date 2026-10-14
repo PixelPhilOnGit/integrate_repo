@@ -52,7 +52,7 @@ export function TaskList({ state, store }: Props): ReactNode {
           value={state.filter.query}
           onChange={(q) => store.setQuery(q)}
           testId="task-search"
-          placeholder="搜标题、描述、备注"
+          placeholder="搜标题、描述、备注资料"
         />
       )}
 

@@ -16,6 +16,7 @@ mod commands;
 mod health;
 mod kv_commands;
 mod local_commands;
+mod open;
 mod redis_commands;
 mod request_commands;
 mod secret_commands;
@@ -173,6 +174,17 @@ pub fn run() {
             task_commands::tasks_delete,
             task_commands::tasks_progress,
             task_commands::tasks_add_progress,
+            // 资料（备注的升级版：一条任务挂多条「文字 / 文件」）。
+            // 挂文件的对话框在 Rust 侧开、读字节走 `ipc::Response` —— 理由都在
+            // task_commands.rs 的头部
+            task_commands::tasks_add_text_attachment,
+            task_commands::tasks_add_file_attachment,
+            task_commands::tasks_update_attachment_text,
+            task_commands::tasks_delete_attachment,
+            task_commands::tasks_attachment_read,
+            task_commands::tasks_open_attachment,
+            // 资料文字里点出来的链接（只放行 http/https，见 open.rs）
+            task_commands::open_url,
             // 「接口调试」：发一个请求，响应走 Channel 流式回来。
             // 所有结局都在通道里（见 request_commands.rs 的头部）
             request_commands::request_send,

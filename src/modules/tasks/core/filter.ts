@@ -22,7 +22,7 @@ import type { Task, TaskStatus } from './types';
 export type StatusFilter = TaskStatus | 'all' | 'archived';
 
 export interface TaskFilter {
-  /** 在标题和描述里找（大小写不敏感的**子串**匹配）。空串 = 不筛 */
+  /** 在标题、描述和资料里找（大小写不敏感的**子串**匹配）。空串 = 不筛 */
   query: string;
   status: StatusFilter;
 }
@@ -56,9 +56,14 @@ export function filterTasks(tasks: readonly Task[], filter: TaskFilter): Task[] 
     return (
       task.title.toLowerCase().includes(needle) ||
       task.body.toLowerCase().includes(needle) ||
-      // 备注也搜：很多信息是做完之后才写进备注的（「那次是因为 X 才挂的」），
-      // 而下次要找的正是那一句
-      task.note.toLowerCase().includes(needle)
+      // 资料也搜：很多信息是做完之后才写进去的（「那次是因为 X 才挂的」），
+      // 而下次要找的正是那一句。文件名也一起搜 ——「那个 pdf 放哪了」
+      // 问的是同一个问题
+      task.attachments.some(
+        (a) =>
+          a.text.toLowerCase().includes(needle) ||
+          a.fileName.toLowerCase().includes(needle),
+      )
     );
   });
 }

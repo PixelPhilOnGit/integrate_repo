@@ -2658,9 +2658,13 @@ textarea:focus {
   font-size: 11px;
 }
 
+/* 描述框：**高度跟着内容长**（组件里 `useAutoResize` 算的），所以不要拖拽
+   手柄（`resize: none`）、也不要内部滚动（`overflow-y: hidden`）—— 留着手柄和
+   滚动条的话，一个写死的 `height` 会和算出来的高度打架。 */
 .rd-task-textarea {
   min-height: 96px;
-  resize: vertical;
+  resize: none;
+  overflow-y: hidden;
   font-family: inherit;
   font-size: 12.5px;
   line-height: 1.7;
@@ -2824,6 +2828,168 @@ textarea:focus {
 .rd-task-progress-text {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 资料列表：一条条的做法和进度时间线一致（时间在左、✕ 在右），
+   但条目本身是「可改的」——文字条目就是一个自适应高度的框 */
+.rd-task-materials {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rd-task-material {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rd-task-material-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rd-task-material-time {
+  font-size: 11px;
+}
+
+/* ✕：**不藏进 hover**（触摸屏上 hover 根本不存在），做小、做灰，需要时才显眼 */
+.rd-task-material-remove {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.rd-task-material-remove:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+/* 文字条目的框：和描述框同一套自动高度（组件算的），只是更紧凑一点 */
+.rd-task-material-text {
+  resize: none;
+  overflow-y: hidden;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.7;
+  padding: 6px 8px;
+  min-height: 34px;
+}
+
+/* 文字里提取出来的链接（textarea 放不下可点的东西，单独一行） */
+.rd-task-material-links {
+  margin: 2px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.rd-task-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  text-decoration: underline;
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+/* 文件条目：缩略图（或图标）+ 名字 + 大小 */
+.rd-task-material-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rd-task-thumb {
+  flex: none;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 还没读出来的占位（宽高和真图一样，读完了不跳） */
+.rd-task-thumb.is-loading {
+  background: var(--bg);
+}
+
+.rd-task-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.rd-task-material-icon {
+  flex: none;
+  width: 72px;
+  text-align: center;
+  font-size: 18px;
+}
+
+.rd-task-material-fileinfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* 文件名本身就是「打开」按钮：不要方框，看起来像一行可点文字 */
+.rd-task-material-name {
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-size: 12.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rd-task-material-size {
+  font-size: 11px;
+}
+
+/* 「＋ 文字 / ＋ 文件」那一排（小按钮沿用侧栏 chip 那套尺寸） */
+.rd-task-materials-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* 应用内大图：铺满窗口的一层。点背景、按 Esc 都关（见 TaskDetail 的 ImageViewer） */
+.rd-task-image-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(0, 0, 0, 0.65);
+  cursor: zoom-out;
+}
+
+.rd-task-image-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  cursor: default;
 }
 
 /* SQL 侧栏：按引擎分的组。只是一层的分组头，不抢连接行自己的样式。
