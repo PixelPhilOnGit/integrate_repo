@@ -17,10 +17,17 @@
  * 混进来的话，远端每输出一行就会把侧栏和标签栏重渲染一遍。
  */
 
-import { newGroup, removeGroup, withGroup } from '../../../shared/connections/groups';
+import {
+  groupPath,
+  moveGroupIn,
+  newGroup,
+  removeGroupTree,
+  withGroup,
+} from '../../../shared/connections/groups';
 import { nextAvailableName } from '../../../shared/connections/profiles';
 import type { ConnectionGroup } from '../../../shared/connections/types';
 import { newId } from '../../../shared/ids';
+import { platform } from '../../../shared/platform';
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
 import type { TermMetrics } from '../../../shared/terminal/hub';
@@ -118,9 +125,10 @@ export interface SshState {
    */
   mismatch: Record<string, { expected: string; actual: string; algorithm: string }>;
   /**
-   * 用户自己建的分组（侧栏最上面那层）。
+   * 用户自己建的目录（侧栏最上面那层，**可以嵌套**）。
    *
-   * ⚠️ 只有一层，不做嵌套 —— 见 `shared/connections/groups.ts` 的文件头。
+   * 「目录」只是界面上的叫法，字段/函数名还叫 group —— 见
+   * `shared/connections/groups.ts` 的文件头。
    * SSH 这边**没有「按引擎分」那层**（SQL 有）：SSH 连接和本地终端在用户眼里
    * 是一回事，按类型分只会把「我常用的那几台」拆到两处。
    */
@@ -226,7 +234,7 @@ export class SshStore {
       const [profiles, knownHosts, groups] = await Promise.all([
         this.services.profiles.load(),
         this.services.knownHosts.load(),
-        // 分组读不出来**不该连累前两个**：退化成「没有分组」照样能连
+        // 目录读不出来**不该连累前两个**：退化成「没有目录」照样能连
         this.services.groups.load().catch((): ConnectionGroup[] => []),
       ]);
 
@@ -370,9 +378,27 @@ export class SshStore {
     await this.persist(profiles);
   }
 
+  /**
+   * 删一条连接。
+   *
+   * ⚠️ **先确认再动手**（2026-10-14 补的）：删连接不可逆，而且和「删目录要强
+   * 确认」摆在一起，「点一下就没」说不过去。文案带上会关掉几个会话 ——
+   * 用户点之前就该知道。
+   */
   async deleteProfile(id: string): Promise<void> {
+    const profile = this.profileById(id);
+    if (profile === null) return;
+
+    const sessions = this.sessionsOf(id);
+    const extra = sessions.length > 0 ? `它名下的 ${sessions.length} 个会话会一起关掉。` : '';
+    const ok = await platform.confirm(
+      `确定删除连接「${profile.name}」吗？${extra}此操作不可撤销。`,
+      '删除连接',
+    );
+    if (!ok) return;
+
     // 先把它名下的会话全关掉，不然会留下一堆看不见的终端
-    for (const session of this.sessionsOf(id)) {
+    for (const session of sessions) {
       await this.closeSession(session.id);
     }
 
@@ -408,18 +434,18 @@ export class SshStore {
     }
   }
 
-  // ---------------------------------------------------------------- 分组
+  // ---------------------------------------------------------------- 目录
 
-  /** 新建一个分组（名字自动去重）。返回它的 id */
-  async createGroup(): Promise<string> {
-    const group = newGroup(this.state.groups);
+  /** 新建一个目录（`parentId` = 建在哪个目录下；null/不传 = 顶层）。返回它的 id */
+  async createGroup(parentId: string | null = null): Promise<string> {
+    const group = newGroup(this.state.groups, parentId);
     const groups = [...this.state.groups, group];
     this.set({ groups });
     await this.persistGroups(groups);
     return group.id;
   }
 
-  /** 改分组名。空名字直接忽略 —— 那会让分组在侧栏里变成一个看不见的空行 */
+  /** 改目录名。空名字直接忽略 —— 那会让目录在侧栏里变成一个看不见的空行 */
   async renameGroup(id: string, name: string): Promise<void> {
     const trimmed = name.trim();
     if (trimmed === '') return;
@@ -429,27 +455,83 @@ export class SshStore {
   }
 
   /**
-   * 删掉一个分组。**里面的连接一条都不删**，全部落回未分组。
-   *
-   * 这条边界是分组这个功能里最要紧的一条：用户点「删除分组」十有八九是想拆掉
-   * 一层目录，不是想把自己填的连接全干掉。所以它**不带确认弹窗**也安全 ——
-   * 代价只是分组没了，数据一条没少（连接本身有确认，那是另一件事）。
-   *
-   * ⚠️ 这里**不碰会话**：会话属于连接（`sessions` 按 profile 走），
-   * 连接还在，开着的终端一个都不会掉。
+   * 把目录挪到另一个目录下（`null` = 顶层）。
+   * 防环的权威在纯函数里（目标是自己是后裔 → no-op），这里不再判一遍。
    */
-  async deleteGroup(id: string): Promise<void> {
-    const groups = this.state.groups.filter((g) => g.id !== id);
-    const hadMembers = this.state.profiles.some((p) => p.groupId === id);
-    const profiles = hadMembers ? removeGroup(this.state.profiles, id) : this.state.profiles;
-
-    this.set({ groups, profiles });
+  async moveGroup(id: string, parentId: string | null): Promise<void> {
+    const groups = moveGroupIn(this.state.groups, id, parentId);
+    this.set({ groups });
     await this.persistGroups(groups);
-    // 没有成员就不用重写连接档案（少一次没必要的写盘）
-    if (hadMembers) await this.persist(profiles);
   }
 
-  /** 把一个连接放进分组。`null` = 移出分组，落回未分组 */
+  /**
+   * 删掉一个目录：**连同子树里的子目录和连接一起删**。
+   *
+   * ⚠️ 语义 2026-10-14 换过：早先是「连接回到未分组」（那时目录只有一层，
+   * 删的是一层空壳）。用户拍板改成现在的「整棵子树一起删」。**这是数据丢失
+   * 级别的操作**，三道防线缺一条就是事故：
+   *
+   * 1. **先弹确认**（全路径 + 数量），取消 → 一个字都不写盘；空目录不问
+   *    （没什么可丢的，照 assistant「没配过 key 就不问」的先例）；
+   * 2. 连接按**整个子树的 id 集合**收拾（`removeGroupTree`）—— 只按一个 id
+   *    过滤的话，子目录里的连接会悬空落回未分组（「目录没了、连接还在」）；
+   * 3. 这些连接名下的**会话先全关掉**（同 `deleteProfile`），再一次性
+   *    set + persist —— 不逐条 `deleteProfile`（那是 N 次写盘）。
+   */
+  async deleteGroup(id: string): Promise<void> {
+    if (!this.state.groups.some((g) => g.id === id)) return;
+
+    const { removedGroupIds, removedProfiles, remainingGroups } = removeGroupTree(
+      this.state.profiles,
+      this.state.groups,
+      id,
+    );
+
+    const subDirs = removedGroupIds.size - 1; // 减掉被点的那一个
+    if (subDirs > 0 || removedProfiles.length > 0) {
+      const what: string[] = [];
+      if (subDirs > 0) what.push(`${subDirs} 个子目录`);
+      if (removedProfiles.length > 0) what.push(`${removedProfiles.length} 条连接`);
+      let liveSessions = 0;
+      for (const profile of removedProfiles) liveSessions += this.sessionsOf(profile.id).length;
+      const sessNote = liveSessions > 0 ? `其中 ${liveSessions} 个会话会一起关掉。` : '';
+      const ok = await platform.confirm(
+        `确定删除目录「${groupPath(this.state.groups, id)}」吗？连同它下面的 ${what.join('、')}一起删掉。${sessNote}此操作不可撤销。`,
+        '删除目录',
+      );
+      if (!ok) return;
+    }
+
+    // 这些连接名下的会话全关掉，不然会留下一堆看不见的终端
+    for (const profile of removedProfiles) {
+      for (const session of this.sessionsOf(profile.id)) {
+        await this.closeSession(session.id);
+      }
+    }
+
+    const removedProfileIds = new Set(removedProfiles.map((p) => p.id));
+    const profiles = this.state.profiles.filter((p) => !removedProfileIds.has(p.id));
+    const runtime = { ...this.state.runtime };
+    const expanded = { ...this.state.expanded };
+    const mismatch = { ...this.state.mismatch };
+    for (const pid of removedProfileIds) {
+      delete runtime[pid];
+      delete expanded[pid];
+      delete mismatch[pid];
+    }
+
+    const selectedId =
+      this.state.selectedId !== null && removedProfileIds.has(this.state.selectedId)
+        ? profiles[0]?.id ?? null
+        : this.state.selectedId;
+
+    this.set({ groups: remainingGroups, profiles, runtime, expanded, mismatch, selectedId });
+    await this.persistGroups(remainingGroups);
+    // 没删连接（只是拆了几层空目录）就不用重写连接档案
+    if (removedProfiles.length > 0) await this.persist(profiles);
+  }
+
+  /** 把一个连接放进目录（哪个层级都行）。`null` = 移出目录，落回未分组 */
   async moveToGroup(profileId: string, groupId: string | null): Promise<void> {
     const current = this.state.profiles.find((p) => p.id === profileId);
     if (!current) return;

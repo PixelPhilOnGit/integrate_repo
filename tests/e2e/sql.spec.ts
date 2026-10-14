@@ -136,7 +136,9 @@ test('右键连接能删除（删除不该只藏在属性面板最底下）', as
 
   await page.locator('[data-conn-name]').first().click({ button: 'right' });
   await expect(page.getByTestId('context-menu')).toBeVisible();
-  await page.getByTestId('menu-删除').click();
+  // ⚠️ 删除要先过确认（2026-10-14 补的：删连接不可逆，和「删目录要强确认」对齐）
+  page.once('dialog', (d) => void d.accept());
+  await page.getByTestId('menu-删除连接').click();
 
   await expect(page.getByTestId('sql-conn-list')).toContainText('还没有连接');
 });
@@ -172,8 +174,9 @@ test('建完之后在属性面板里切引擎，默认值也跟着换', async ({
   await expect(page.getByTestId('sql-inspector')).not.toContainText('必须指定库名');
 });
 
-test('属性面板里的删除按钮同样有效', async ({ page }) => {
+test('属性面板里的删除按钮同样有效（也要过确认）', async ({ page }) => {
   await connectNew(page);
+  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('btn-sql-conn-delete').click();
 
   await expect(page.getByTestId('sql-conn-list')).toContainText('还没有连接');
@@ -491,18 +494,18 @@ test('MongoDB：写操作真的改数据（插完再查看得见）', async ({ p
   await expect(page.getByTestId('sql-table')).toContainText('2');
 });
 
-// ------------------------------------------------------------------ 分组
+// ------------------------------------------------------------------ 目录
 
-test('分组：在引擎底下再分一层（引擎 → 分组 → 连接）', async ({ page }) => {
+test('目录：在引擎底下再分一层（引擎 → 目录 → 连接），目录全局不分引擎', async ({ page }) => {
   await newConnection(page, 'PostgreSQL');
   await page.getByTestId('btn-new-group').click();
 
-  // ⚠️ 分组头必须在**引擎那个节点里面**：「引擎在上、分组在下」是跟用户确认过的
-  // 顺序。反过来的话，同一个引擎的连接会散在好几个分组里，
+  // ⚠️ 目录头必须在**引擎那个节点里面**：「引擎在上、目录在下」是跟用户确认过的
+  // 顺序。反过来的话，同一个引擎的连接会散在好几个目录里，
   // 「新建 pg，那这个连接属于 pg」这条心智就没了
   const groupInEngine = page
     .getByTestId('sql-kind-postgres')
-    .locator('[data-group-name="新建分组"]');
+    .locator('[data-group-path="新建目录"]');
   await expect(groupInEngine).toBeVisible();
   await expect(groupInEngine).toHaveAttribute('data-group-count', '0');
 
@@ -511,15 +514,15 @@ test('分组：在引擎底下再分一层（引擎 → 分组 → 连接）', a
     .locator('.rd-conn-row')
     .first()
     .click({ button: 'right' });
-  await page.getByTestId('menu-移入「新建分组」').click();
+  await page.getByTestId('menu-移入「新建目录」').click();
   await expect(groupInEngine).toHaveAttribute('data-group-count', '1');
 
-  // 分组是**全局的、不分引擎**：换个引擎它照样在（各是各的成员）。
-  // ⚠️ 空的也要画 —— 用户建的组不该因为「这个引擎里还没放东西」就消失
+  // 目录是**全局的、不分引擎**：换个引擎它照样在（各是各的成员）。
+  // ⚠️ 空的也要画 —— 用户建的目录不该因为「这个引擎里还没放东西」就消失
   await newConnection(page, 'MySQL');
   const groupInMysql = page
     .getByTestId('sql-kind-mysql')
-    .locator('[data-group-name="新建分组"]');
+    .locator('[data-group-path="新建目录"]');
   await expect(groupInMysql).toBeVisible();
   await expect(groupInMysql).toHaveAttribute('data-group-count', '0');
 });

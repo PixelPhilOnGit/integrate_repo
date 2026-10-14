@@ -434,6 +434,10 @@ textarea:focus {
   position: fixed;
   z-index: 40;
   min-width: 180px;
+  /* 目录可以嵌套之后，「移入『路径』」一列就是十几条 —— 不封顶的话菜单会
+     长到视口外，被裁掉的部分点都点不到（`ContextMenu` 只会整体翻边，不会滚） */
+  max-height: min(70vh, 420px);
+  overflow: auto;
   padding: 4px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -3024,10 +3028,73 @@ textarea:focus {
   font-weight: 400;
 }
 
+/* ⚠️ 用户报过：「分组左边那个箭头太小，点几次点不到」（2026-10-14）。
+   撑大的是**点击区**（24×20，负外边距抵掉高度差、头的行高几乎不变），
+   字形只从 10 调到 11 —— 看起来差不多，手感全在命中框上。
+   只改这两个头（连接侧栏的目录头/引擎头是同一个形状）；agents 那边的同名类
+   没报过，不顺手改别人的手风。 */
+.rd-kind-head .rd-agent-caret,
+.rd-conn-group-head .rd-agent-caret {
+  min-width: 24px;
+  min-height: 20px;
+  margin: -3px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
 /* 分组成员缩进一层。引擎头下面**不缩进**（那层只是分类，连接才是第一层实体），
-   而用户分组底下的连接缩进去 —— 一眼看出「这几条是一组的」 */
+   而用户分组底下的连接缩进去 —— 一眼看出「这几条是一组的」。
+   ⚠️ 目录可以嵌套之后，缩进靠**递归地再包一层**这个类自动累加（每层 8px），
+   不需要给每行算深度 */
 .rd-conn-group-body {
   padding-left: 8px;
+}
+
+/* 拖拽抓手：**悬停才露**（一直在 DOM 里，只是透明）。
+   ⚠️ 别把整行做成 draggable —— 那会让行里的文字选不中，而「主机名能复制」
+   是这个仓专门保过的（见 `useConnectionDrag` 的说明） */
+.rd-conn-drag {
+  flex: none;
+  margin-left: 2px;
+  padding: 0 3px;
+  color: var(--muted);
+  cursor: grab;
+  opacity: 0;
+  user-select: none;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.rd-conn-row:hover .rd-conn-drag,
+.rd-conn-group-head:hover .rd-conn-drag {
+  opacity: 1;
+}
+
+.rd-conn-drag:active {
+  cursor: grabbing;
+}
+
+/* 正在拖的那一行/目录：原位置画淡（这块儿还在，但正在被搬走） */
+.rd-conn-row.is-dragging,
+.rd-conn-group-head.is-dragging {
+  opacity: 0.45;
+}
+
+/* 拖拽悬停的目标目录：整块区域都是落点（头 + 身子），高亮的是头 */
+.rd-conn-group-head.is-drop-target {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+  border-radius: 5px;
+}
+
+/* 面板空白处的落点（= 顶层/未分组） */
+.rd-panel-body.is-drop-root {
+  outline: 1px dashed var(--accent);
+  outline-offset: -3px;
+  border-radius: 5px;
 }
 
 

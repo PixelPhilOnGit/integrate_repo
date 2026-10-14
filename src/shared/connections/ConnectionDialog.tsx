@@ -31,6 +31,8 @@
  */
 
 import { useEffect, type ReactNode } from 'react';
+import { groupPath } from './groups';
+import type { ConnectionGroup } from './types';
 
 /**
  * 弹框里那四个通用字段。
@@ -75,6 +77,16 @@ export interface ConnectionDialogProps {
   errors?: Partial<Record<ConnectionDialogField, string>>;
   /** 主机 / 端口 / 用户名那一段画不画。SSH 选「本地终端」时传 `false`。 */
   showMachine?: boolean;
+  /**
+   * 目录树 + 当前选中的目录 —— 画「所在目录」下拉用。
+   * **不传就整格不画**（别的调用方一个字不动）。`ConnectionGroup` 就在
+   * `shared/connections` 里，壳认识它不破边界（见文件头那条线）。
+   */
+  groups?: readonly ConnectionGroup[];
+  /** 选中的目录（`undefined`/`null` = 未分组/顶层）。 */
+  groupId?: string | null;
+  /** 换目录。传 `null` = 未分组/顶层 */
+  onGroupChange?: (groupId: string | null) => void;
   /** 主按钮能不能点。**由模块算** —— 三边的校验规则差太多。 */
   valid: boolean;
   /** 主按钮的文字。 */
@@ -117,6 +129,9 @@ export function ConnectionDialog({
   onChange,
   errors,
   showMachine = true,
+  groups,
+  groupId,
+  onGroupChange,
   valid,
   confirmLabel = '新建',
   onCancel,
@@ -203,6 +218,26 @@ export function ConnectionDialog({
               </label>
               {fieldError('username')}
             </>
+          )}
+
+          {/* 「所在目录」：建完直接落进目录里 —— 省掉「先建再右键移入」那两步
+              （用户报过那个顺序别扭，见 HANDOFF 的目录树那一节） */}
+          {groups !== undefined && onGroupChange !== undefined && (
+            <label className="rd-field">
+              <span>所在目录</span>
+              <select
+                data-testid={`${p}-group`}
+                value={groupId ?? ''}
+                onChange={(e) => onGroupChange(e.target.value === '' ? null : e.target.value)}
+              >
+                <option value="">（未分组）</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {groupPath(groups, g.id)}
+                  </option>
+                ))}
+              </select>
+            </label>
           )}
         </div>
 

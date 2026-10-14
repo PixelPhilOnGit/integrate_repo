@@ -19,6 +19,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionDialog, dialogCanSubmit } from '../../../shared/connections/ConnectionDialog';
+import { withGroup, withoutGroup } from '../../../shared/connections/groups';
 import { applyNewDialogKindSwitch, newProfile, validateProfile } from '../core/profile';
 import { KIND_LABEL, type SshProfileKind } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
@@ -26,11 +27,16 @@ import type { SshState, SshStore } from '../state/store';
 interface Props {
   state: SshState;
   store: SshStore;
+  /** 「在此新建连接」进来的：把那条目录预选上（null/不传 = 未分组） */
+  defaultGroupId?: string | null;
   onClose: () => void;
 }
 
-export function NewConnectionDialog({ state, store, onClose }: Props): ReactNode {
-  const [draft, setDraft] = useState(() => newProfile(state.profiles));
+export function NewConnectionDialog({ state, store, defaultGroupId, onClose }: Props): ReactNode {
+  const [draft, setDraft] = useState(() => {
+    const seed = newProfile(state.profiles);
+    return defaultGroupId == null ? seed : withGroup(seed, defaultGroupId);
+  });
 
   const errors = validateProfile(draft);
   // ⚠️ 主按钮只看**弹框里那几个字段**。拿完整校验当判据的话，这个按钮**永远
@@ -68,6 +74,13 @@ export function NewConnectionDialog({ state, store, onClose }: Props): ReactNode
       // （那里也是 `{profile.kind === 'ssh' && (...)}`）。主机/端口/用户名对本地
       // 终端毫无意义，画三个灰框只是噪音。
       showMachine={!isLocal}
+      groups={state.groups}
+      groupId={draft.groupId ?? null}
+      onGroupChange={(gid) =>
+        // 选「未分组」时真删字段（`withoutGroup`）—— 别留 `groupId: undefined`，
+        // 那和 `moveToGroup` 的口径不一致
+        setDraft((d) => (gid === null ? withoutGroup(d) : withGroup(d, gid)))
+      }
       onCancel={onClose}
       onConfirm={submit}
       extra={

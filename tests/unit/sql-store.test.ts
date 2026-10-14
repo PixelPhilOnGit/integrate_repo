@@ -1,4 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 「删连接」「删目录」都会先 `platform.confirm` 一句。浏览器版那层是
+// `window.confirm`，node 里没有 —— 换成可控的替身（默认「用户点了确定」）
+const confirmMock = vi.hoisted(() => vi.fn(async (_message: string, _title?: string) => true));
+vi.mock('../../src/shared/platform', () => ({
+  platform: { confirm: confirmMock },
+}));
+
 import { __resetIdsForTest } from '../../src/shared/ids';
 import { newProfile } from '../../src/modules/sql/core/profile';
 import { SqlStore } from '../../src/modules/sql/state/store';
@@ -12,7 +20,11 @@ import type {
 } from '../../src/modules/sql/core/types';
 import type { ShellApi } from '../../src/shell/types';
 
-beforeEach(() => __resetIdsForTest());
+beforeEach(() => {
+  __resetIdsForTest();
+  confirmMock.mockClear();
+  confirmMock.mockResolvedValue(true);
+});
 
 const OK_RESULT: QueryResult = {
   columns: [{ name: 'n', typeName: 'int4' }],
@@ -177,6 +189,46 @@ describe('SQL 档案管理', () => {
 
     expect(client.disconnect).toHaveBeenCalledWith(id);
     expect(store.getSnapshot().profiles).toEqual([]);
+  });
+
+  it('删除前先确认；取消就一个字不写盘', async () => {
+    const { store, saved } = harness();
+    const id = await store.createProfile();
+    const before = saved.length;
+
+    confirmMock.mockResolvedValueOnce(false);
+    await store.deleteProfile(id);
+
+    expect(store.getSnapshot().profiles).toHaveLength(1);
+    expect(saved.length).toBe(before);
+  });
+});
+
+describe('目录', () => {
+  it('建子目录 + moveGroup 防环 + 删目录级联（含确认）', async () => {
+    const { store, saved } = harness();
+    const a = await store.createProfile('postgres');
+    const b = await store.createProfile('mysql');
+
+    const parent = await store.createGroup();
+    const child = await store.createGroup(parent);
+    await store.moveToGroup(a, parent);
+    await store.moveToGroup(b, child); // 子目录里的，也要被收进子树
+
+    // 挪进自己的后裔 → no-op（防环）
+    await store.moveGroup(parent, child);
+    expect(store.getSnapshot().groups.find((g) => g.id === parent)?.parentId).toBeUndefined();
+
+    await store.deleteGroup(parent);
+
+    const message = confirmMock.mock.calls[0]?.[0] ?? '';
+    expect(message).toContain('1 个子目录');
+    expect(message).toContain('2 条连接');
+
+    const after = store.getSnapshot();
+    expect(after.groups).toEqual([]);
+    expect(after.profiles).toEqual([]);
+    expect(saved.at(-1)).toEqual([]);
   });
 });
 

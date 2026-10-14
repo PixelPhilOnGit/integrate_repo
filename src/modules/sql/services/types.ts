@@ -32,11 +32,11 @@ export interface SqlServices {
   client: SqlClient;
   profiles: ProfileStore<SqlProfile>;
   /**
-   * 用户自己建的分组（连接列表那一层）。
+   * 用户自己建的目录（连接列表那一层，**可以嵌套**）。
    *
-   * ⚠️ **是全局的，不分引擎** —— 同一个「生产库」分组在 pg 和 mysql 底下都会出现
-   * （引擎在上、分组在下，见 `ConnectionTree.tsx`）。让分组属于某个引擎的话，
-   * 用户得先想「这个组是给哪个引擎的」，而他要的只是「把这几条放一起」。
+   * ⚠️ **是全局的，不分引擎** —— 同一棵目录树在 pg 和 mysql 底下都会出现
+   * （引擎在上、目录在下，见 `ConnectionTree.tsx`）。让目录属于某个引擎的话，
+   * 用户得先想「这个目录是给哪个引擎的」，而他要的只是「把这几条放一起」。
    */
   groups: ProfileStore<ConnectionGroup>;
 }

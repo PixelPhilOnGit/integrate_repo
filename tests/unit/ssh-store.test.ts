@@ -32,6 +32,13 @@ const hub = vi.hoisted(() => ({
 
 vi.mock('../../src/modules/ssh/core/terminalHub', () => ({ terminalHub: hub }));
 
+// 「删连接」「删目录」都会先 `platform.confirm` 一句。浏览器版那层是
+// `window.confirm`，node 里没有 —— 换成可控的替身（默认「用户点了确定」）
+const confirmMock = vi.hoisted(() => vi.fn(async (_message: string, _title?: string) => true));
+vi.mock('../../src/shared/platform', () => ({
+  platform: { confirm: confirmMock },
+}));
+
 import type { ConnectionGroup } from '../../src/shared/connections/types';
 import { bandsOf } from '../../src/modules/ssh/core/blocksView';
 import type { KnownHost, SshProfile } from '../../src/modules/ssh/core/types';
@@ -48,6 +55,8 @@ import { __resetIdsForTest } from '../../src/shared/ids';
 
 beforeEach(() => {
   __resetIdsForTest();
+  confirmMock.mockClear();
+  confirmMock.mockResolvedValue(true);
   vi.clearAllMocks();
 });
 
@@ -589,6 +598,62 @@ describe('删连接', () => {
     expect(h.store.getSnapshot().profiles).toHaveLength(0);
     expect(h.store.getSnapshot().sessions).toHaveLength(0);
     expect(h.savedProfiles.at(-1)).toEqual([]);
+  });
+
+  it('删除前先确认（文案带上会关几个会话）；取消就一个字不写盘', async () => {
+    const h = harness({ stored: [profile()] });
+    await connected(h);
+
+    confirmMock.mockResolvedValueOnce(false);
+    await h.store.deleteProfile('p1');
+
+    const message = confirmMock.mock.calls[0]?.[0] ?? '';
+    expect(message).toContain('1 个会话');
+    expect(h.store.getSnapshot().profiles).toHaveLength(1); // 没删
+    expect(h.store.getSnapshot().sessions).toHaveLength(1); // 会话也还开着
+    expect(h.savedProfiles).toHaveLength(0);
+  });
+});
+
+describe('目录', () => {
+  it('可以在目录下建子目录；moveGroup 挪目录（挪进自己的后裔是 no-op）', async () => {
+    const h = harness();
+    await h.store.init();
+    const parent = await h.store.createGroup();
+    const child = await h.store.createGroup(parent);
+    expect(h.store.getSnapshot().groups.find((g) => g.id === child)?.parentId).toBe(parent);
+
+    // 挪到顶层：字段真的删掉
+    await h.store.moveGroup(child, null);
+    expect(
+      Object.hasOwn(h.store.getSnapshot().groups.find((g) => g.id === child) ?? {}, 'parentId'),
+    ).toBe(false);
+
+    // 建个孙目录，再把 child 挪进它 —— 自己的后裔，必须拦住
+    const grand = await h.store.createGroup(child);
+    await h.store.moveGroup(child, grand);
+    expect(h.store.getSnapshot().groups.find((g) => g.id === child)?.parentId).toBeUndefined();
+  });
+
+  it('⚠️ 删目录连着子树里的会话一起收：先确认（文案带数量）→ 关会话 → 一次删干净', async () => {
+    // 数据丢失级别的操作：确认文案要说清删什么（目录/连接/会话三个数），
+    // 取消则一个字不写盘（另一条测）
+    const h = harness({ stored: [profile()] });
+    const sessionId = await connected(h);
+    const gid = await h.store.createGroup();
+    await h.store.moveToGroup('p1', gid);
+
+    await h.store.deleteGroup(gid);
+
+    const message = confirmMock.mock.calls[0]?.[0] ?? '';
+    expect(message).toContain('1 条连接');
+    expect(message).toContain('1 个会话');
+
+    expect(h.client.close).toHaveBeenCalledWith(sessionId);
+    const after = h.store.getSnapshot();
+    expect(after.groups).toEqual([]);
+    expect(after.profiles).toHaveLength(0);
+    expect(after.sessions).toHaveLength(0);
   });
 });
 

@@ -10,6 +10,7 @@
  */
 
 import type { ReactNode } from 'react';
+import type { DragHandleProps } from './useConnectionDrag';
 import type { ConnStatus } from './types';
 
 export interface ConnectionRowProps {
@@ -46,6 +47,16 @@ export interface ConnectionRowProps {
    * 而这个仓里文件树已经是这个习惯了，保持一致。
    */
   onContextMenu?: (x: number, y: number) => void;
+  /**
+   * 拖拽抓手（悬停露出）。不传就不画 —— 用不上的调用方一个字不动。
+   *
+   * ⚠️ 拖拽的起点放在**抓手**而不是整行：`draggable` 的行里文字选不中，
+   * 而这个仓专门保着「主机名能复制」（见 `useConnectionDrag` 的说明）。
+   * 键盘/读屏用户走右键菜单的「移入」（那个一直在）。
+   */
+  dragHandle?: DragHandleProps;
+  /** 这一行正被拖着：原位置画淡一点 */
+  dragging?: boolean;
 }
 
 /** 默认文案：Redis / SQL 的「连上 / 断开」。SSH 会在调用处覆盖掉 */
@@ -64,6 +75,8 @@ export function ConnectionRow({
   onContextMenu,
   toggleLabels,
   toggleTitle,
+  dragHandle,
+  dragging,
 }: ConnectionRowProps): ReactNode {
   const connected = status === 'connected';
   const busy = status === 'connecting';
@@ -72,7 +85,7 @@ export function ConnectionRow({
 
   return (
     <div
-      className={`rd-conn-row${selected ? ' is-selected' : ''}`}
+      className={`rd-conn-row${selected ? ' is-selected' : ''}${dragging === true ? ' is-dragging' : ''}`}
       data-testid={`conn-${id}`}
       data-conn-name={name}
       data-status={status}
@@ -143,6 +156,19 @@ export function ConnectionRow({
       >
         {busy ? '…' : toggleLabel}
       </button>
+
+      {dragHandle !== undefined && (
+        <span
+          className="rd-conn-drag"
+          // 纯鼠标手感的一种补充：键盘/读屏用户走右键菜单的「移入」
+          aria-hidden="true"
+          title="拖动到目录里（拖到空白处回未分组）"
+          {...dragHandle}
+          onClick={(e) => e.stopPropagation()}
+        >
+          ⠿
+        </span>
+      )}
     </div>
   );
 }

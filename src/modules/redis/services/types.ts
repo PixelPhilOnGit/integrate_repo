@@ -65,6 +65,6 @@ export interface RedisClient {
 export interface RedisServices {
   client: RedisClient;
   profiles: ProfileStore<ConnectionProfile>;
-  /** 用户自己建的分组（连接列表那一层）。形状和规则在 `shared/connections/groups.ts` */
+  /** 用户自己建的目录（连接列表那一层，**可以嵌套**）。形状和规则在 `shared/connections/groups.ts` */
   groups: ProfileStore<ConnectionGroup>;
 }

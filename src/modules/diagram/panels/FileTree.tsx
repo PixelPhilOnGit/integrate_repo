@@ -181,7 +181,10 @@ export function FileTree({ state, store }: FileTreeProps): ReactNode {
     items.push(
       { label: '重命名', separatorBefore: node.kind !== 'dir', onSelect: () => beginRename(node) },
       // 移动到别的目录。用菜单而不是拖拽：**拖拽在这个树上不好使**（要处理折叠、
-      // 自动展开、落在文件夹和落在文件上的区别），而菜单在哪儿都能点、也测得住
+      // 自动展开、落在文件夹和落在文件上的区别），而菜单在哪儿都能点、也测得住。
+      // （连接侧栏的目录树后来做了拖拽 —— 那边的落点简单得多：只有「放进目录」
+      // 一种，没有落在文件夹/文件上的歧义，也不做排序。见
+      // `shared/connections/useConnectionDrag.ts`）
       { label: '移动到…', onSelect: () => setMoving(node) },
       { label: '删除', danger: true, onSelect: () => void removeEntry(node) },
     );

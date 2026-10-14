@@ -9,7 +9,7 @@
  * 协议层的正确性不在这里 —— 那是 Rust 侧打真 redis-server 的集成测试的职责。
  */
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
@@ -152,13 +152,16 @@ test('右键连接也能删除', async ({ page }) => {
 
   await page.locator('[data-conn-name]').first().click({ button: 'right' });
   await expect(page.getByTestId('context-menu')).toBeVisible();
-  await page.getByTestId('menu-删除').click();
+  // ⚠️ 删除要先过确认（2026-10-14 补的：删连接不可逆，和「删目录要强确认」对齐）
+  page.once('dialog', (d) => void d.accept());
+  await page.getByTestId('menu-删除连接').click();
 
   await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
 });
 
-test('删除连接会从列表里消失', async ({ page }) => {
+test('删除连接会从列表里消失（属性面板的按钮同样要确认）', async ({ page }) => {
   await connectNew(page);
+  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('btn-conn-delete').click();
 
   await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
@@ -455,59 +458,126 @@ test('侧栏搜索：按名字过滤连接，清空之后原样回来', async ({
   );
 });
 
-// ---------------------------------------------------------------- 分组
+// ---------------------------------------------------------------- 目录
 
-/** 右键某一行的菜单项。菜单自己会用 `menu-<文案>` 当 testid */
-async function toggleGroupCollapse(page: Page, name: string): Promise<void> {
-  await page.locator(`[data-group-name="${name}"] button`).click();
+/**
+ * 折叠/展开一个目录 —— 按**全路径**定位（嵌套之后同名目录可以有多个，
+ * 按名字找会撞上 strict mode）。目录 id 是随机生成的，也写不了选择器
+ */
+async function toggleGroupCollapse(page: Page, path: string): Promise<void> {
+  await page.locator(`[data-group-path="${path}"] button`).first().click();
 }
 
-test('分组：建一个、把连接移进去、折叠、再删掉（⚠️ 连接一条都不丢）', async ({ page }) => {
+/**
+ * 原生 HTML5 拖拽走**合成 DataTransfer 手动派发**。
+ *
+ * ⚠️ Playwright 的鼠标式 `locator.dragTo()` 驱动不了原生 DnD（那是给 pointer
+ * 事件准备的）；而 `dragover` 必须被目标 `preventDefault`（我们的 handler 做了），
+ * 不然 `drop` 静默不生效。
+ */
+async function dragTo(page: Page, from: Locator, to: Locator): Promise<void> {
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await from.dispatchEvent('dragstart', { dataTransfer });
+  await to.dispatchEvent('dragover', { dataTransfer });
+  await to.dispatchEvent('drop', { dataTransfer });
+  await from.dispatchEvent('dragend', { dataTransfer });
+}
+
+test('目录：建一个、把连接移进去、折叠、拖拽、再删掉（⚠️ 删目录连带里面的连接）', async ({ page }) => {
   await connectNew(page);
   const connRow = page.locator('[data-conn-name="新建连接"]');
   await expect(connRow).toHaveCount(1);
 
   await page.getByTestId('btn-new-group').click();
-  const group = page.locator('[data-group-name="新建分组"]');
-  await expect(group).toBeVisible();
-  await expect(group).toHaveAttribute('data-group-count', '0');
+  const dir = page.locator('[data-group-path="新建目录"]');
+  await expect(dir).toBeVisible();
+  await expect(dir).toHaveAttribute('data-group-count', '0');
 
-  // 移进去：右键连接 → 移入「新建分组」
+  // 移进去：右键连接 → 移入「新建目录」
   await connRow.click({ button: 'right' });
-  await page.getByTestId('menu-移入「新建分组」').click();
-  await expect(page.locator('[data-group-name="新建分组"]')).toHaveAttribute(
+  await page.getByTestId('menu-移入「新建目录」').click();
+  await expect(dir).toHaveAttribute('data-group-count', '1');
+
+  // 折叠：连接跟着藏起来（折叠是「先看这一层的名字」，不是删）
+  await toggleGroupCollapse(page, '新建目录');
+  await expect(connRow).toHaveCount(0);
+  await toggleGroupCollapse(page, '新建目录');
+  await expect(connRow).toHaveCount(1);
+
+  // 拖回空白处 = 移出目录（空白处就是「未分组」那个落点）
+  await dragTo(page, connRow.locator('.rd-conn-drag'), page.locator('[data-testid="conn-list"] .rd-panel-body'));
+  await expect(dir).toHaveAttribute('data-group-count', '0');
+
+  // 再拖进去（拖拽和右键两条路都留着，这里把拖的那条也走一遍）
+  await dragTo(page, connRow.locator('.rd-conn-drag'), dir);
+  await expect(dir).toHaveAttribute('data-group-count', '1');
+
+  // 删除目录（2026-10-14 换的语义）：**连同里面的连接一起删**，先弹确认，
+  // 确认文案要说清删什么 —— 这是数据丢失级别的操作
+  let confirmText = '';
+  page.once('dialog', (d) => {
+    confirmText = d.message();
+    void d.accept();
+  });
+  await dir.click({ button: 'right' });
+  await page.getByTestId('menu-删除目录（连同里面的东西）').click();
+
+  expect(confirmText).toContain('1 条连接');
+  await expect(page.locator('[data-group-path="新建目录"]')).toHaveCount(0);
+  await expect(connRow).toHaveCount(0); // 连接一起走（和旧语义正相反）
+  await expect(page.getByTestId('conn-list')).toContainText('还没有连接');
+});
+
+test('目录：确认里点取消 → 一个字都不动（目录和连接原样在）', async ({ page }) => {
+  await connectNew(page);
+  await page.getByTestId('btn-new-group').click();
+  await page.locator('[data-conn-name="新建连接"]').click({ button: 'right' });
+  await page.getByTestId('menu-移入「新建目录」').click();
+
+  await page.locator('[data-group-path="新建目录"]').click({ button: 'right' });
+  page.once('dialog', (d) => void d.dismiss());
+  await page.getByTestId('menu-删除目录（连同里面的东西）').click();
+
+  await expect(page.locator('[data-group-path="新建目录"]')).toHaveAttribute('data-group-count', '1');
+  await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(1);
+});
+
+test('目录：子目录（嵌套），路径唯一、拖拽进子目录也被算数', async ({ page }) => {
+  await connectNew(page);
+  await page.getByTestId('btn-new-group').click();
+
+  // 在「新建目录」里再建一层：路径是「父/子」——同名目录从此不再唯一，
+  // 所以定位一律走 data-group-path
+  await page.locator('[data-group-path="新建目录"]').click({ button: 'right' });
+  await page.getByTestId('menu-新建子目录').click();
+  const child = page.locator('[data-group-path="新建目录/新建目录"]');
+  await expect(child).toBeVisible();
+
+  // 把连接拖进子目录：计数是**子树总数**，父子都该是 1
+  await dragTo(page, page.locator('[data-conn-name="新建连接"] .rd-conn-drag'), child);
+  await expect(child).toHaveAttribute('data-group-count', '1');
+  await expect(page.locator('[data-group-path="新建目录"]')).toHaveAttribute(
     'data-group-count',
     '1',
   );
 
-  // 折叠：连接跟着藏起来（折叠是「先看这一组的名字」，不是删）
-  await toggleGroupCollapse(page, '新建分组');
-  await expect(connRow).toHaveCount(0);
-  await toggleGroupCollapse(page, '新建分组');
-  await expect(connRow).toHaveCount(1);
-
-  // 删除分组：⚠️ 连接**一条都不丢**，落回未分组。
-  // 用户点这个十有八九是想拆掉一层目录，不是想把自己填的连接全干掉 ——
-  // 所以它连确认弹窗都没有，这条断言就是它的安全网
-  await page.locator('[data-group-name="新建分组"]').click({ button: 'right' });
-  await page.getByTestId('menu-删除分组（连接回到未分组）').click();
-
-  await expect(page.locator('[data-group-name="新建分组"]')).toHaveCount(0);
-  await expect(connRow).toHaveCount(1);
+  // 折叠父目录（子目录和连接一起藏）
+  await toggleGroupCollapse(page, '新建目录');
+  await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(0);
 });
 
-test('分组：搜索时命中的连接会自动从折叠的分组里露出来', async ({ page }) => {
+test('目录：搜索时命中的连接会自动从折叠的目录里露出来', async ({ page }) => {
   await connectNew(page);
   await page.getByTestId('btn-new-group').click();
 
   await page.locator('[data-conn-name="新建连接"]').click({ button: 'right' });
-  await page.getByTestId('menu-移入「新建分组」').click();
+  await page.getByTestId('menu-移入「新建目录」').click();
 
   // 用户把它收起来了
-  await toggleGroupCollapse(page, '新建分组');
+  await toggleGroupCollapse(page, '新建目录');
   await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(0);
 
-  // 搜它 → 分组被**临时**撑开，命中的那条露出来
+  // 搜它 → 目录被**临时**撑开，命中的那条露出来
   await page.getByTestId('redis-conn-search').fill('新建');
   await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(1);
 
@@ -518,12 +588,12 @@ test('分组：搜索时命中的连接会自动从折叠的分组里露出来',
   await expect(page.locator('[data-conn-name="新建连接"]')).toHaveCount(0);
 });
 
-test('分组：名字重名时自动加序号，不会撞在一起', async ({ page }) => {
+test('目录：名字重名时自动加序号，不会撞在一起', async ({ page }) => {
   await connectNew(page);
 
   await page.getByTestId('btn-new-group').click();
   await page.getByTestId('btn-new-group').click();
 
-  await expect(page.locator('[data-group-name="新建分组"]')).toHaveCount(1);
-  await expect(page.locator('[data-group-name="新建分组 2"]')).toHaveCount(1);
+  await expect(page.locator('[data-group-path="新建目录"]')).toHaveCount(1);
+  await expect(page.locator('[data-group-path="新建目录 2"]')).toHaveCount(1);
 });

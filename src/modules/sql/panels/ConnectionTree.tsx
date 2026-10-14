@@ -1,5 +1,5 @@
 /**
- * 左侧栏：**种类 → 分组 → 连接 → 库 → 表**。
+ * 左侧栏：**种类 → 目录 → 连接 → 库 → 表**。
  *
  * # 第一层是种类（引擎）
  *
@@ -8,15 +8,17 @@
  * MongoDB），连接挂在它下面 —— 一眼看出「这个连接是什么库」，
  * 而不是从 `root@127.0.0.1:27017` 这种地址串里去猜。
  *
- * # 第二层是分组（用户自己建的目录）
+ * # 第二层是目录（用户自己建的，**可以嵌套**）
  *
- * 用户的原话：「连接要考虑管理什么的，最好是有目录管理」。分组**只有一层**、
- * 而且**是全局的、不分引擎** —— 同一个「生产库」在 pg 和 mysql 底下都会出现。
- * 让分组属于某个引擎的话，用户得先想「这个组是给哪个引擎的」，
- * 而他要的只是「把这几条放一起」。形状和规则见 `shared/connections/groups.ts`。
+ * 用户的原话：「连接要考虑管理什么的，最好是有目录管理」，后来又要了树
+ * （「可以目录下加目录，也可以加连接」）。目录**是全局的、不分引擎** ——
+ * 同一棵目录树在 pg 和 mysql 底下都会出现（各算各的成员）。让目录属于某个
+ * 引擎的话，用户得先想「这个目录是给哪个引擎的」，而他要的只是「把这几条放一起」。
+ * ⚠️ 所以在任一引擎底下新建子目录，建的也是这棵全局树里的同一个。
+ * 树逻辑见 `shared/connections/groups.ts`；拖拽见 `useConnectionDrag.ts`。
  *
- * **两个维度别混**：种类是**系统给的**（这个连接是什么库），分组是**用户自己分的**
- * （这几条是我哪个项目的）。顺序也是和用户确认过的：**引擎在上、分组在下**。
+ * **两个维度别混**：种类是**系统给的**（这个连接是什么库），目录是**用户自己分的**
+ * （这几条是我哪个项目的）。顺序也是和用户确认过的：**引擎在上、目录在下**。
  *
  * # 下面三层是**包含关系**，不是并列
  *
@@ -31,10 +33,21 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionGroupRow } from '../../../shared/connections/ConnectionGroupRow';
-import { assignGroups } from '../../../shared/connections/groups';
+import {
+  buildTree,
+  descendantIds,
+  groupPath,
+  subtreeCount,
+  type TreeNode,
+} from '../../../shared/connections/groups';
 import { ConnectionRow } from '../../../shared/connections/ConnectionRow';
 import { KeychainNotice } from '../../../shared/connections/KeychainNotice';
 import type { ConnectionGroup } from '../../../shared/connections/types';
+import {
+  ROOT_TARGET,
+  useConnectionDrag,
+  type ConnectionDrag,
+} from '../../../shared/connections/useConnectionDrag';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { fuzzyFilter } from '../../../shared/search';
@@ -60,19 +73,20 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
   const [query, setQuery] = useState('');
   /** 哪些种类被收起来了（默认都展开） */
   const [collapsedKinds, setCollapsedKinds] = useState<Partial<Record<SqlKind, boolean>>>({});
-  /** 哪些**用户分组**被收起来了。纯显示状态，不持久化（和上面那个一个道理） */
+  /** 哪些**用户目录**被收起来了。纯显示状态，不持久化（和上面那个一个道理） */
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  /** 正在行内改名的分组 id + 草稿（和文件树那套一样，不用弹窗） */
+  /** 正在行内改名的目录 id + 草稿（和文件树那套一样，不用弹窗） */
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   /**
-   * 「新建连接」弹框开着时的引擎；`null` = 没开。
+   * 「新建连接」弹框开着时的引擎 + 预选目录；`null` = 没开。
    *
-   * 引擎在这里而不是在弹框里，是因为**两个入口的默认值不一样**：
-   * 「新建」按钮进来是默认引擎（用户自己选），分组头那个「＋」进来则
-   * **定死那一组的引擎**（它的原意就是「在这一组里加一条」）。
+   * 引擎在这里而不是在弹框里，是因为**三个入口的默认值不一样**：
+   * 「新建」按钮进来是默认引擎（用户自己选），引擎头那个「＋」进来则
+   * **定死那一层的引擎**（它的原意就是「在这一层里加一条」），
+   * 目录头的「在此新建连接」还要再带上是哪条目录。
    */
-  const [newKind, setNewKind] = useState<SqlKind | null>(null);
+  const [newOpen, setNewOpen] = useState<{ kind: SqlKind; groupId: string | null } | null>(null);
 
   const closeMenu = (): void => setMenu(null);
 
@@ -104,16 +118,25 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
     items: visible.filter((p) => p.kind === kind),
   })).filter((g) => g.items.length > 0);
 
+  const drag = useConnectionDrag({
+    groups: state.groups,
+    moveProfile: (id, groupId) => void store.moveToGroup(id, groupId),
+    moveGroup: (id, parentId) => void store.moveGroup(id, parentId),
+  });
+
   /**
-   * 搜索时**强制展开**所有分组 —— 命中的那条埋在收起来的分组里等于没搜到。
+   * 搜索时**强制展开**所有目录 —— 命中的那条埋在收起来的目录里等于没搜到。
    *
    * ⚠️ 撑开是**临时的**（叠加在这一步），`collapsedGroups` 一个字不写：写进去的话，
-   * 清空搜索之后被搜索撑开的分组会自己开着，用户手动收起来的那层就回不去了。
+   * 清空搜索之后被搜索撑开的目录会自己开着，用户手动收起来的那层就回不去了。
    * 文件树那边踩过同一个坑，规矩是一样的。
    */
   const isGroupCollapsed = (id: string): boolean => !searching && collapsedGroups[id] === true;
   const toggleGroup = (id: string): void =>
     setCollapsedGroups((c) => ({ ...c, [id]: !isGroupCollapsed(id) }));
+
+  /** 把某个目录撑开（新建子目录/在此新建连接之后，得让用户看得见成果） */
+  const expandGroup = (id: string): void => setCollapsedGroups((c) => ({ ...c, [id]: false }));
 
   const commitRename = async (): Promise<void> => {
     const id = renaming;
@@ -122,32 +145,71 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
     await store.renameGroup(id, draft.trim());
   };
 
-  /** 分组的右键菜单。删除分组**不需要确认弹窗**：它一条连接都不删（见 store 里那条注释） */
-  const openGroupMenu = (group: ConnectionGroup, x: number, y: number): void => {
-    setMenu({
-      x,
-      y,
-      items: [
-        {
-          label: '重命名',
-          onSelect: () => {
-            setRenaming(group.id);
-            setDraft(group.name);
-          },
+  /**
+   * 目录的右键菜单。「移入」列**别的**目录（全路径；不能是自己或自己的子树，
+   * 那是环）；删除是**数据丢失级别**的操作，文案说清楚，确认弹窗在 store 里
+   * （取消则一个字不写盘）。
+   *
+   * `kind` = 右键发生在哪个引擎的树里 —— 「在此新建连接」用它预选引擎
+   *（目录是全局的，同一棵树在四个引擎下各画一份）。
+   */
+  const openGroupMenu = (group: ConnectionGroup, kind: SqlKind, x: number, y: number): void => {
+    const items: MenuItem[] = [
+      {
+        label: '在此新建连接',
+        onSelect: () => {
+          expandGroup(group.id);
+          setNewOpen({ kind, groupId: group.id });
         },
-        {
-          // 把后果写在菜单里，比事后再弹一个确认框强 —— 用户点之前就该知道
-          label: '删除分组（连接回到未分组）',
-          danger: true,
-          separatorBefore: true,
-          onSelect: () => void store.deleteGroup(group.id),
+      },
+      {
+        label: '新建子目录',
+        onSelect: () => {
+          expandGroup(group.id); // 建完得看得见（父目录正收着的话）
+          // ⚠️ 目录是全局的：在任一引擎底下建的都是同一棵全局树里的新目录
+          void store.createGroup(group.id);
         },
-      ],
+      },
+      {
+        label: '重命名',
+        onSelect: () => {
+          setRenaming(group.id);
+          setDraft(group.name);
+        },
+      },
+    ];
+
+    const inside = descendantIds(state.groups, group.id);
+    const movables = state.groups.filter((g) => g.id !== group.id && !inside.has(g.id));
+    if (movables.length > 0) {
+      items.push(
+        ...movables.map((g, i) => ({
+          label: `移入「${groupPath(state.groups, g.id)}」`,
+          separatorBefore: i === 0,
+          onSelect: () => void store.moveGroup(group.id, g.id),
+        })),
+      );
+    }
+    if (group.parentId !== undefined) {
+      items.push({
+        label: '移出到顶层',
+        onSelect: () => void store.moveGroup(group.id, null),
+      });
+    }
+
+    items.push({
+      // 把后果写在菜单里，比事后再弹一个确认框强 —— 用户点之前就该知道
+      label: '删除目录（连同里面的东西）',
+      danger: true,
+      separatorBefore: true,
+      onSelect: () => void store.deleteGroup(group.id),
     });
+
+    setMenu({ x, y, items });
   };
 
-  /** 分组头（或者它被改名时的输入框）。引擎底下那一层，两个地方要用，抽出来 */
-  const renderGroupHead = (group: ConnectionGroup, count: number): ReactNode => {
+  /** 目录头（或者它被改名时的输入框）。引擎底下那一层，两个地方要用，抽出来 */
+  const renderGroupHead = (group: ConnectionGroup, kind: SqlKind, count: number): ReactNode => {
     if (renaming === group.id) {
       return (
         <div className="rd-conn-group-head" data-testid={`conn-group-rename-${group.id}`}>
@@ -156,7 +218,7 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
             className="rd-rename-input"
             autoFocus
             value={draft}
-            aria-label="重命名分组"
+            aria-label="重命名目录"
             data-testid="group-rename-input"
             onChange={(e) => setDraft(e.target.value)}
             onBlur={() => void commitRename()}
@@ -173,10 +235,41 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
       <ConnectionGroupRow
         group={group}
         count={count}
+        path={groupPath(state.groups, group.id)}
         collapsed={isGroupCollapsed(group.id)}
         onToggle={() => toggleGroup(group.id)}
-        onContextMenu={(x, y) => openGroupMenu(group, x, y)}
+        onContextMenu={(x, y) => openGroupMenu(group, kind, x, y)}
+        dragHandle={drag.handleProps({ kind: 'group', id: group.id })}
+        dragging={drag.dragging?.kind === 'group' && drag.dragging.id === group.id}
+        dropTarget={drag.dropTargetId === group.id}
       />
+    );
+  };
+
+  /**
+   * 一个目录节（头 + 展开的成员），**递归**。缩进靠每层再包一个
+   * `.rd-conn-group-body` 自动累加。落点挂在**整节**上（头 + 身子都算）。
+   */
+  const renderGroupNode = (node: TreeNode<SqlProfile>, kind: SqlKind): ReactNode => {
+    return (
+      <div key={node.group.id} {...drag.zoneProps(node.group.id)}>
+        {renderGroupHead(node.group, kind, subtreeCount(node))}
+        {!isGroupCollapsed(node.group.id) && (
+          <div className="rd-conn-group-body">
+            {node.items.map((profile) => (
+              <ConnectionBranch
+                key={profile.id}
+                profile={profile}
+                state={state}
+                store={store}
+                onMenu={setMenu}
+                drag={drag}
+              />
+            ))}
+            {node.children.map((child) => renderGroupNode(child, kind))}
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -189,10 +282,10 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         <button
           type="button"
           data-testid="btn-new-group"
-          title="新建分组（把连接归归类）"
+          title="新建目录（把连接归归类，目录里还能再建目录）"
           onClick={() => void store.createGroup()}
         >
-          ＋分组
+          ＋目录
         </button>
         <button
           type="button"
@@ -200,7 +293,7 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
           title="新建连接"
           // 引擎进了弹框（第一格），不再弹右键菜单 —— 用户要的是「填几个字就建好」，
           // 而选引擎本来就是那件事的第一步。
-          onClick={() => setNewKind('postgres')}
+          onClick={() => setNewOpen({ kind: 'postgres', groupId: null })}
         >
           新建
         </button>
@@ -215,21 +308,34 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         />
       )}
 
-      {state.profiles.length === 0 ? (
+      {/* ⚠️ **有目录就先画树**（哪怕一条连接都没有）：「先建目录 → 在目录下建
+          连接」是一条正经路径（目录右键「在此新建连接」），没有连接就把树藏了的话，
+          用户建完目录会以为按钮坏了 —— 和「空目录照画」是同一个教训 */}
+      {state.profiles.length === 0 && state.groups.length === 0 ? (
         <div className="rd-empty">还没有连接，点「新建」加一个</div>
       ) : searching && visible.length === 0 ? (
         <NoMatch testId="sql-conn-nomatch" />
       ) : (
-        <div className="rd-panel-body">
+        // 面板空白是「拖回未分组」的落点（拖拽时整块描边）——
+        // 目录里的连接想拖出来就落这儿。落点在**每个引擎的空白区**都生效，
+        // 拖出去的结果是一样的（未分组是全局的，不分引擎）
+        <div
+          className={`rd-panel-body${
+            drag.dropTargetId === ROOT_TARGET ? ' is-drop-root' : ''
+          }`}
+          {...drag.zoneProps(null)}
+        >
           {kindGroups.map(({ kind, items }) => {
             const collapsed = collapsedKinds[kind] === true;
-            // 这个引擎底下的连接**再按用户分组分一层**。分组是全局的，
-            // 所以同一个组在每个引擎底下都会出现（各是各的成员）
+            // 这个引擎底下的连接**再按用户目录搭一层**。目录是全局的，
+            // 所以同一棵目录树在每个引擎底下都会出现（各是各的成员）
             //
-            // ⚠️ 搜索时才藏空组：平时某个引擎下一条成员都没有的组**也要画** ——
-            // 用户建的组不该因为「这个引擎里还没放东西」就消失
-            // （和上面「只画有连接的引擎」不冲突：那层是**系统给的**种类）
-            const byGroup = assignGroups(items, state.groups, searching);
+            // ⚠️ 搜索时才藏空目录：平时某个引擎下一条成员都没有的目录**也要画** ——
+            // 用户建的目录不该因为「这个引擎里还没放东西」就消失
+            //（和上面「只画有连接的引擎」不冲突：那层是**系统给的**种类）。
+            // ⚠️ 拖拽悬停时，同一目录在**每个引擎底下都会亮** —— 它们本来就是
+            // 同一个目录（全局的），亮哪一份都对
+            const byGroup = buildTree(items, state.groups, searching);
             return (
               <div className="rd-kind-group" key={kind} data-testid={`sql-kind-${kind}`}>
                 <div className="rd-kind-head" data-testid={`sql-kind-head-${kind}`}>
@@ -254,9 +360,9 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
                     title={`新建一个 ${KIND_LABEL[kind]} 连接`}
                     aria-label={`新建 ${KIND_LABEL[kind]} 连接`}
                     data-testid={`sql-kind-new-${kind}`}
-                    // 开弹框并**预选这一组的引擎** —— 这个「＋」的原意是
-                    //「在这一组里加一条」，预选正好保住那个意思。
-                    onClick={() => setNewKind(kind)}
+                    // 开弹框并**预选这一层的引擎** —— 这个「＋」的原意是
+                    //「在这一层里加一条」，预选正好保住那个意思。
+                    onClick={() => setNewOpen({ kind, groupId: null })}
                   >
                     ＋
                   </button>
@@ -272,27 +378,11 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
                         state={state}
                         store={store}
                         onMenu={setMenu}
+                        drag={drag}
                       />
                     ))}
 
-                    {byGroup.groups.map(({ group, items: members }) => (
-                      <div key={group.id}>
-                        {renderGroupHead(group, members.length)}
-                        {!isGroupCollapsed(group.id) && (
-                          <div className="rd-conn-group-body">
-                            {members.map((profile) => (
-                              <ConnectionBranch
-                                key={profile.id}
-                                profile={profile}
-                                state={state}
-                                store={store}
-                                onMenu={setMenu}
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                    {byGroup.roots.map((node) => renderGroupNode(node, kind))}
                   </>
                 )}
               </div>
@@ -303,12 +393,13 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
 
-      {newKind !== null && (
+      {newOpen !== null && (
         <NewConnectionDialog
           state={state}
           store={store}
-          kind={newKind}
-          onClose={() => setNewKind(null)}
+          kind={newOpen.kind}
+          defaultGroupId={newOpen.groupId}
+          onClose={() => setNewOpen(null)}
         />
       )}
     </div>
@@ -320,11 +411,13 @@ function ConnectionBranch({
   state,
   store,
   onMenu,
+  drag,
 }: {
   profile: SqlProfile;
   state: SqlState;
   store: SqlStore;
   onMenu: (menu: OpenMenu) => void;
+  drag: ConnectionDrag;
 }): ReactNode {
   const status = state.runtime[profile.id]?.status ?? 'idle';
   const connected = status === 'connected';
@@ -335,7 +428,7 @@ function ConnectionBranch({
   const tables = state.tables[profile.id] ?? [];
   const active = state.runtime[profile.id]?.server?.database ?? profile.database;
 
-  /** 右键菜单：连接/断开 + 移入分组 + 删除。删除是低频但必须有的操作，放这儿最合适 */
+  /** 右键菜单：连接/断开 + 移入目录 + 删除。删除是低频但必须有的操作，放这儿最合适 */
   const openMenu = (x: number, y: number): void => {
     const items: MenuItem[] = [
       {
@@ -345,13 +438,12 @@ function ConnectionBranch({
       },
     ];
 
-    // 「移入分组」：`ContextMenu` 没有子菜单，所以平铺列出来。
-    // 分组通常只有几个，平铺比多一层菜单更好点 —— 而且当前的组会打勾，
-    // 一眼看出这条连接现在在哪儿。
+    // 「移入目录」：`ContextMenu` 没有子菜单，所以平铺列出来，**用全路径** ——
+    // 嵌套之后两个「项目A」光看名字分不清。当前的目录会打勾，一眼看出在哪儿
     if (state.groups.length > 0) {
       items.push(
         ...state.groups.map((group, i) => ({
-          label: `移入「${group.name}」`,
+          label: `移入「${groupPath(state.groups, group.id)}」`,
           checked: profile.groupId === group.id,
           separatorBefore: i === 0,
           onSelect: () => void store.moveToGroup(profile.id, group.id),
@@ -360,13 +452,13 @@ function ConnectionBranch({
     }
     if (profile.groupId !== undefined) {
       items.push({
-        label: '移出分组',
+        label: '移出到未分组',
         onSelect: () => void store.moveToGroup(profile.id, null),
       });
     }
 
     items.push({
-      label: '删除',
+      label: '删除连接',
       danger: true,
       separatorBefore: true,
       onSelect: () => void store.deleteProfile(profile.id),
@@ -388,6 +480,8 @@ function ConnectionBranch({
         onSelect={() => store.select(profile.id)}
         onToggle={() => void (connected ? store.disconnect(profile.id) : store.connect(profile.id))}
         onContextMenu={openMenu}
+        dragHandle={drag.handleProps({ kind: 'profile', id: profile.id })}
+        dragging={drag.dragging?.kind === 'profile' && drag.dragging.id === profile.id}
       />
 
       {expanded && (

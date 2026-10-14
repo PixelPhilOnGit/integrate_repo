@@ -13,8 +13,15 @@
  * - **其它意外**（读盘失败之类）→ 才给 `shell.reportError`。
  */
 
-import { newGroup, removeGroup, withGroup } from '../../../shared/connections/groups';
+import {
+  groupPath,
+  moveGroupIn,
+  newGroup,
+  removeGroupTree,
+  withGroup,
+} from '../../../shared/connections/groups';
 import type { ConnectionGroup } from '../../../shared/connections/types';
+import { platform } from '../../../shared/platform';
 import { describeError } from '../../../shared/platform/types';
 import { suggestMongoQuery, suggestSelect } from '../core/query';
 import type { ShellApi } from '../../../shell/types';
@@ -44,11 +51,12 @@ export interface SqlState {
   ready: boolean;
   profiles: SqlProfile[];
   /**
-   * 用户自己建的分组 —— 侧栏里排在**引擎那层底下**的那一层。
+   * 用户自己建的目录 —— 侧栏里排在**引擎那层底下**的那一层（**可以嵌套**）。
    *
-   * ⚠️ 是全局的、**不分引擎**：同一个「生产库」分组在 pg 和 mysql 底下都会出现。
-   * 让分组属于某个引擎的话，用户得先想「这个组是给哪个引擎的」，
-   * 而他要的只是「把这几条放一起」。
+   * ⚠️ 是全局的、**不分引擎**：同一棵目录树在 pg 和 mysql 底下都会出现
+   *（各算各的成员）。让目录属于某个引擎的话，用户得先想「这个目录是给哪个
+   * 引擎的」，而他要的只是「把这几条放一起」。在任一引擎底下新建子目录，
+   * 建的也是这棵全局树里的同一个。
    */
   groups: ConnectionGroup[];
   runtime: Record<string, SqlRuntime>;
@@ -135,7 +143,7 @@ export class SqlStore {
   private async doInit(): Promise<void> {
     try {
       const profiles = await this.services.profiles.load();
-      // 分组读不出来**不该连累连接档案**：退化成「没有分组」照样能连能查，
+      // 目录读不出来**不该连累连接档案**：退化成「没有目录」照样能连能查，
       // 而连接列表读不出来才是真用不了（那一条走下面的 catch）
       const groups = await this.services.groups.load().catch((): ConnectionGroup[] => []);
       const runtime: Record<string, SqlRuntime> = {};
@@ -225,6 +233,14 @@ export class SqlStore {
     const profile = this.findProfile(id);
     if (!profile) return;
 
+    // ⚠️ **先确认再动手**（2026-10-14 补的）：删连接不可逆，而且和「删目录
+    // 要强确认」摆在一起，「点一下就没」说不过去
+    const ok = await platform.confirm(
+      `确定删除连接「${profile.name}」吗？此操作不可撤销。`,
+      '删除连接',
+    );
+    if (!ok) return;
+
     if (this.state.runtime[id]?.status === 'connected') {
       await this.disconnect(id);
     }
@@ -257,18 +273,18 @@ export class SqlStore {
     }
   }
 
-  // ---------------------------------------------------------------- 分组
+  // ---------------------------------------------------------------- 目录
 
-  /** 新建一个分组（名字自动去重）。返回它的 id */
-  async createGroup(): Promise<string> {
-    const group = newGroup(this.state.groups);
+  /** 新建一个目录（`parentId` = 建在哪个目录下；null/不传 = 顶层）。返回它的 id */
+  async createGroup(parentId: string | null = null): Promise<string> {
+    const group = newGroup(this.state.groups, parentId);
     const groups = [...this.state.groups, group];
     this.set({ groups });
     await this.persistGroups(groups);
     return group.id;
   }
 
-  /** 改分组名。空名字直接忽略 —— 那会让分组在侧栏里变成一个看不见的空行 */
+  /** 改目录名。空名字直接忽略 —— 那会让目录在侧栏里变成一个看不见的空行 */
   async renameGroup(id: string, name: string): Promise<void> {
     const trimmed = name.trim();
     if (trimmed === '') return;
@@ -278,24 +294,80 @@ export class SqlStore {
   }
 
   /**
-   * 删掉一个分组。**里面的连接一条都不删**，全部落回未分组。
-   *
-   * 这条边界是分组这个功能里最要紧的一条：用户点「删除分组」十有八九是想拆掉
-   * 一层目录，不是想把自己填的连接全干掉。所以它**不带确认弹窗**也安全 ——
-   * 代价只是分组没了，数据一条没少（连接本身有确认，那是另一件事）。
+   * 把目录挪到另一个目录下（`null` = 顶层）。
+   * 防环的权威在纯函数里（目标是自己是后裔 → no-op），这里不再判一遍。
    */
-  async deleteGroup(id: string): Promise<void> {
-    const groups = this.state.groups.filter((g) => g.id !== id);
-    const hadMembers = this.state.profiles.some((p) => p.groupId === id);
-    const profiles = hadMembers ? removeGroup(this.state.profiles, id) : this.state.profiles;
-
-    this.set({ groups, profiles });
+  async moveGroup(id: string, parentId: string | null): Promise<void> {
+    const groups = moveGroupIn(this.state.groups, id, parentId);
+    this.set({ groups });
     await this.persistGroups(groups);
-    // 没有成员就不用重写连接档案（少一次没必要的写盘）
-    if (hadMembers) await this.persist(profiles);
   }
 
-  /** 把一个连接放进分组。`null` = 移出分组，落回未分组 */
+  /**
+   * 删掉一个目录：**连同子树里的子目录和连接一起删**。
+   *
+   * ⚠️ 语义 2026-10-14 换过：早先是「连接回到未分组」（那时目录只有一层）。
+   * 用户拍板改成现在的「整棵子树一起删」。**这是数据丢失级别的操作**：
+   * 先弹确认（全路径 + 数量，取消则一个字不写盘；空目录不问），连接按
+   * **整个子树的 id 集合**收拾（只按一个 id 过滤的话，子目录里的连接会悬空
+   * 落回未分组），还连着的先断掉，最后一次性 set + persist。
+   */
+  async deleteGroup(id: string): Promise<void> {
+    if (!this.state.groups.some((g) => g.id === id)) return;
+
+    const { removedGroupIds, removedProfiles, remainingGroups } = removeGroupTree(
+      this.state.profiles,
+      this.state.groups,
+      id,
+    );
+
+    const subDirs = removedGroupIds.size - 1; // 减掉被点的那一个
+    if (subDirs > 0 || removedProfiles.length > 0) {
+      const what: string[] = [];
+      if (subDirs > 0) what.push(`${subDirs} 个子目录`);
+      if (removedProfiles.length > 0) what.push(`${removedProfiles.length} 条连接`);
+      const ok = await platform.confirm(
+        `确定删除目录「${groupPath(this.state.groups, id)}」吗？连同它下面的 ${what.join('、')}一起删掉。此操作不可撤销。`,
+        '删除目录',
+      );
+      if (!ok) return;
+    }
+
+    // 还连着的先断掉，别留下后端挂着的孤儿连接
+    for (const profile of removedProfiles) {
+      if (this.state.runtime[profile.id]?.status === 'connected') {
+        await this.disconnect(profile.id);
+      }
+    }
+
+    const removedProfileIds = new Set(removedProfiles.map((p) => p.id));
+    const profiles = this.state.profiles.filter((p) => !removedProfileIds.has(p.id));
+    const runtime = { ...this.state.runtime };
+    const databases = { ...this.state.databases };
+    const tables = { ...this.state.tables };
+    const expanded = { ...this.state.expanded };
+    for (const pid of removedProfileIds) {
+      for (const map of [runtime, databases, tables, expanded]) delete map[pid];
+    }
+    const selectedRemoved =
+      this.state.selectedId !== null && removedProfileIds.has(this.state.selectedId);
+
+    this.set({
+      groups: remainingGroups,
+      profiles,
+      runtime,
+      databases,
+      tables,
+      expanded,
+      selectedId: selectedRemoved ? (profiles[0]?.id ?? null) : this.state.selectedId,
+      ...(selectedRemoved ? { result: null } : {}),
+    });
+    await this.persistGroups(remainingGroups);
+    // 没删连接（只是拆了几层空目录）就不用重写连接档案
+    if (removedProfiles.length > 0) await this.persist(profiles);
+  }
+
+  /** 把一个连接放进目录（哪个层级都行）。`null` = 移出目录，落回未分组 */
   async moveToGroup(profileId: string, groupId: string | null): Promise<void> {
     const current = this.state.profiles.find((p) => p.id === profileId);
     if (!current) return;
@@ -311,7 +383,7 @@ export class SqlStore {
     try {
       await this.services.groups.save(groups);
     } catch (e) {
-      this.shell.reportError(new Error(`分组保存失败：${describeError(e)}`));
+      this.shell.reportError(new Error(`目录保存失败：${describeError(e)}`));
     }
   }
 

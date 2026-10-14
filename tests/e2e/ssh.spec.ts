@@ -10,7 +10,7 @@
  * 由 Rust 那两组集成测试负责 —— 浏览器这边刻意不假装测过。
  */
 
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   CHANGED_KEY_HOST,
   UNREACHABLE_HOST,
@@ -683,4 +683,89 @@ test('⚠️ 折叠之后光标要跟着内容走，不能跑回左上角（回�
   const after = await cursorOf();
   expect(after.line).toBeGreaterThan(0);
   expect(Math.abs(after.line - after.content)).toBeLessThanOrEqual(1);
+});
+
+// ------------------------------------------------------------------ 目录
+
+/**
+ * 原生 HTML5 拖拽走**合成 DataTransfer 手动派发**。
+ *
+ * ⚠️ Playwright 的鼠标式 `locator.dragTo()` 驱动不了原生 DnD（那是给 pointer
+ * 事件准备的）；而 `dragover` 必须被目标 `preventDefault`（我们的 handler 做了），
+ * 不然 `drop` 静默不生效。
+ */
+async function dragTo(page: Page, from: Locator, to: Locator): Promise<void> {
+  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+  await from.dispatchEvent('dragstart', { dataTransfer });
+  await to.dispatchEvent('dragover', { dataTransfer });
+  await to.dispatchEvent('drop', { dataTransfer });
+  await from.dispatchEvent('dragend', { dataTransfer });
+}
+
+test('目录：在此新建连接 → 嵌套子目录 → 拖拽 → 删除（连带连接，先确认）', async ({ page }) => {
+  // 建一个目录
+  await page.getByTestId('ssh-btn-new-group').click();
+  const dir = page.locator('[data-group-path="新建目录"]');
+  await expect(dir).toBeVisible();
+  await expect(dir).toHaveAttribute('data-group-count', '0');
+
+  // 目录右键 →「在此新建连接」：弹框的「所在目录」预选上这条，
+  // 确认之后连接**直接落在目录里**（省掉「先建再右键移入」那两步 —— 用户报过）
+  await dir.click({ button: 'right' });
+  await page.getByTestId('menu-在此新建连接').click();
+  await page.getByTestId('ssh-new-confirm').click();
+
+  await expect(dir).toHaveAttribute('data-group-count', '1');
+  // 连接真的在目录这一节里面（wrapper 是目录头的父节点，身子也归它）
+  await expect(dir.locator('..').locator('.rd-conn-row')).toHaveCount(1);
+
+  // 在「新建目录」里再建一层：路径是「父/子」—— 同名目录从此不再唯一，
+  // 所以定位一律走 data-group-path
+  await dir.click({ button: 'right' });
+  await page.getByTestId('menu-新建子目录').click();
+  const child = page.locator('[data-group-path="新建目录/新建目录"]');
+  await expect(child).toBeVisible();
+
+  // 拖拽：把连接从父目录拖进子目录（抓手起拖，落点是整节的区域）
+  await dragTo(page, dir.locator('..').locator('.rd-conn-row .rd-conn-drag').first(), child);
+  await expect(child).toHaveAttribute('data-group-count', '1');
+  await expect(dir).toHaveAttribute('data-group-count', '1'); // 计数是子树总数
+
+  // 折叠子目录：里面的连接跟着藏
+  await page.locator('[data-group-path="新建目录/新建目录"] button').first().click();
+  await expect(dir.locator('..').locator('.rd-conn-row')).toHaveCount(0);
+
+  // 删除父目录：**连同子树里的东西一起删**，确认文案要说清删什么
+  let confirmText = '';
+  page.once('dialog', (d) => {
+    confirmText = d.message();
+    void d.accept();
+  });
+  await dir.click({ button: 'right' });
+  await page.getByTestId('menu-删除目录（连同里面的东西）').click();
+
+  expect(confirmText).toContain('1 个子目录');
+  expect(confirmText).toContain('1 条连接');
+  await expect(page.locator('[data-group-path="新建目录"]')).toHaveCount(0);
+  await expect(page.getByTestId('ssh-conn-list')).toContainText('还没有连接');
+});
+
+test('目录：拖到空白处 = 移出目录（回未分组）', async ({ page }) => {
+  await page.getByTestId('ssh-btn-new-group').click();
+  await page.getByTestId('ssh-btn-new').click();
+  await page.getByTestId('ssh-new-confirm').click();
+
+  // 先放进目录
+  await page.locator('.rd-conn-row').first().click({ button: 'right' });
+  await page.getByTestId('menu-移入「新建目录」').click();
+  const dir = page.locator('[data-group-path="新建目录"]');
+  await expect(dir).toHaveAttribute('data-group-count', '1');
+
+  // 拖回空白（面板空白就是「未分组」那个落点）
+  await dragTo(
+    page,
+    page.locator('.rd-conn-row .rd-conn-drag').first(),
+    page.locator('[data-testid="ssh-conn-list"] .rd-panel-body'),
+  );
+  await expect(dir).toHaveAttribute('data-group-count', '0');
 });

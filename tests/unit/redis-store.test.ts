@@ -1,4 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// 「删连接」「删目录」都会先 `platform.confirm` 一句。浏览器版那层是
+// `window.confirm`，node 里没有 —— 换成可控的替身（默认「用户点了确定」）
+const confirmMock = vi.hoisted(() => vi.fn(async (_message: string, _title?: string) => true));
+vi.mock('../../src/shared/platform', () => ({
+  platform: { confirm: confirmMock },
+}));
+
 import { __resetIdsForTest } from '../../src/shared/ids';
 import { newProfile } from '../../src/modules/redis/core/profile';
 import { RedisStore } from '../../src/modules/redis/state/store';
@@ -14,7 +22,11 @@ import type {
 } from '../../src/modules/redis/core/types';
 import type { ShellApi } from '../../src/shell/types';
 
-beforeEach(() => __resetIdsForTest());
+beforeEach(() => {
+  __resetIdsForTest();
+  confirmMock.mockClear();
+  confirmMock.mockResolvedValue(true);
+});
 
 const OK: RedisReply = { type: 'status', text: 'OK' };
 
@@ -223,6 +235,18 @@ describe('连接档案管理', () => {
     await store.deleteProfile(second);
 
     expect(store.getSnapshot().selectedId).toBe(first);
+  });
+
+  it('删除前先确认；取消就一个字不写盘', async () => {
+    const { store, saved } = harness();
+    const id = await store.createProfile();
+    const before = saved.length;
+
+    confirmMock.mockResolvedValueOnce(false);
+    await store.deleteProfile(id);
+
+    expect(store.getSnapshot().profiles).toHaveLength(1);
+    expect(saved.length).toBe(before);
   });
 });
 
@@ -794,18 +818,39 @@ function profileOf(id: string): ConnectionProfile {
   };
 }
 
-describe('分组', () => {
-  it('新建分组：进 state、也落盘', async () => {
+describe('目录', () => {
+  it('新建目录：进 state、也落盘；带 parentId 就是建子目录', async () => {
     const { store, savedGroups } = harness();
     await store.init();
 
-    const id = await store.createGroup();
+    const parent = await store.createGroup();
+    const child = await store.createGroup(parent);
 
-    expect(store.getSnapshot().groups.map((g) => g.id)).toEqual([id]);
-    expect(savedGroups.at(-1)?.map((g) => g.id)).toEqual([id]);
+    const groups = store.getSnapshot().groups;
+    expect(groups.map((g) => g.id)).toEqual([parent, child]);
+    expect(groups.find((g) => g.id === child)?.parentId).toBe(parent);
+    expect(savedGroups.at(-1)?.find((g) => g.id === child)?.parentId).toBe(parent);
   });
 
-  it('把连接放进分组，再移出来', async () => {
+  it('moveGroup 挪目录；挪进自己的后裔是 no-op（防环）', async () => {
+    const { store } = harness();
+    await store.init();
+    const parent = await store.createGroup();
+    const child = await store.createGroup(parent);
+
+    // 挪到顶层：字段真的删掉
+    await store.moveGroup(child, null);
+    expect(
+      Object.hasOwn(store.getSnapshot().groups.find((g) => g.id === child) ?? {}, 'parentId'),
+    ).toBe(false);
+
+    // 建个孙目录，再把 child 挪进它 —— 那是自己的后裔，必须拦住
+    const grand = await store.createGroup(child);
+    await store.moveGroup(child, grand);
+    expect(store.getSnapshot().groups.find((g) => g.id === child)?.parentId).toBeUndefined();
+  });
+
+  it('把连接放进目录，再移出来', async () => {
     const { store } = harness({ stored: [profileOf('a')] });
     await store.init();
     const gid = await store.createGroup();
@@ -817,28 +862,62 @@ describe('分组', () => {
     expect(store.getSnapshot().profiles[0]?.groupId).toBeUndefined();
   });
 
-  it('⚠️ 删分组**一条连接都不删**，成员落回未分组', async () => {
-    // 用户点「删除分组」十有八九是想拆掉一层目录，不是想把连接全干掉 ——
-    // 所以这个操作不带确认弹窗也安全。这条边界要是破了，那是数据丢失级别的 bug
-    const { store, saved } = harness({ stored: [profileOf('a'), profileOf('b')] });
+  it('⚠️ 删目录 = 连同子树里的子目录和连接一起删，先问一次确认', async () => {
+    // 2026-10-14 换的语义（用户拍板）。以前是「连接一条都不删」，
+    // 现在是整棵子树一起删 —— 数据丢失级别的操作，确认文案要先说清删什么
+    const { store, saved } = harness({
+      stored: [profileOf('a'), profileOf('b'), profileOf('c')],
+    });
     await store.init();
-    const gid = await store.createGroup();
-    await store.moveToGroup('a', gid);
+    const parent = await store.createGroup();
+    const child = await store.createGroup(parent);
+    await store.moveToGroup('a', parent);
+    await store.moveToGroup('b', child); // 子目录里的，也要被收进子树
+    await store.moveToGroup('c', parent);
 
-    const savedBefore = saved.length;
-    await store.deleteGroup(gid);
+    await store.deleteGroup(parent);
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    const message = confirmMock.mock.calls[0]?.[0] ?? '';
+    expect(message).toContain('1 个子目录');
+    expect(message).toContain('3 条连接');
 
     const after = store.getSnapshot();
     expect(after.groups).toEqual([]);
-    // 两条连接都还在
-    expect(after.profiles.map((p) => p.id)).toEqual(['a', 'b']);
-    // 成员落回未分组（字段被真的删掉）
-    expect(Object.hasOwn(after.profiles[0] ?? {}, 'groupId')).toBe(false);
-    // 有成员，所以连接档案也重写过一次
-    expect(saved.length).toBeGreaterThan(savedBefore);
+    expect(after.profiles).toEqual([]); // a、b、c 全跟着走
+    expect(saved.at(-1)).toEqual([]);
   });
 
-  it('空分组被删时不重写连接档案（少一次没必要的写盘）', async () => {
+  it('⚠️ 确认被取消 → 一个字都不写盘，目录和连接原样', async () => {
+    const { store, saved, savedGroups } = harness({ stored: [profileOf('a')] });
+    await store.init();
+    const gid = await store.createGroup();
+    await store.moveToGroup('a', gid);
+    const savedBefore = saved.length;
+    const groupsBefore = savedGroups.length;
+
+    confirmMock.mockResolvedValueOnce(false);
+    await store.deleteGroup(gid);
+
+    expect(store.getSnapshot().groups).toHaveLength(1);
+    expect(store.getSnapshot().profiles).toHaveLength(1);
+    expect(saved.length).toBe(savedBefore);
+    expect(savedGroups.length).toBe(groupsBefore);
+  });
+
+  it('子树里还连着的连接会先断开，不留孤儿连接', async () => {
+    const { store, client } = harness({ stored: [profileOf('a')] });
+    await store.init();
+    const gid = await store.createGroup();
+    await store.moveToGroup('a', gid);
+    await store.connect('a');
+
+    await store.deleteGroup(gid);
+
+    expect(client.disconnect).toHaveBeenCalledWith('a');
+  });
+
+  it('空目录删除不问确认（没什么可丢的），也不重写连接档案', async () => {
     const { store, saved } = harness({ stored: [profileOf('a')] });
     await store.init();
     const gid = await store.createGroup();
@@ -846,10 +925,12 @@ describe('分组', () => {
     const before = saved.length;
     await store.deleteGroup(gid);
 
+    expect(confirmMock).not.toHaveBeenCalled();
     expect(saved.length).toBe(before);
+    expect(store.getSnapshot().groups).toEqual([]);
   });
 
-  it('改分组名；空名字直接忽略', async () => {
+  it('改目录名；空名字直接忽略', async () => {
     const { store } = harness();
     await store.init();
     const gid = await store.createGroup();
@@ -861,7 +942,7 @@ describe('分组', () => {
     expect(store.getSnapshot().groups[0]?.name).toBe('生产环境');
   });
 
-  it('分组读不出来时不连累连接档案', async () => {
+  it('目录读不出来时不连累连接档案', async () => {
     const h = harness({ stored: [profileOf('a')] });
     const broken = h.store as unknown as {
       services: { groups: { load: () => Promise<never> } };

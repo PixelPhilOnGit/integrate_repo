@@ -21,6 +21,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionDialog, dialogCanSubmit } from '../../../shared/connections/ConnectionDialog';
+import { withGroup, withoutGroup } from '../../../shared/connections/groups';
 import { applyNewDialogKindSwitch, newProfile, validateProfile } from '../core/profile';
 import { KIND_LABEL, KIND_ORDER, type SqlKind } from '../core/types';
 import type { SqlState, SqlStore } from '../state/store';
@@ -31,11 +32,13 @@ interface Props {
   /**
    * 从哪个入口进来的。
    *
-   * 分组头那个「＋」会把引擎**定死**（它的原意就是「在这一组里加一条」
+   * 引擎头那个「＋」会把引擎**定死**（它的原意就是「在这一组里加一条」
    * —— 那组按引擎分，见 `ConnectionTree`）；「新建」按钮进来则是默认引擎，
    * 用户自己在弹框里选。
    */
   kind?: SqlKind;
+  /** 「在此新建连接」进来的：把那条目录预选上（null/不传 = 未分组/顶层） */
+  defaultGroupId?: string | null;
   onClose: () => void;
 }
 
@@ -43,9 +46,13 @@ export function NewConnectionDialog({
   state,
   store,
   kind = 'postgres',
+  defaultGroupId,
   onClose,
 }: Props): ReactNode {
-  const [draft, setDraft] = useState(() => newProfile(state.profiles, kind));
+  const [draft, setDraft] = useState(() => {
+    const seed = newProfile(state.profiles, kind);
+    return defaultGroupId == null ? seed : withGroup(seed, defaultGroupId);
+  });
 
   const errors = validateProfile(draft);
   // ⚠️ 主按钮只看**弹框里那几个字段** —— 库名、密码不在弹框里，空着是正常的
@@ -69,6 +76,11 @@ export function NewConnectionDialog({
       onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
       errors={errors}
       valid={valid}
+      groups={state.groups}
+      groupId={draft.groupId ?? null}
+      onGroupChange={(gid) =>
+        setDraft((d) => (gid === null ? withoutGroup(d) : withGroup(d, gid)))
+      }
       onCancel={onClose}
       onConfirm={submit}
       extra={

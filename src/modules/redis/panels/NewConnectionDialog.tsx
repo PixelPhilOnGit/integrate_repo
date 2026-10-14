@@ -17,18 +17,24 @@
 
 import { useState, type ReactNode } from 'react';
 import { ConnectionDialog } from '../../../shared/connections/ConnectionDialog';
+import { withGroup, withoutGroup } from '../../../shared/connections/groups';
 import { hasErrors, newProfile, validateProfile } from '../core/profile';
 import type { RedisState, RedisStore } from '../state/store';
 
 interface Props {
   state: RedisState;
   store: RedisStore;
+  /** 「在此新建连接」进来的：把那条目录预选上（null/不传 = 未分组） */
+  defaultGroupId?: string | null;
   onClose: () => void;
 }
 
-export function NewConnectionDialog({ state, store, onClose }: Props): ReactNode {
+export function NewConnectionDialog({ state, store, defaultGroupId, onClose }: Props): ReactNode {
   // 惰性初始化：只在挂载时算一次。弹框每次开都是重新挂载的，所以不会残留上次的输入。
-  const [draft, setDraft] = useState(() => newProfile(state.profiles));
+  const [draft, setDraft] = useState(() => {
+    const seed = newProfile(state.profiles);
+    return defaultGroupId == null ? seed : withGroup(seed, defaultGroupId);
+  });
 
   const errors = validateProfile(draft);
   // ⚠️ 这个模块能直接用**完整校验**，和 SQL / SSH 不一样 —— 因为 Redis 的连接
@@ -54,6 +60,11 @@ export function NewConnectionDialog({ state, store, onClose }: Props): ReactNode
       onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
       errors={errors}
       valid={valid}
+      groups={state.groups}
+      groupId={draft.groupId ?? null}
+      onGroupChange={(gid) =>
+        setDraft((d) => (gid === null ? withoutGroup(d) : withGroup(d, gid)))
+      }
       onCancel={onClose}
       onConfirm={submit}
       extra={
