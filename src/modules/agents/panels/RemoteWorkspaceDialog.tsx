@@ -70,7 +70,7 @@ export function RemoteWorkspaceDialog({ store, onClose }: Props): ReactNode {
       <div className="rd-modal" ref={modalRef} role="dialog" aria-modal="true">
         <h3>加一个远端工作目录</h3>
         <p className="rd-hint rd-muted">
-          会话会跑在**那台机器**上。你这边只是看和打字。
+          会话会跑在<strong>那台机器</strong>上。你这边只是看和打字。
           ⚠️ 远端会话的状态检测弱一些：它靠终端里的通知序列和你的键盘，
           不像本机那样能装钩子（远端写不了我们的脚本）。
         </p>
@@ -131,7 +131,7 @@ export function RemoteWorkspaceDialog({ store, onClose }: Props): ReactNode {
         ) : (
           <>
             <label className="rd-field">
-              <span>私钥文件（**本机**的路径）</span>
+              <span>私钥文件（本机的路径）</span>
               <input
                 data-testid="remote-key"
                 value={privateKeyPath}

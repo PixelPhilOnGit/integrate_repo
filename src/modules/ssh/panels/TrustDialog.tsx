@@ -77,7 +77,7 @@ export function TrustDialog({ state, store }: Props): ReactNode {
         </p>
 
         <p className="rd-hint">
-          请向服务器管理员核对上面这串字符（`ssh-keyscan` 也能印出来）。
+          请向服务器管理员核对上面这串字符（<code className="rd-mono">ssh-keyscan</code> 也能印出来）。
           <strong>只有对得上才能继续。</strong>
           对不上的话，你连上的可能是别人的机器。
         </p>

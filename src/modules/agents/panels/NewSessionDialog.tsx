@@ -282,7 +282,7 @@ function LaunchArgsDialog({
         <h3 className="rd-modal-subtitle">Windows 上的 Git Bash</h3>
         <p className="rd-hint">
           老版 Claude Code 在 Windows 上一定要 Git Bash（新版可以用 PowerShell，
-          那就留空）。**留空 = 自动找**：先问注册表、再看 PATH 里的 git、最后看
+          那就留空）。<strong>留空 = 自动找</strong>：先问注册表、再看 PATH 里的 git、最后看
           几个标准位置。装在别处（比如 D 盘的某个目录）就填在这儿。
         </p>
         <p className="rd-hint rd-muted">

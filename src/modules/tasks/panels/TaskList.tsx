@@ -17,6 +17,7 @@
 import type { ReactNode } from 'react';
 import { FilterChip } from '../../../shared/ui/FilterChip';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
+import { DEFAULT_TITLE, isFreshDraft } from '../core/draft';
 import { archivedCount } from '../core/filter';
 import { STATUS_LABEL, STATUS_ORDER } from '../core/types';
 import type { TasksState, TasksStore } from '../state/store';
@@ -41,7 +42,16 @@ export function TaskList({ state, store }: Props): ReactNode {
           className="rd-btn"
           data-testid="task-new"
           title="新建一条任务"
-          onClick={() => void store.create('新任务', '')}
+          onClick={() => {
+            // 连点两下不该是两条空「新任务」（2026-10-15 体验评审）：
+            // 已经有一条刚建出来、还没动过的，就选中它
+            const fresh = state.tasks.find(isFreshDraft);
+            if (fresh !== undefined) {
+              store.select(fresh.id);
+              return;
+            }
+            void store.create(DEFAULT_TITLE, '');
+          }}
         >
           新建
         </button>

@@ -20,6 +20,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { platform } from '../../../shared/platform';
 import { fuzzyFilter } from '../../../shared/search';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { hasSensitiveHeaders, shortUrl } from '../core/draft';
@@ -47,10 +48,26 @@ export function RequestSidebarView({ state, store }: RequestSidebarProps): React
           type="button"
           className="rd-btn"
           data-testid="request-reset"
-          title="清空编辑器，回到一个空请求"
-          onClick={() => store.resetDraft()}
+          title="开一个新请求（编辑器里没发出去的内容会被清掉）"
+          onClick={() => {
+            // 「新请求」= 清空编辑器（2026-10-15 体验评审）：原来标签叫「新建」，
+            // 点一下静默清掉填了一半的地址和请求头 —— 名字没说是破坏性的，
+            // 做的事却是。现在草稿里真有东西才拦一句
+            const draft = state.draft;
+            const dirty =
+              draft.url.trim() !== '' ||
+              draft.body.trim() !== '' ||
+              draft.headers.some((h) => h.name.trim() !== '' || h.value.trim() !== '');
+            if (!dirty) {
+              store.resetDraft();
+              return;
+            }
+            void platform.confirm('编辑器里这份请求还没发出去，清掉？', '新请求').then((ok) => {
+              if (ok) store.resetDraft();
+            });
+          }}
         >
-          新建
+          新请求
         </button>
       </div>
 
@@ -103,7 +120,18 @@ export function RequestSidebarView({ state, store }: RequestSidebarProps): React
                 className="rd-req-link"
                 data-testid="request-clear-history"
                 title="把历史清空（保存的请求不受影响）"
-                onClick={() => store.clearHistory()}
+                onClick={() => {
+                  // 一按就没、还是带 token 的明文记录（2026-10-15 体验评审）——
+                  // 和删连接/删任务同款的确认，文案说清条数和「保存的还在」
+                  void platform
+                    .confirm(
+                      `清空 ${state.history.length} 条历史？这些记录里有明文地址和请求头。保存的请求不受影响。`,
+                      '清空历史'
+                    )
+                    .then((ok) => {
+                      if (ok) void store.clearHistory();
+                    });
+                }}
               >
                 清空
               </button>
@@ -148,7 +176,9 @@ function HistoryRow({ entry, store }: { entry: HistoryEntry; store: RequestStore
     >
       <span className={`rd-req-tag is-${tone}`}>{status}</span>
       <span className="rd-req-row-text">
-        <span className="rd-req-row-title">
+        {/* 完整 URL 进 title（截断兜底）—— 保存那一行早就有，历史行漏了
+            （2026-10-15 体验评审） */}
+        <span className="rd-req-row-title" title={entry.url}>
           <b>{entry.method}</b> {shortUrl(entry.url)}
         </span>
         <span className="rd-req-row-meta" title={meta}>

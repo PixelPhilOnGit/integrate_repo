@@ -570,6 +570,15 @@ export class SqlStore {
     const sql = this.state.editor.trim();
     if (!profile || sql === '' || this.state.running) return;
 
+    // ⚠️ 未连接时不能只是静默 return（2026-10-15 体验评审）：按钮虽然灰着，
+    // 但 Ctrl+Enter 会走到这儿 —— 此前它一路发到假实现、报「不在活动状态」，
+    // catch 再把连接标成「连接出错」（其实只是没连）。用户得到的是一个假故障，
+    // 而不是「先点连接」这条出路
+    if (this.state.runtime[profile.id]?.status !== 'connected') {
+      this.shell.setStatus(`还没连上「${profile.name}」：先点连接，再执行`);
+      return;
+    }
+
     const id = profile.id;
     this.set({
       running: true,

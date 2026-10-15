@@ -22,6 +22,7 @@
  */
 
 import { useState, type ReactNode } from 'react';
+import { platform } from '../../../shared/platform';
 import { FilterChip } from '../../../shared/ui/FilterChip';
 import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog';
 import { TrustDialog } from './TrustDialog';
@@ -544,7 +545,23 @@ function sessionMenu(store: AgentsStore, state: AgentsState, session: AgentSessi
     label: '关掉这个会话',
     danger: true,
     separatorBefore: items.length > 0,
-    onSelect: () => void store.closeSession(session.id),
+    onSelect: () => {
+      // 还在跑的会话来一句确认（2026-10-15 体验评审：同模块的「关闭全部会话」
+      // 和「删除工作目录」都会拦一句，单条却直接杀进程、上下文就没了）。
+      // 已退出的不拦 —— 没什么可丢的
+      if (session.status === 'exited') {
+        void store.closeSession(session.id);
+        return;
+      }
+      void platform
+        .confirm(
+          `「${session.title}」还在跑，关掉会把进程收掉、这个会话的上下文也没了。继续？`,
+          '关闭会话'
+        )
+        .then((ok) => {
+          if (ok) void store.closeSession(session.id);
+        });
+    },
   });
 
   return items;

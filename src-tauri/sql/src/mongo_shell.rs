@@ -829,8 +829,11 @@ impl Parser {
                         })
                         .collect::<Result<Vec<Document>, String>>()?,
                     Some(_) => {
+                        // ⚠️ 文案和前端假实现（`src/modules/sql/core/mongoShell.ts`）
+                        // 一字不差 —— 两边各自的测试结构性地盖不到对方（老问题），
+                        // 改一边必须改另一边。2026-10-15 去掉了一对裸露的 ** 标记。
                         return Err(
-                            "aggregate 要一个**数组**（管道阶段），比如 aggregate([{$group: {_id: \"$city\", n: {$sum: 1}}}])"
+                            "aggregate 要一个数组（管道阶段），比如 aggregate([{$group: {_id: \"$city\", n: {$sum: 1}}}])"
                                 .to_string(),
                         )
                     }

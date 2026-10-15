@@ -486,11 +486,16 @@ function ConnectionBranch({
         name={profile.name}
         address={`${KIND_LABEL[profile.kind]} · ${profile.host}:${profile.port}`}
         status={status}
+        error={state.runtime[profile.id]?.error ?? null}
         selected={state.selectedId === profile.id}
         expanded={expanded}
         onToggleExpand={() => void store.toggleExpanded(profile.id)}
         onSelect={() => store.select(profile.id)}
-        onToggle={() => void (connected ? store.disconnect(profile.id) : store.connect(profile.id))}
+        // 行内「连接」先选中这一行再连 —— 同 redis 那条注释（2026-10-15 体验评审）
+        onToggle={() => {
+          store.select(profile.id);
+          void (connected ? store.disconnect(profile.id) : store.connect(profile.id));
+        }}
         onContextMenu={openMenu}
         dragHandle={drag.handleProps({ kind: 'profile', id: profile.id })}
         dragging={drag.dragging?.kind === 'profile' && drag.dragging.id === profile.id}

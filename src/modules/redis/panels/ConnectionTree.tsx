@@ -383,11 +383,18 @@ function ConnectionBranch({
         name={profile.name}
         address={addressOf(profile)}
         status={status}
+        error={state.runtime[profile.id]?.error ?? null}
         selected={state.selectedId === profile.id}
         expanded={expanded}
         onToggleExpand={() => void store.toggleExpanded(profile.id)}
         onSelect={() => store.select(profile.id)}
-        onToggle={() => void (connected ? store.disconnect(profile.id) : store.connect(profile.id))}
+        // 行内「连接」先选中这一行再连（2026-10-15 体验评审：连一条没选中的
+        // 连接、失败后完整错误在右栏，而右栏显示的还是**别的**连接 ——
+        // 选了它，失败原文就落在看得见的地方；ssh 那边本来就是这么干的）
+        onToggle={() => {
+          store.select(profile.id);
+          void (connected ? store.disconnect(profile.id) : store.connect(profile.id));
+        }}
         onContextMenu={openMenu}
         dragHandle={drag.handleProps({ kind: 'profile', id: profile.id })}
         dragging={drag.dragging?.kind === 'profile' && drag.dragging.id === profile.id}

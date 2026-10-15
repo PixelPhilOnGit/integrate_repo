@@ -281,12 +281,20 @@ test('Alt+上下翻执行历史', async ({ page }) => {
   await expect(editor).toHaveValue('SELECT 2');
 });
 
-test('没连上时不能执行', async ({ page }) => {
+test('没连上时不能执行 —— 而且会说清为什么（回归：Ctrl+Enter 曾完全静默）', async ({ page }) => {
   await page.getByTestId('btn-new-sql-connection').click();
   await page.getByTestId('sql-new-confirm').click();
 
   await expect(page.getByTestId('btn-sql-run')).toBeDisabled();
   await expect(page.getByTestId('sql-editor')).toHaveAttribute('placeholder', '先连上一个数据库');
+  // 灰按钮旁边明说缺什么（2026-10-15 体验评审：此前只有 placeholder 里一句）
+  await expect(page.getByTestId('sql-run-blocker')).toContainText('先连上一个数据库');
+
+  // Ctrl+Enter 不再静默：状态栏给出路；而且连接**不会**被误标成「连接出错」
+  await page.getByTestId('sql-editor').fill('SELECT 1');
+  await page.getByTestId('sql-editor').press('Control+Enter');
+  await expect(page.getByTestId('status-text')).toContainText('先点连接');
+  await expect(page.getByTestId('sql-status')).toContainText('未连接');
 });
 
 // ------------------------------------------------------------------ 模块契约

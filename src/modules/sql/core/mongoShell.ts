@@ -567,7 +567,7 @@ class Parser {
       case 'aggregate': {
         const pipeline = args[0];
         if (!Array.isArray(pipeline)) {
-          throw new Error('aggregate 要一个**数组**（管道阶段），比如 aggregate([{$group: {_id: "$city", n: {$sum: 1}}}])');
+          throw new Error('aggregate 要一个数组（管道阶段），比如 aggregate([{$group: {_id: "$city", n: {$sum: 1}}}])');
         }
         return { op: 'aggregate', pipeline: pipeline.map((s) => asDoc(s, 'aggregate 的每个阶段')) };
       }

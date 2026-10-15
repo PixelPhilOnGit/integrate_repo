@@ -20,6 +20,12 @@ export interface ConnectionRowProps {
   /** 已经拼好的地址串，比如 `127.0.0.1:6379/0` */
   address: string;
   status: ConnStatus;
+  /**
+   * 连接失败时的**完整错误**（runtime 里那份）。传了它，状态点的 tooltip
+   * 会显示原文而不是笼统的「连接出错」—— 2026-10-15 体验评审：连一条
+   * 没被选中的连接、失败后完整错误只在点开右栏才看得到。
+   */
+  error?: string | null;
   selected: boolean;
   onSelect: () => void;
   onToggle: () => void;
@@ -67,6 +73,7 @@ export function ConnectionRow({
   name,
   address,
   status,
+  error,
   selected,
   onSelect,
   onToggle,
@@ -134,12 +141,19 @@ export function ConnectionRow({
       <span
         className={`rd-conn-dot is-${status}`}
         data-testid={`conn-dot-${id}`}
-        title={connStatusLabel(status)}
+        // 出错时 tooltip 给完整错误原文（点开右栏才看得到的那句）
+        title={status === 'error' && error ? error : connStatusLabel(status)}
       />
 
       <span className="rd-conn-text">
-        <span className="rd-conn-name">{name}</span>
-        <span className="rd-conn-addr">{address}</span>
+        {/* title 是给截断兜底的：名字/地址超出侧栏宽度会被 ellipsis 切掉
+            （2026-10-15 体验评审：截了却看不到全文，连的是哪台机器只能点开猜） */}
+        <span className="rd-conn-name" title={name}>
+          {name}
+        </span>
+        <span className="rd-conn-addr" title={address}>
+          {address}
+        </span>
       </span>
 
       <button

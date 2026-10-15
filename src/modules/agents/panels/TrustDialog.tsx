@@ -42,8 +42,8 @@ export function TrustDialog({ prompt, store }: Props): ReactNode {
 
         {mismatch ? (
           <p className="rd-danger">
-            它现在给的密钥和上次记住的**不一样**。这可能是服务器重装过，
-            也可能有人在中间冒充它 —— **在你确认之前不要继续**。
+            它现在给的密钥和上次记住的<strong>不一样</strong>。这可能是服务器重装过，
+            也可能有人在中间冒充它 —— <strong>在你确认之前不要继续</strong>。
           </p>
         ) : (
           <p>

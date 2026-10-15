@@ -71,7 +71,7 @@ function unusablePreview(state: IntegrationState, target: IntegrationTarget): st
 const PREVIEW: Record<IntegrationTarget, string> = {
   claude: [
     'hooks.UserPromptSubmit → 包装脚本 working（开始干活了）',
-    'hooks.PermissionRequest → 包装脚本 waiting（**在等你授权**，弹窗一出现就报）',
+    'hooks.PermissionRequest → 包装脚本 waiting（在等你授权，弹窗一出现就报）',
     'hooks.Notification      → 包装脚本 waiting（兜底：闲了 60 秒）',
     'hooks.Stop              → 包装脚本 done（这一回合干完了）',
   ].join('\n'),

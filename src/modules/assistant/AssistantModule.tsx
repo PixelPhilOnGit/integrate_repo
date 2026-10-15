@@ -158,7 +158,7 @@ function ChatStream(): ReactNode {
             <p className="rd-hint">
               助手会在上面那个目录里读文件、改文件、跑命令。
               <br />
-              改文件和跑命令**每次都会先问你** —— 你点了允许它才动。
+              改文件和跑命令<strong>每次都会先问你</strong> —— 你点了允许它才动。
             </p>
           ) : (
             <ul className="rd-hint rd-assistant-blockers" data-testid="assistant-blockers">

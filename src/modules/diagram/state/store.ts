@@ -56,6 +56,9 @@ export class AppStore {
    */
   private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
 
+  /** 新建图 / 新建文件夹的重入闸：见 `newDiagram` 的注释 */
+  private creating = false;
+
   attachShell(shell: ShellApi): void {
     this.shell = shell;
   }
@@ -246,6 +249,11 @@ export class AppStore {
       this.shell.reportError('请先选择一个工作区目录');
       return;
     }
+    // 重入闸（2026-10-15 体验评审）：建图是异步的，一次双击会在**用户的
+    // 真实文件夹**里落下 未命名 + 未命名2 两个空文件 —— 功能上没错，
+    // 但那是噪音，而且他按住 Enter 弹两下就能复现
+    if (this.creating) return;
+    this.creating = true;
     try {
       await this.flushSave();
       const path = await platform.createDiagram(root, dir, name);
@@ -259,6 +267,8 @@ export class AppStore {
       this.setStatus(`已新建 ${basename(path)}`);
     } catch (e) {
       this.fail(e);
+    } finally {
+      this.creating = false;
     }
   }
 
@@ -268,6 +278,9 @@ export class AppStore {
       this.shell.reportError('请先选择一个工作区目录');
       return;
     }
+    // 重入闸，同 newDiagram（双击不该建出两个「新建文件夹」）
+    if (this.creating) return;
+    this.creating = true;
     try {
       const path = await platform.createFolder(root, dir, name);
       await this.refreshTree();
@@ -276,6 +289,8 @@ export class AppStore {
       this.setStatus(`已新建文件夹 ${name}`);
     } catch (e) {
       this.fail(e);
+    } finally {
+      this.creating = false;
     }
   }
 

@@ -30,7 +30,7 @@ export const PROVIDER_LABEL: Record<ProviderKind, string> = {
 export const PROVIDER_HINT: Record<ProviderKind, string> = {
   anthropic: 'Anthropic 官方接口。地址已经填好，只需要填 key。',
   openai:
-    'DeepSeek / Qwen / vLLM / ollama / 公司内网网关都走这一路。**地址必须自己填** —— 它们没有统一的官方地址。',
+    'DeepSeek / Qwen / vLLM / ollama / 公司内网网关都走这一路。地址必须自己填 —— 它们没有统一的官方地址。',
 };
 
 /**

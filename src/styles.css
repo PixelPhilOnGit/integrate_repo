@@ -9,14 +9,18 @@
   --panel: #ffffff;
   --border: #dfe3e8;
   --text: #1f2933;
-  --muted: #7b8794;
+  /* 次要文字与报错红都加深过一档（2026-10-15 体验评审：原来 #7b8794
+     对白底只有 3.66:1、#d64545 只有 4.38:1，11–12px 的灰字/红字都够不着
+     AA 的 4.5:1）。现值对 panel 白底 4.9:1、对页面底 4.6:1；深色那套不用动
+     （实测 5.5:1 / 6.6:1，本来就够） */
+  --muted: #66727d;
   --accent: #2f80ed;
   --accent-soft: #e8f1fd;
   /* 主按钮（`.rd-btn-primary`）的两件套：实心底上的字色 + hover 加深档。
      深色主题里 accent 是浅蓝，白字读不清，所以在那边翻成深字（见下） */
   --accent-ink: #ffffff;
   --accent-strong: #2670d0;
-  --danger: #d64545;
+  --danger: #c94040;
   --toolbar-h: 46px;
   --status-h: 26px;
   font-synthesis: none;
@@ -350,7 +354,8 @@ input[type='radio'] {
 
 .rd-placeholder h2 {
   margin: 0;
-  font-size: 17px;
+  /* 15px 与其它空态标题对齐（2026-10-15 体验评审：同一角色三档字号） */
+  font-size: 15px;
 }
 
 .rd-placeholder p {
@@ -1754,7 +1759,11 @@ input[type='radio'] {
 
 .rd-ssh-empty {
   position: absolute;
-  inset: 46px 0 0 0;
+  /* ⚠️ `inset: 0`，不是 `46px 0 0 0`（2026-10-15 体验评审）：遮罩只在
+     **没有会话**时渲染，而那时候标签栏是空的、高度塌了 —— 留出的 46px
+     正好把终端宿主（深色底）的那一截露出来，浅色主题下看着像界面坏了。
+     有会话时这个遮罩根本不渲染，所以盖住标签栏区域没有任何代价 */
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2435,6 +2444,16 @@ input[type='radio'] {
 .rd-agent-empty h2 {
   margin: 0;
   font-size: 15px;
+  /* 空态标题是**标题**，用正文色；说明文字才用 muted（2026-10-15 体验评审：
+     原来标题继承了 muted，第一眼看不出层级）。h3 那条是给助手的空态
+     —— 它用的是 h3，此前吃浏览器默认的 15.21px，字号对不齐 */
+  color: var(--text);
+}
+
+.rd-agent-empty h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text);
 }
 
 .rd-agent-empty p {

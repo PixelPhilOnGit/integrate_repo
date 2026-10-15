@@ -51,7 +51,7 @@ export function SessionForm({ state, store, now }: Props): ReactNode {
           <div className="rd-agent-section" data-testid="agent-env">
             <h4 className="rd-agent-section-title">环境自检</h4>
             <p className="rd-hint">
-              这是**应用进程自己**看到的东西。在你自己的终端（或者 VS Code）里
+              这是<strong>应用进程自己</strong>看到的东西。在你自己的终端（或者 VS Code）里
               跑一下 <code className="rd-mono">where.exe claude</code> 对比，
               两边不一样的地方就是「窗格里跑不起来」的原因。
             </p>
@@ -86,8 +86,12 @@ export function SessionForm({ state, store, now }: Props): ReactNode {
                 </dd>
                 <dt>PATH</dt>
                 <dd className="rd-muted">
-                  {state.environment.pathCount} 条 · 前几条：
-                  {state.environment.pathHead.join(' · ')}
+                  {/* 取不到 PATH 时（浏览器版 / 探测失败）别留一个「前几条：」
+                      的悬空冒号（2026-10-15 体验评审） */}
+                  {state.environment.pathCount} 条
+                  {state.environment.pathHead.length > 0 && (
+                    <> · 前几条：{state.environment.pathHead.join(' · ')}</>
+                  )}
                 </dd>
               </dl>
             )}

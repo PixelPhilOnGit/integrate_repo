@@ -53,6 +53,38 @@ async function addTextMaterial(page: Page, text: string): Promise<void> {
   await expect(materials(page).filter({ hasText: text })).toHaveCount(1);
 }
 
+test('连点新建不会落两条空任务；Esc 可以把刚建的空任务撤掉（回归）', async ({ page }) => {
+  // 2026-10-15 体验评审：新建是即落库的 —— 此前连点两下 = 两条「新任务」，
+  // Esc 也什么都不做，手滑建出来的只能手动去删
+  await expect(page.getByTestId('task-empty')).toBeVisible();
+
+  await page.getByTestId('task-new').click();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(page.getByTestId('task-title')).toBeFocused();
+  // 第二下：仍然只有一条（复用刚建的那条空任务，而不是再落一条）
+  await page.getByTestId('task-new').click();
+  await expect(rows(page)).toHaveCount(1);
+
+  // 空任务上按 Esc（标题没动过）= 放弃整条
+  await page.getByTestId('task-title').click();
+  await page.getByTestId('task-title').press('Escape');
+  await expect(rows(page)).toHaveCount(0);
+  await expect(page.getByTestId('task-empty')).toBeVisible();
+
+  // 建一条、打了半截标题再 Esc：只撤销这次编辑，任务还在、标题回默认
+  await page.getByTestId('task-new').click();
+  await page.getByTestId('task-title').fill('买牛奶');
+  await page.getByTestId('task-title').press('Escape');
+  await expect(rows(page)).toHaveCount(1);
+  await expect(page.getByTestId('task-title')).toHaveValue('新任务');
+
+  // 有内容的（这里：改了名）不受「连点新建」影响 —— 照常落新的一条
+  await page.getByTestId('task-title').fill('买牛奶');
+  await page.getByTestId('task-title').press('Enter');
+  await page.getByTestId('task-new').click();
+  await expect(rows(page)).toHaveCount(2);
+});
+
 test('记一条任务：新建 → 标题自动聚焦 → 改描述 → 标完成', async ({ page }) => {
   await expect(page.getByTestId('task-empty')).toBeVisible();
 

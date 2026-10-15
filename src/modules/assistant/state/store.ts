@@ -487,7 +487,15 @@ export class AssistantStore {
       }
 
       await this.refreshKeyStatus();
-      this.flashNotice('key 已存进系统钥匙串');
+      // ⚠️ 按**钥匙串到底能不能用**分叉（2026-10-15 体验评审）：web / 无钥匙串
+      // 的机器上 key 是落到本机配置文件的，报「已存进系统钥匙串」会和同一屏
+      // 里那条「没有可用的钥匙串」的红字打架 —— 能力探测说不行、动作却报成功，
+      // 用户不知道该信哪个
+      this.flashNotice(
+        this.state.keyStatus?.available === true
+          ? 'key 已存进系统钥匙串'
+          : 'key 已存在本机配置文件里（明文，这台机器没有钥匙串）'
+      );
     } catch (e) {
       this.set({ error: '存 key 失败' });
       this.shell.reportError(e);

@@ -50,7 +50,7 @@ export function KeychainNotice(): ReactNode {
       data-testid="keychain-missing"
       title={
         '这台机器上拿不到系统钥匙串（没有桌面会话、或者凭据服务没起来）。\n' +
-        '所以连接密码**仍然存在本地文件里**，而不是系统凭据库。\n' +
+        '所以连接密码仍然存在本地文件里，而不是系统凭据库。\n' +
         '在共享的机器上别填生产环境的密码。'
       }
     >

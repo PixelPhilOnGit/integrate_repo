@@ -77,15 +77,31 @@ export function QueryPane({ state, store }: Props): ReactNode {
           <button
             type="button"
             data-testid="btn-sql-run"
+            // 灰着的时候要说出为什么（2026-10-15 体验评审：灰按钮 + 静默的
+            // Ctrl+Enter = 「点了按了都没反应，也没人告诉我为什么」）
+            title={!connected ? '先连上一个数据库' : undefined}
             disabled={disabled || state.editor.trim() === ''}
             onClick={() => void store.run()}
           >
             {state.running ? '执行中…' : '执行'}
           </button>
-          <span className="rd-hint">
-            {mongo
-              ? 'Ctrl+Enter 执行 · 点左边的集合会自动填一段查询 · find / findOne / countDocuments / distinct / aggregate / insert / update / delete 都认'
-              : 'Ctrl+Enter 执行 · Alt+↑↓ 翻历史'}
+          {!connected && (
+            <span className="rd-hint is-error" data-testid="sql-run-blocker">
+              先连上一个数据库 —— 左上角连接行的「连接」按钮，或右键选「连接」
+            </span>
+          )}
+          <span
+            className="rd-hint"
+            // ⚠️ 命令清单挪进 title（2026-10-15 体验评审）：原来整句排在
+            // 工具条上，窄一点就换行、第二行只剩一个孤零零的「认」吊着。
+            // 清单本身还是有用的，进 tooltip 不减信息量
+            title={
+              mongo
+                ? '支持：find / findOne / countDocuments / count / estimatedDocumentCount / distinct / aggregate / insert / update / delete'
+                : undefined
+            }
+          >
+            {mongo ? 'Ctrl+Enter 执行 · 点左边的集合会自动填一段查询' : 'Ctrl+Enter 执行 · Alt+↑↓ 翻历史'}
           </span>
           {profile !== null && (
             <span className="rd-hint rd-right" data-testid="sql-target">

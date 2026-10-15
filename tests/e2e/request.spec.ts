@@ -235,6 +235,8 @@ test('保存一个请求：起名字存下来 → 换个地址 → 点回来还�
   await expect(saved).toHaveCount(1);
 
   // 编辑器清空之后点回来，地址和选项都回来了
+  // （草稿里有内容，先过「清掉？」那道确认 —— 2026-10-15 起的行为）
+  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('request-reset').click();
   await expect(page.getByTestId('request-url')).toHaveValue('');
   await saved.first().click();
@@ -268,13 +270,20 @@ test('搜索：方法和地址都搜得到，搜不到有提示', async ({ page 
   await expect(page.getByTestId('request-history-row')).toHaveCount(1);
 });
 
-test('清空历史：历史没了，保存的还在', async ({ page }) => {
+test('清空历史：先问一句，历史没了、保存的还在', async ({ page }) => {
   await page.getByTestId('request-url').fill('https://demo.example/json');
   await page.getByTestId('request-save-name').fill('查用户');
   await page.getByTestId('request-save').click();
   await page.getByTestId('request-send').click();
   await expect(page.getByTestId('request-history-row')).toHaveCount(1);
 
+  // 2026-10-15 体验评审：一按就没、抹掉的是带 token 的明文记录 —— 和
+  // 删连接/删任务同款的确认。先验「取消 = 什么都不动」
+  page.once('dialog', (d) => void d.dismiss());
+  await page.getByTestId('request-clear-history').click();
+  await expect(page.getByTestId('request-history-row')).toHaveCount(1);
+
+  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('request-clear-history').click();
   await expect(page.getByTestId('request-history-row')).toHaveCount(0);
   await expect(page.getByTestId('request-saved-row')).toHaveCount(1);
@@ -308,12 +317,23 @@ test('状态栏右侧显示最近一次的状态码和耗时', async ({ page }) 
   await expect(page.getByTestId('request-status-item')).toContainText('200');
 });
 
-test('新建：清空编辑器（历史和保存都不动）', async ({ page }) => {
+test('新请求：草稿有内容时先问一句（历史和保存都不动）', async ({ page }) => {
   await send(page, 'https://demo.example/json');
   await expect(page.getByTestId('request-history-row')).toHaveCount(1);
 
+  // 2026-10-15 体验评审：这个按钮此前叫「新建」、点一下静默清掉填了一半的
+  // 请求 —— 名字没说是破坏性的。现在草稿非空先确认：取消 = 什么都不动
+  page.once('dialog', (d) => void d.dismiss());
+  await page.getByTestId('request-reset').click();
+  await expect(page.getByTestId('request-url')).toHaveValue('https://demo.example/json');
+
+  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('request-reset').click();
   await expect(page.getByTestId('request-url')).toHaveValue('');
   await expect(page.getByTestId('request-status')).toHaveCount(0);
   await expect(page.getByTestId('request-history-row')).toHaveCount(1);
+
+  // 空草稿不该被拦（没人想为空请求过一道确认）
+  await page.getByTestId('request-reset').click();
+  await expect(page.getByTestId('request-url')).toHaveValue('');
 });

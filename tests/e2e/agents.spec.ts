@@ -268,10 +268,18 @@ test('一个会话不会同时占两格 —— 已经在屏幕上就不再提供
   await page.keyboard.press('Escape');
 });
 
-test('关掉一个会话：进程没了，布局里那一格也收掉', async ({ page }) => {
+test('关掉一个会话：还在跑的先问一句，确认后进程没了、布局里那一格也收掉', async ({ page }) => {
   const id = await newSession(page);
   await expandFirst(page);
   await page.locator(`[data-testid="agent-session-${id}"]`).click({ button: 'right' });
+  // 2026-10-15 体验评审：同模块的「关闭全部会话」会拦一句，单条却直接杀进程。
+  // 先验「取消 = 什么都没关」
+  page.once('dialog', (d) => void d.dismiss());
+  await page.getByTestId('menu-关掉这个会话').click();
+  await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toHaveCount(1);
+
+  await page.locator(`[data-testid="agent-session-${id}"]`).click({ button: 'right' });
+  page.once('dialog', (d) => void d.accept());
   await page.getByTestId('menu-关掉这个会话').click();
 
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toHaveCount(0);

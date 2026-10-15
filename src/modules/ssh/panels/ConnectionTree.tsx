@@ -256,6 +256,18 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
         <KeychainNotice />
         <button
           type="button"
+          data-testid="ssh-btn-new-group"
+          title="新建目录（把连接归归类，目录里还能再建目录）"
+          onClick={() => void store.createGroup()}
+        >
+          ＋目录
+        </button>
+        <button
+          type="button"
+          // 2026-10-15 体验评审：主行动钉最右端（redis/sql 都是这个顺序，
+          // ssh 原来是「新建｜＋目录」反的 —— 切换模块时手会点错），
+          // 顺带补上和 redis/sql 一样的 title
+          title="新建连接"
           data-testid="ssh-btn-new"
           onClick={() => setNewOpen({ groupId: null })}
         >
@@ -274,14 +286,6 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
           必填项**了：`validateProfile` 在 `kind === 'local'` 时只查名字，而名字是
           预填好的 —— 两次点击、零输入。
         */}
-        <button
-          type="button"
-          data-testid="ssh-btn-new-group"
-          title="新建目录（把连接归归类，目录里还能再建目录）"
-          onClick={() => void store.createGroup()}
-        >
-          ＋目录
-        </button>
       </div>
 
       {/* 一个连接都没有的时候不放搜索框：搜不到任何东西的框是噪音 */}

@@ -33,7 +33,9 @@ export function ConnectionForm({ state, store }: Props): ReactNode {
   return (
     <div className="rd-panel rd-inspector" data-testid="ssh-inspector">
       <div className="rd-panel-head">
-        <span>连接设置</span>
+        {/* 「连接属性」—— 和 redis/sql 同一个词（2026-10-15 体验评审：
+            同一个角色在三个模块里叫两个名字，用户记不准） */}
+        <span>连接属性</span>
       </div>
 
       {profile === null ? (
@@ -123,7 +125,7 @@ function Form({
               ))}
             </select>
             <p className="rd-hint rd-muted">
-              本地终端在本机起一个 shell，**不需要主机和密码**（那些字段对它是隐藏的）。
+              本地终端在本机起一个 shell，<strong>不需要主机和密码</strong>（那些字段对它是隐藏的）。
               留「平台默认」就行；列出来的几个是 Windows 上的。
             </p>
           </label>

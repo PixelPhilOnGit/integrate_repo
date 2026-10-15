@@ -127,7 +127,7 @@ export function TaskInspector({ task, store }: Props): ReactNode {
           </button>
           <p className="rd-hint rd-muted">
             把标题和描述送进那个会话（就当是你自己敲的），并在进度里记一笔。
-            会话结束时还会再记一笔 —— 但**不会替你改状态**：干成没干成只有你知道。
+            会话结束时还会再记一笔 —— 但<strong>不会替你改状态</strong>：干成没干成只有你知道。
           </p>
         </div>
 

@@ -28,6 +28,7 @@ import { formatBytes, formatTime, isImageName } from '../core/format';
 import { linkify } from '../core/linkify';
 import { tasksClient } from '../services';
 import type { TasksStore } from '../state/store';
+import { DEFAULT_TITLE, isFreshDraft } from '../core/draft';
 import { STATUS_LABEL, type Attachment, type Progress, type Task } from '../core/types';
 
 interface Props {
@@ -37,8 +38,9 @@ interface Props {
   progress: readonly Progress[];
 }
 
-/** 新建时的默认标题。详情里拿它判断「这条是刚建出来的，该把光标放标题上」 */
-export const DEFAULT_TITLE = '新任务';
+/** 默认标题搬去了 `core/draft.ts`（侧栏「新建」也要用它做防重）——
+    这里 re-export 让老引用一个字不用改 */
+export { DEFAULT_TITLE };
 
 /**
  * 应用内预览图片的大小上限 —— **和 Rust 侧 `tasks_attachment_read` 的 32 MiB
@@ -565,7 +567,23 @@ function TitleField({ task, store }: { task: Task; store: TasksStore }): ReactNo
       onBlur={save}
       onKeyDown={(e) => {
         // 回车就存（标题是单行，回车没有别的含义）
-        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Enter') {
+          e.currentTarget.blur();
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          // 刚建出来、一个字没动的空任务：Esc = 放弃**整条**（2026-10-15
+          // 体验评审：新建即落库，此前手滑建的「新任务」Esc 撤不掉、
+          // 只能手动去删）
+          if (isFreshDraft(task) && value === task.title) {
+            void store.remove(task.id);
+            return;
+          }
+          // 否则只是取消这次编辑：回到原值。⚠️ 不 blur —— blur 会触发
+          // save()，把改了一半的字存下去
+          setValue(task.title);
+        }
       }}
     />
   );

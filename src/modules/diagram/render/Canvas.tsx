@@ -626,18 +626,29 @@ interface ZoomBadgeProps extends CanvasProps {
 }
 
 function ZoomBadge({ state, store, layout, size }: ZoomBadgeProps): ReactNode {
+  // ⚠️ 三个按钮的 title 里带着**滚轮手势**（2026-10-15 体验评审）：- / + 此前
+  // 没有 tooltip，而这两条恰恰是最值得教的（Ctrl/⌘+滚轮缩放、Shift+滚轮横移），
+  // 界面上再没有别的地方能说
   return (
     <div className="rd-zoom-badge">
-      <button type="button" onClick={() => store.setViewport({ zoom: state.viewport.zoom / 1.2 })}>
+      <button
+        type="button"
+        title="缩小（Ctrl/⌘ + 滚轮）"
+        onClick={() => store.setViewport({ zoom: state.viewport.zoom / 1.2 })}
+      >
         −
       </button>
       <span data-testid="zoom-level">{Math.round(state.viewport.zoom * 100)}%</span>
-      <button type="button" onClick={() => store.setViewport({ zoom: state.viewport.zoom * 1.2 })}>
+      <button
+        type="button"
+        title="放大（Ctrl/⌘ + 滚轮）"
+        onClick={() => store.setViewport({ zoom: state.viewport.zoom * 1.2 })}
+      >
         +
       </button>
       <button
         type="button"
-        title="适应窗口"
+        title="适应窗口（Shift + 滚轮 = 横向平移）"
         onClick={() => store.fitTo(size.width, size.height, layout.bounds)}
       >
         ⤢
