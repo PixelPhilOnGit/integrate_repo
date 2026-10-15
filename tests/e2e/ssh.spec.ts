@@ -253,7 +253,7 @@ test('⚠️ 侧栏那个按钮连上之后是「新开」，点它只多一个�
   await expect(toggle).toHaveText('新开');
 });
 
-test('会话行右键能关掉这一条，另一条留下', async ({ page }) => {
+test('标签栏的关闭按钮能关掉这一条，另一条留下（侧栏不再有会话行）', async ({ page }) => {
   await connectAndTrust(page);
   await page.getByTestId('ssh-btn-connect').click();
   await expect(page.getByTestId('ssh-status')).toContainText('已连接');
@@ -261,18 +261,9 @@ test('会话行右键能关掉这一条，另一条留下', async ({ page }) => 
   const tabs = page.locator('[data-testid="ssh-tabs"] [data-session-title]');
   await expect(tabs).toHaveCount(2);
 
-  // 连上之后这个连接是**自动展开**的（`connect()` 里顺手置的），
-  // 所以会话行此刻已经在了 —— 别去点那个箭头，那一下是折叠
-  //
-  // ⚠️ 必须限定 `button`：容器那个 testid 是 `ssh-sessions-<档案 id>`，
-  // 它也是 `ssh-session-` 开头，只按前缀选会把容器一起选进来
-  const sessions = page.locator(
-    '[data-testid="ssh-conn-list"] button[data-testid^="ssh-session-"]',
-  );
-  await expect(sessions).toHaveCount(2);
-
-  await sessions.nth(1).click({ button: 'right' });
-  await page.getByTestId('menu-关闭这个会话').click();
+  // ⚠️ 2026-10-15 起**侧栏不再显示会话**（用户定的：「连接就是叶子节点」）——
+  // 关单条会话走标签栏里那个 ×（本来就有，侧栏那份是重复）
+  await tabs.nth(1).locator('[data-testid^="ssh-tab-close-"]').click();
   await expect(tabs).toHaveCount(1);
 });
 
@@ -492,7 +483,7 @@ test('连接和信任记录会留下来', async ({ page }) => {
 
 // ------------------------------------------------------------------ 侧栏搜索
 
-test('侧栏搜索：按连接名过滤；搜会话名时把那条连接自动撑开', async ({ page }) => {
+test('侧栏搜索：按连接名过滤；搜会话名也能落回那条连接', async ({ page }) => {
   await connectAndTrust(page);
   await page.getByTestId('ssh-field-name').fill('生产机');
   // 第二条连另一台机器、换一个用户名 —— 会话标题是「用户名@主机」，
@@ -507,14 +498,11 @@ test('侧栏搜索：按连接名过滤；搜会话名时把那条连接自动�
   await expect(page.locator('[data-conn-name]')).toHaveCount(1);
   await expect(page.locator('[data-conn-name="生产机"]')).toBeVisible();
 
-  // 搜**会话名**：那条连接要留下，而且自动撑开、会话行看得见 ——
-  // 否则用户搜一个会话名会得到「没有匹配的」，而其实它在折叠的连接里
+  // 搜**会话名**：落回它所属的那条连接 —— 会话行自 2026-10-15 起不挂在侧栏了，
+  // 但拿一个标签名来找「这是哪台机器」仍然要能找到（连接是唯一有意义的落点）
   await page.getByTestId('ssh-conn-search').fill('deploy');
   await expect(page.locator('[data-conn-name="生产机"]')).toHaveCount(0);
-  // 限定在侧栏里：主区标签栏也挂着同样的 data-session-title（不限定会选中两个）
-  await expect(
-    page.locator('[data-testid="ssh-conn-list"] [data-session-title="deploy@10.1.2.3"]'),
-  ).toBeVisible();
+  await expect(page.locator('[data-conn-name]')).toHaveCount(1);
 
   await page.getByTestId('ssh-conn-search').fill('zzzz');
   await expect(page.getByTestId('ssh-conn-nomatch')).toBeVisible();

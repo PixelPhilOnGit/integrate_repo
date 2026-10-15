@@ -338,15 +338,23 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
             const byGroup = buildTree(items, state.groups, searching);
             return (
               <div className="rd-kind-group" key={kind} data-testid={`sql-kind-${kind}`}>
-                <div className="rd-kind-head" data-testid={`sql-kind-head-${kind}`}>
+                <div
+                  className="rd-kind-head"
+                  data-testid={`sql-kind-head-${kind}`}
+                  // 点整行折叠 —— 和目录头同一个行为（2026-10-15 两边一起改的，
+                  // 见 `ConnectionGroupRow` 那条注释）
+                  onClick={() => setCollapsedKinds((c) => ({ ...c, [kind]: !collapsed }))}
+                >
                   <button
                     type="button"
                     className="rd-agent-caret"
                     aria-label={collapsed ? '展开' : '收起'}
                     title={collapsed ? '展开' : '收起'}
-                    onClick={() =>
-                      setCollapsedKinds((c) => ({ ...c, [kind]: !collapsed }))
-                    }
+                    onClick={(e) => {
+                      // 冒泡到整行会再折叠一次（两次 = 没变）—— 拦掉
+                      e.stopPropagation();
+                      setCollapsedKinds((c) => ({ ...c, [kind]: !collapsed }));
+                    }}
                   >
                     {collapsed ? '▸' : '▾'}
                   </button>
@@ -362,7 +370,11 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
                     data-testid={`sql-kind-new-${kind}`}
                     // 开弹框并**预选这一层的引擎** —— 这个「＋」的原意是
                     //「在这一层里加一条」，预选正好保住那个意思。
-                    onClick={() => setNewOpen({ kind, groupId: null })}
+                    // ⚠️ 拦掉冒泡：不然点「＋」会把这一层顺带折叠了
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setNewOpen({ kind, groupId: null });
+                    }}
                   >
                     ＋
                   </button>

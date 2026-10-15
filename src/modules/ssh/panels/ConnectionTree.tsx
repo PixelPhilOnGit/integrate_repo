@@ -1,9 +1,12 @@
 /**
- * 左侧栏：目录 → 连接 → 会话 的树。
+ * 左侧栏：目录 → 连接 的树。**连接就是叶子**。
  *
- * 和 Redis/SQL 那个「连接 → 库 → 表」的树是同一个形状，但**子节点是会话而不是
- * 服务端的结构** —— SSH 连上之后没有「库」这种东西可列，能列的就是你自己开的
- * 那几个终端。所以展开一个连接看到的是它的标签，点一下就切过去。
+ * ⚠️ 会话**不在侧栏**（2026-10-15 用户定的：原来展开连接会列出它的终端标签，
+ * 原话「ssh 链接下面会话不需要在左侧展示，也就是连接就是叶子节点了，会话不需要
+ * 有」）。会话只归主区顶上的标签栏 —— 那里本来就有（点哪条切哪条、每条带关闭
+ * 按钮），侧栏再挂一份是两处重复。侧栏搜索**仍然匹配会话标题**：拿一个标签名
+ * 来搜，落回它所属的连接（那是唯一有意义的落点）；但没有「自动展开看会话」
+ * 这回事了 —— 没有可展开的东西。
  *
  * # 目录**可以嵌套**（2026-10-14 起），界面叫「目录」、内部叫 group
  *
@@ -11,9 +14,6 @@
  * 目录/空白落下）在 `shared/connections/useConnectionDrag.ts`。这里只负责画。
  * 每个目录节里**连接在前、子目录在后**（同「未分组画最上面」的理：新建的东西
  * 要显眼）。
- *
- * 标签栏在主区顶部还有一份。两处都保留是有意的：侧栏那份回答「我有哪几个会话」，
- * 主区那份回答「这些会话谁是谁」。终端用户习惯了两种都在。
  */
 
 import { useState, type ReactNode } from 'react';
@@ -37,7 +37,7 @@ import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { fuzzyBest } from '../../../shared/search';
 import { addressOf } from '../core/profile';
-import type { SshProfile, SshSession } from '../core/types';
+import type { SshProfile } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
 import { NewConnectionDialog } from './NewConnectionDialog';
 
@@ -69,8 +69,9 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
   const q = query.trim();
   const searching = q !== '';
 
-  // 匹配的是**连接自己**（名字/地址）或者**它下面的会话**（标题）。
-  // 会话命中时那条连接也要留下 —— 否则用户搜一个会话名会得到「没有匹配的」。
+  // 匹配的是**连接自己**（名字/地址）或者它的**会话标题**。
+  // 会话命中时那条连接要留下 —— 否则用户拿一个标签名来搜会得到「没有匹配的」，
+  // 而连接是那个标题唯一有意义的落点（会话只住在主区标签栏里）。
   //
   // ⚠️ 保序（`filter` 而不是按分排序）：这里是一棵树，顺序就是用户摆出来的
   // 形状；边打字边重排会让人找不到刚才那一条。平铺的列表（Redis / SQL 的连接）
@@ -237,7 +238,6 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
                 state={state}
                 store={store}
                 onMenu={setMenu}
-                query={q}
                 drag={drag}
               />
             ))}
@@ -319,7 +319,6 @@ export function ConnectionTree({ state, store }: Props): ReactNode {
               state={state}
               store={store}
               onMenu={setMenu}
-              query={q}
               drag={drag}
             />
           ))}
@@ -349,33 +348,18 @@ function ConnectionBranch({
   state,
   store,
   onMenu,
-  query,
   drag,
 }: {
   profile: SshProfile;
   state: SshState;
   store: SshStore;
   onMenu: (menu: OpenMenu) => void;
-  /** 当前搜索词（空串 = 没在搜）。用来决定「要不要临时撑开」 */
-  query: string;
   drag: ConnectionDrag;
 }): ReactNode {
   // ⚠️ 状态是**从会话列表推出来的**，不另存一份 —— 见 store 里 `statusOf` 的注释
   const status = store.statusOf(profile.id);
   const allSessions = store.sessionsOf(profile.id);
   const known = store.hostKeyFor(profile);
-
-  /**
-   * 搜索期间只显示命中的会话，并且**临时撑开**这条连接。
-   *
-   * ⚠️ 撑开是**临时叠加**在点击状态之上的，`store.expanded` 一个字都不动 ——
-   * 否则清空搜索之后，用户手动折起来的那些连接会自己开着，树的形状回不去。
-   */
-  const searching = query.trim() !== '';
-  const sessions = searching
-    ? allSessions.filter((s) => fuzzyBest(query.trim(), [s.title]) !== null)
-    : allSessions;
-  const expanded = searching && sessions.length > 0 ? true : state.expanded[profile.id] === true;
 
   const openMenu = (x: number, y: number): void => {
     const items: MenuItem[] = [
@@ -437,115 +421,32 @@ function ConnectionBranch({
     onMenu({ x, y, items });
   };
 
+  // ⚠️ **这一行就是叶子**：不给 `expanded`/`onToggleExpand`，连折叠箭头都不画
+  // （会话只住在主区标签栏里，见文件头）。
   return (
-    <>
-      <ConnectionRow
-        id={profile.id}
-        name={profile.name}
-        address={addressOf(profile)}
-        status={status}
-        selected={state.selectedId === profile.id}
-        expanded={expanded}
-        onToggleExpand={() => store.toggleExpanded(profile.id)}
-        onSelect={() => store.select(profile.id)}
-        // 行右侧那个按钮是「新开一个终端」而不是「连接/断开」——
-        // 多标签下「断开」是个说不清的操作（断哪一个？），
-        // 而「再开一个」永远是明确的。
-        //
-        // ⚠️ 文案必须一起改：不给的话共享组件按状态显示「断开」，
-        // 于是这个**只会新开会话**的按钮写着「断开」—— 用户点了以为是断开，
-        // 实际又开出来一个终端。要关会话去会话行右键（下面 `SessionRow`）
-        toggleLabels={{ idle: '连接', active: '新开' }}
-        toggleTitle="在同一个连接上再开一个终端"
-        onToggle={() => {
-          store.select(profile.id);
-          void store.connect(profile.id);
-        }}
-        onContextMenu={openMenu}
-        dragHandle={drag.handleProps({ kind: 'profile', id: profile.id })}
-        dragging={drag.dragging?.kind === 'profile' && drag.dragging.id === profile.id}
-      />
-
-      {expanded && (
-        <div className="rd-db-list" data-testid={`ssh-sessions-${profile.id}`}>
-          {sessions.length === 0 && <div className="rd-db-hint">还没有打开的终端</div>}
-          {sessions.map((session) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              active={state.activeSessionId === session.id}
-              store={store}
-              onMenu={onMenu}
-            />
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-function SessionRow({
-  session,
-  active,
-  store,
-  onMenu,
-}: {
-  session: SshSession;
-  active: boolean;
-  store: SshStore;
-  onMenu: (menu: OpenMenu) => void;
-}): ReactNode {
-  return (
-    <button
-      type="button"
-      className={`rd-db-row rd-ssh-session${active ? ' is-active' : ''}`}
-      data-testid={`ssh-session-${session.id}`}
-      // 会话 id 是随机生成的，测试没法稳定地写选择器，
-      // 所以另外挂两个可预期的属性（和 Redis 给库行挂 data-db 是同一个理由）
-      data-session-title={session.title}
-      data-session-status={session.status}
-      onClick={() => {
-        store.select(session.profileId);
-        store.setActiveSession(session.id);
+    <ConnectionRow
+      id={profile.id}
+      name={profile.name}
+      address={addressOf(profile)}
+      status={status}
+      selected={state.selectedId === profile.id}
+      onSelect={() => store.select(profile.id)}
+      // 行右侧那个按钮是「新开一个终端」而不是「连接/断开」——
+      // 多标签下「断开」是个说不清的操作（断哪一个？），
+      // 而「再开一个」永远是明确的。
+      //
+      // ⚠️ 文案必须一起改：不给的话共享组件按状态显示「断开」，
+      // 于是这个**只会新开会话**的按钮写着「断开」—— 用户点了以为是断开，
+      // 实际又开出来一个终端。
+      toggleLabels={{ idle: '连接', active: '新开' }}
+      toggleTitle="在同一个连接上再开一个终端"
+      onToggle={() => {
+        store.select(profile.id);
+        void store.connect(profile.id);
       }}
-      // 「断开」挂在这儿而不是连接行上：会话行**就是**那一条会话，
-      // 点哪条关哪条，不会出现「开了三个，断的是哪个」这种说不清的情况
-      onContextMenu={(e) => {
-        e.preventDefault();
-        onMenu({
-          x: e.clientX,
-          y: e.clientY,
-          items: [
-            {
-              label: '关闭这个会话',
-              onSelect: () => void store.closeSession(session.id),
-            },
-          ],
-        });
-      }}
-      title={sessionEndLabel(session) ?? session.title}
-    >
-      <span className={`rd-conn-dot is-${dotStatus(session)}`} aria-hidden="true" />
-      <span className="rd-db-name">{session.title}</span>
-      <span className="rd-db-count">{sessionEndLabel(session) ?? ''}</span>
-    </button>
+      onContextMenu={openMenu}
+      dragHandle={drag.handleProps({ kind: 'profile', id: profile.id })}
+      dragging={drag.dragging?.kind === 'profile' && drag.dragging.id === profile.id}
+    />
   );
-}
-
-/** 侧栏那个小圆点：会话的三种状态映射到共享组件认识的四种 */
-function dotStatus(session: SshSession): string {
-  switch (session.status) {
-    case 'open':
-      return 'connected';
-    case 'starting':
-      return 'connecting';
-    default:
-      return 'idle';
-  }
-}
-
-/** 已经结束的会话在名字右边显示结局；还活着的不占位置 */
-function sessionEndLabel(session: SshSession): string | null {
-  if (session.status !== 'closed') return null;
-  return session.exitCode === null ? '已结束' : `退出码 ${session.exitCode}`;
 }

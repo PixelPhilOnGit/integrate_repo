@@ -112,8 +112,6 @@ export interface SshState {
   /** 打开的会话，顺序就是标签顺序 */
   sessions: SshSession[];
   activeSessionId: string | null;
-  /** 侧栏里哪些连接是展开的（展开就列出它的会话） */
-  expanded: Record<string, boolean>;
   /** 首次连接一台没见过的机器时，等用户拍板的弹窗 */
   trustPrompt: TrustPrompt | null;
   knownHosts: KnownHost[];
@@ -180,7 +178,6 @@ export class SshStore {
     selectedId: null,
     sessions: [],
     activeSessionId: null,
-    expanded: {},
     trustPrompt: null,
     knownHosts: [],
     mismatch: {},
@@ -405,15 +402,12 @@ export class SshStore {
     const profiles = this.state.profiles.filter((p) => p.id !== id);
     const runtime = { ...this.state.runtime };
     delete runtime[id];
-    const expanded = { ...this.state.expanded };
-    delete expanded[id];
     const mismatch = { ...this.state.mismatch };
     delete mismatch[id];
 
     this.set({
       profiles,
       runtime,
-      expanded,
       mismatch,
       selectedId: this.state.profiles.find((p) => p.id !== id)?.id ?? null,
     });
@@ -512,11 +506,9 @@ export class SshStore {
     const removedProfileIds = new Set(removedProfiles.map((p) => p.id));
     const profiles = this.state.profiles.filter((p) => !removedProfileIds.has(p.id));
     const runtime = { ...this.state.runtime };
-    const expanded = { ...this.state.expanded };
     const mismatch = { ...this.state.mismatch };
     for (const pid of removedProfileIds) {
       delete runtime[pid];
-      delete expanded[pid];
       delete mismatch[pid];
     }
 
@@ -525,7 +517,7 @@ export class SshStore {
         ? profiles[0]?.id ?? null
         : this.state.selectedId;
 
-    this.set({ groups: remainingGroups, profiles, runtime, expanded, mismatch, selectedId });
+    this.set({ groups: remainingGroups, profiles, runtime, mismatch, selectedId });
     await this.persistGroups(remainingGroups);
     // 没删连接（只是拆了几层空目录）就不用重写连接档案
     if (removedProfiles.length > 0) await this.persist(profiles);
@@ -627,7 +619,6 @@ export class SshStore {
     this.set({
       sessions: [...this.state.sessions, session],
       activeSessionId: sessionId,
-      expanded: { ...this.state.expanded, [profileId]: true },
     });
 
     await this.attempt(sessionId, profile, false);
@@ -862,11 +853,6 @@ export class SshStore {
     this.set({ activeSessionId: sessionId });
   }
 
-  toggleExpanded(profileId: string): void {
-    this.set({
-      expanded: { ...this.state.expanded, [profileId]: !this.state.expanded[profileId] },
-    });
-  }
 
   /** 会话流里来的事件。只有「远端自己结束」才会走到这里（用户关的走 closeSession） */
   private onEvent(sessionId: string, event: SshEvent): void {

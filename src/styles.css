@@ -3012,6 +3012,8 @@ textarea:focus {
   font-weight: 600;
   letter-spacing: 0.3px;
   color: var(--muted);
+  /* 整行可点折叠（2026-10-15 起）—— 指针得说出来 */
+  cursor: pointer;
 }
 
 .rd-kind-name,
@@ -3028,20 +3030,21 @@ textarea:focus {
   font-weight: 400;
 }
 
-/* ⚠️ 用户报过：「分组左边那个箭头太小，点几次点不到」（2026-10-14）。
-   撑大的是**点击区**（24×20，负外边距抵掉高度差、头的行高几乎不变），
-   字形只从 10 调到 11 —— 看起来差不多，手感全在命中框上。
+/* ⚠️ 用户报过两次：「分组左边那个箭头太小，点几次点不到」（2026-10-14）、
+   再来「箭头变大点」（2026-10-15）—— 第一次只撑了命中区（字形几乎没动），
+   这次**字形本身也放大**（10 → 14px），命中框跟着到 26×22。
+   （整行现在也能点折叠了，箭头主要是「这里能折」的视觉标志。）
    只改这两个头（连接侧栏的目录头/引擎头是同一个形状）；agents 那边的同名类
    没报过，不顺手改别人的手风。 */
 .rd-kind-head .rd-agent-caret,
 .rd-conn-group-head .rd-agent-caret {
-  min-width: 24px;
-  min-height: 20px;
-  margin: -3px 0;
+  min-width: 26px;
+  min-height: 22px;
+  margin: -4px 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 /* 分组成员缩进一层。引擎头下面**不缩进**（那层只是分类，连接才是第一层实体），

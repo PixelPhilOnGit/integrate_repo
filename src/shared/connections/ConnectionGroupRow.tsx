@@ -58,6 +58,10 @@ export function ConnectionGroupRow({
       data-group-name={group.name}
       data-group-path={title}
       data-group-count={count}
+      // ⚠️ **点整行也能折叠**（2026-10-15 用户定的：原话「最好后面点击分组也能
+      // 展开」）。之前是「只有箭头能点」——那是个和引擎头对齐的取舍，现在两边
+      // 一起改成整行可点，一致性还在
+      onClick={onToggle}
       onContextMenu={
         onContextMenu === undefined
           ? undefined
@@ -70,14 +74,18 @@ export function ConnectionGroupRow({
       <button
         type="button"
         className="rd-agent-caret"
-        // 只有箭头能折叠（点整行不折叠）—— 和 SQL 那个引擎头保持一致，
-        // 两个分组头的行为不一样才是真别扭。
-        // ⚠️ 用户报过箭头太小点不到 → 命中框在 CSS 里撑大了（`.rd-agent-caret` 那条）
+        // 只有箭头能折叠 → **现在整行都能了**（见上面那条）；箭头留着是因为
+        // 它一眼说明「这里能折叠」。⚠️ 用户报过箭头太小点不到 → 字形和命中框
+        // 都在 CSS 里撑大了（`.rd-agent-caret` 那条）
         aria-expanded={!collapsed}
         aria-label={collapsed ? '展开' : '收起'}
         title={collapsed ? '展开' : '收起'}
         data-testid={`conn-group-caret-${group.id}`}
-        onClick={onToggle}
+        onClick={(e) => {
+          // 冒泡到整行会再折叠一次（两次 = 没变）—— 拦掉
+          e.stopPropagation();
+          onToggle();
+        }}
       >
         {collapsed ? '▸' : '▾'}
       </button>

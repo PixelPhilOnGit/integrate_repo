@@ -501,7 +501,8 @@ test('目录：建一个、把连接移进去、折叠、拖拽、再删掉（�
   // 折叠：连接跟着藏起来（折叠是「先看这一层的名字」，不是删）
   await toggleGroupCollapse(page, '新建目录');
   await expect(connRow).toHaveCount(0);
-  await toggleGroupCollapse(page, '新建目录');
+  // 展开可以直接点**整行**（2026-10-15 用户要的）—— 不只有那个小箭头能点
+  await page.locator('[data-group-path="新建目录"]').click();
   await expect(connRow).toHaveCount(1);
 
   // 拖回空白处 = 移出目录（空白处就是「未分组」那个落点）
