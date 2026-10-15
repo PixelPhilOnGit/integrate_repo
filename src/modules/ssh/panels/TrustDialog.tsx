@@ -13,7 +13,8 @@
  * 真正危险的时候以为自己只是又在连一台新机器。
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { useModalKeys } from '../../../shared/ui/useModalKeys';
 import type { SshState, SshStore } from '../state/store';
 
 interface Props {
@@ -38,13 +39,27 @@ export function TrustDialog({ state, store }: Props): ReactNode {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [prompt, store]);
 
+  // 焦点圈（2026-10-15 体验评审：此前焦点留在 BODY 上，Tab 两下再回车
+  // 能把底下的模块切走）。⚠️ 这里**不给回车提交语义**：信任是要用户
+  // 「核对过指纹」才点的动作，回车顺手放行等于把这道防线拆了。
+  // ⚠️ `open` 必须传：这个组件常驻、内容条件渲染，不传的话 hook 里
+  // effect 在挂载那一次就因为 ref 是 null 退出了，监听永远注册不上
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef, open: prompt !== null });
+
   if (prompt === null) return null;
 
   const profile = store.profileById(prompt.profileId);
 
   return (
     <div className="rd-modal-backdrop" data-testid="ssh-trust-dialog">
-      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby="ssh-trust-title">
+      <div
+        className="rd-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ssh-trust-title"
+      >
         <h2 className="rd-modal-title" id="ssh-trust-title">
           第一次连接 {prompt.host}:{prompt.port}
         </h2>
@@ -75,6 +90,9 @@ export function TrustDialog({ state, store }: Props): ReactNode {
         <div className="rd-modal-actions">
           <button
             type="button"
+            // 初始焦点给「取消」而不是主按钮（2026-10-15）：这是安全弹窗，
+            // 回车的默认语义该是「不信任」—— 想信任的人得自己 Tab 一下或点它。
+            autoFocus
             data-testid="ssh-trust-cancel"
             onClick={() => store.dismissTrustPrompt()}
           >

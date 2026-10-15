@@ -13,24 +13,21 @@
  * 字段，不 import `SqlKind` / `SshProfile` 之类。这是 `shared/connections/` 那条
  * 界线（见 `types.ts` 的头注释）—— 这层是给连接类模块共用的，不是给某一个用的。
  *
- * # 为什么不做这三件事
+ * # 焦点圈 / Enter 提交 / 背板点击
  *
- * * **背板点击关闭** —— 全仓 5 个弹框一个都没做。真要做的话得用 `onMouseDown` +
- *   `e.target === e.currentTarget`：用 `onClick` 会把「在弹框里拖选文字、松手
- *   落在背板上」也算成一次点击，于是用户复制个密码就把弹框关了。
- * * **Enter 提交** —— 仓里的弹框都是裸 `<label>`，没有 `<form>`。
- * * **焦点圈** —— 没有先例。
- *
- * 这三条都属于「要做就全仓一起做」，单独给这一个弹框加会变成特例。
+ * 前两件在 2026-10-15 那一轮补齐了：「要做就全仓一起做」的那个全仓 =
+ * `shared/ui/useModalKeys.ts`（焦点圈 + 进场焦点 + 退场还焦点 + 回车提交），
+ * 全仓五个弹框都挂上了它。**背板点击关闭**仍然不做，理由不变：用 `onClick`
+ * 会把「在弹框里拖选文字、松手落在背板上」也算成一次点击，于是用户复制个
+ * 密码就把弹框关了。
  *
  * # 主按钮那个类
  *
- * `rd-btn-primary` 全仓有 7 个 tsx 挂着，但 **CSS 里一个字都没有**（按钮样式
- * 走的是 `button` 元素选择器）。这里不动全局 —— 加一条全局规则会顺手改掉
- * agents 那几个弹框的外观。样式表里那两条规则**限定在 `.rd-conn-dialog` 里**。
+ * `rd-btn-primary` 在 2026-10-15 那一轮已收编成全局规则（实心强调色）。
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { useModalKeys } from '../ui/useModalKeys';
 import { groupPath } from './groups';
 import type { ConnectionGroup } from './types';
 
@@ -150,6 +147,11 @@ export function ConnectionDialog({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [onCancel]);
 
+  // 焦点圈 + 回车提交（评审：键盘用户要 Tab 6 次才到「新建」，第 7 次还会
+  // 走到弹框背后）。校验不过时不给回车语义 —— 灰着的按钮不该被回车绕过去。
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef, onSubmit: valid ? onConfirm : undefined });
+
   const fieldError = (field: ConnectionDialogField): ReactNode =>
     errors?.[field] !== undefined ? (
       <p className="rd-hint is-error" data-testid={`${p}-${field}-error`}>
@@ -159,7 +161,13 @@ export function ConnectionDialog({
 
   return (
     <div className="rd-modal-backdrop rd-conn-dialog" data-testid={`${p}-dialog`}>
-      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby={`${p}-title`}>
+      <div
+        className="rd-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={`${p}-title`}
+      >
         <h2 className="rd-modal-title" id={`${p}-title`}>
           {title}
         </h2>

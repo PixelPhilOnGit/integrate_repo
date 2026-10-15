@@ -19,7 +19,8 @@
  * 叠两层背板会让背景暗两次，看着像出了重影。
  */
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
+import { useModalKeys } from '../../../shared/ui/useModalKeys';
 import { platform } from '../../../shared/platform';
 import {
   KIND_LABEL,
@@ -72,6 +73,10 @@ export function NewSessionDialog({
   const [argsOpen, setArgsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  // 焦点圈（2026-10-15 体验评审的全仓齐步）
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef });
+
   // 目录在对话框开着的时候被删掉了（右键菜单能在别的窗口删）→ 退回第一条。
   // 一条都没有的话入口就不该开得出来，这里是防御。
   const target = workspaces.find((w) => w.id === targetId) ?? workspaces[0];
@@ -104,7 +109,13 @@ export function NewSessionDialog({
 
   return (
     <div className="rd-modal-backdrop" data-testid="agent-new-dialog">
-      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby="agent-new-title">
+      <div
+        className="rd-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-new-title"
+      >
         <h2 className="rd-modal-title" id="agent-new-title">
           新建会话
         </h2>
@@ -197,6 +208,10 @@ function LaunchArgsDialog({
   const [draft, setDraft] = useState<LaunchArgs>({ ...state.launchArgs });
   const [draftGitBash, setDraftGitBash] = useState(state.gitBashPath);
 
+  // 焦点圈（2026-10-15 体验评审的全仓齐步）
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef });
+
   const save = (): void => {
     store.setLaunchArgs(draft);
     store.setGitBashPath(draftGitBash);
@@ -220,7 +235,13 @@ function LaunchArgsDialog({
 
   return (
     <div className="rd-modal-backdrop" data-testid="agent-args-dialog">
-      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby="agent-args-title">
+      <div
+        className="rd-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-args-title"
+      >
         <h2 className="rd-modal-title" id="agent-args-title">
           启动参数
         </h2>

@@ -13,7 +13,8 @@
  * 而真慢的是「填密码」这件事本身（一次之后就进钥匙串了，重填只是省了复制粘贴）。
  */
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
+import { useModalKeys } from '../../../shared/ui/useModalKeys';
 import type { AgentsStore } from '../state/store';
 import type { RemoteAuthKind } from '../core/types';
 
@@ -60,9 +61,13 @@ export function RemoteWorkspaceDialog({ store, onClose }: Props): ReactNode {
     onClose();
   };
 
+  // 焦点圈（2026-10-15 体验评审的全仓齐步；主机那个输入框自己带了 autoFocus）
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef });
+
   return (
     <div className="rd-modal-backdrop" data-testid="agent-remote-dialog">
-      <div className="rd-modal" role="dialog" aria-modal="true">
+      <div className="rd-modal" ref={modalRef} role="dialog" aria-modal="true">
         <h3>加一个远端工作目录</h3>
         <p className="rd-hint rd-muted">
           会话会跑在**那台机器**上。你这边只是看和打字。

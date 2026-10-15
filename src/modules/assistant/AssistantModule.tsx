@@ -7,7 +7,8 @@
  * 审批那块界面（`ApprovalSheet`）是这个模块最要紧的东西 —— 见它的注释。
  */
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useModalKeys } from '../../shared/ui/useModalKeys';
 import { basename, platform } from '../../shared/platform';
 import { selectedProfile, validateConfig } from './core/config';
 import { assistantStore } from './state/store';
@@ -311,9 +312,15 @@ function Composer({
  * 比不给更糟，所以这里严格按那个字段来。
  */
 function ApprovalSheet({ pending }: { pending: PendingApproval }): ReactNode {
+  // 焦点圈（2026-10-15 体验评审的实锤）：弹条出现前焦点停在刚点过的「发送」上，
+  // 而那个位置此刻已经变成「停止」——一次回车就把整轮对话铡了。现在弹条进场
+  // 就把焦点收进来（见下面的 autoFocus），Tab 也圈在弹条里。
+  const cardRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: cardRef });
+
   return (
     <div className="rd-assistant-approval" data-testid="assistant-approval">
-      <div className="rd-assistant-approval-card">
+      <div className="rd-assistant-approval-card" ref={cardRef}>
         <h4>要动你的东西了</h4>
         <p className="rd-assistant-approval-what" data-testid="assistant-approval-what">
           {pending.display}
@@ -334,6 +341,9 @@ function ApprovalSheet({ pending }: { pending: PendingApproval }): ReactNode {
           </button>
           <button
             type="button"
+            // 初始焦点（2026-10-15 体验评审）：回车在这里的语义该是「允许」——
+            // 用户的意图本来就是让助手往前走一步，只是恰好被弹条接住了
+            autoFocus
             className="rd-btn rd-assistant-go"
             data-testid="assistant-approval-allow"
             onClick={() => void assistantStore.approve('allow')}

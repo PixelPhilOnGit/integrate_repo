@@ -10,12 +10,13 @@
  *   - **选中项决定"新建"建到哪儿** —— 选中目录就建在里面，选中文件就建在它旁边
  */
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { platform } from '../../../shared/platform';
 import type { FileNode } from '../../../shared/platform/types';
 import { basename, dirname } from '../../../shared/platform/path';
 import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { useModalKeys } from '../../../shared/ui/useModalKeys';
 import { filterTree } from '../core/treeFilter';
 import type { AppStore } from '../state/store';
 import type { AppState } from '../types';
@@ -425,6 +426,11 @@ function MoveTargetDialog({
   onPick: (dir: string) => void;
   onClose: () => void;
 }): ReactNode {
+  // 焦点圈（2026-10-15 体验评审的全仓齐步；回车不提交 —— 这里是选目标，
+  // 第一下回车该落在「工作区根目录」这个按钮上，走原生点击）
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef });
+
   const dirs: string[] = ['']; // 空串 = 工作区根目录
   const walk = (nodes: readonly FileNode[]): void => {
     for (const n of nodes) {
@@ -438,7 +444,13 @@ function MoveTargetDialog({
 
   return (
     <div className="rd-modal-backdrop" data-testid="tree-move-dialog">
-      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby="tree-move-title">
+      <div
+        className="rd-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tree-move-title"
+      >
         <h2 className="rd-modal-title" id="tree-move-title">
           把「{node.name}」移动到…
         </h2>

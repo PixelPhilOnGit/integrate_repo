@@ -119,3 +119,61 @@ test('小控件的命中区：箭头/抓手/⋯/清空，点偏几像素仍然�
   await page.locator('[data-testid="sql-status"]').first().waitFor();
   expect(await hitOutside(page, '.rd-agent-add', 2)).toBe(true);
 });
+
+test('弹框的焦点圈与回车语义（回归：Tab 曾走出弹框、一次回车曾铡掉助手对话）', async ({
+  page,
+}) => {
+  // (a) 新建连接弹框：Tab 圈在框内（此前第 7 次起就落到背景的模块页签上），
+  //     输入框里的回车 = 点「新建」
+  await page.getByTestId('module-redis').click();
+  await page.getByTestId('redis-main').waitFor();
+  await page.getByTestId('btn-new-connection').click();
+  await expect(page.getByTestId('redis-new-name')).toBeFocused();
+  for (let i = 0; i < 10; i += 1) await page.keyboard.press('Tab');
+  const stillInside = await page.evaluate(() => {
+    const dialog = document.querySelector('[data-testid="redis-new-dialog"]');
+    return dialog?.contains(document.activeElement) ?? false;
+  });
+  expect(stillInside).toBe(true);
+  await page.getByTestId('redis-new-host').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('redis-new-dialog')).toHaveCount(0);
+
+  // (b) ssh 信任弹窗：初始焦点在「取消」（安全默认）——此前进场时焦点还在
+  //     BODY 上，Tab 两下再回车能把底下的模块切走
+  await page.getByTestId('module-ssh').click();
+  await page.getByTestId('ssh-main').waitFor();
+  await page.getByTestId('ssh-btn-new').click();
+  await page.getByTestId('ssh-new-confirm').click();
+  await page.getByTestId('ssh-field-password').fill('secret');
+  await page.getByTestId('ssh-btn-connect').click();
+  await expect(page.getByTestId('ssh-trust-dialog')).toBeVisible();
+  await expect(page.getByTestId('ssh-trust-cancel')).toBeFocused();
+  for (let i = 0; i < 6; i += 1) await page.keyboard.press('Tab');
+  const trustInside = await page.evaluate(() => {
+    const dialog = document.querySelector('[data-testid="ssh-trust-dialog"]');
+    return dialog?.contains(document.activeElement) ?? false;
+  });
+  expect(trustInside).toBe(true);
+  await page.keyboard.press('Escape');
+
+  // (c) 助手审批：焦点进到「允许」；这时按回车 = 允许。
+  //     此前焦点留在刚点过的按钮上（它已经变成「停止」），一次回车把整轮对话铡了
+  await page.getByTestId('module-assistant').click();
+  await page.getByTestId('assistant-inspector').waitFor();
+  await page.getByTestId('assistant-key-input').fill('sk-test');
+  await page.getByTestId('assistant-key-save').click();
+  await page.getByTestId('assistant-pick-workspace').click();
+  await page.getByTestId('assistant-input').fill('帮我写一个文件');
+  await page.getByTestId('assistant-send').click();
+  await expect(page.getByTestId('assistant-approval')).toBeVisible();
+  await expect(page.getByTestId('assistant-approval-allow')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('assistant-approval')).toHaveCount(0);
+  // 这一轮真的继续跑完了：收尾那句「好了。」是审批**之后**才发的
+  // （「整个停掉」会在审批处直接中断，不会有它）
+  await expect(page.getByTestId('assistant-running')).toHaveCount(0);
+  await expect(page.locator('[data-testid="assistant-msg-assistant"]').last()).toContainText(
+    '好了。'
+  );
+});

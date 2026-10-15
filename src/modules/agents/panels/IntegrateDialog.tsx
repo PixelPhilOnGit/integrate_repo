@@ -16,7 +16,8 @@
  * 说成「已启用，马上就好」的话，用户会盯着一个永远不变的状态点怀疑是我们坏了。
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
+import { useModalKeys } from '../../../shared/ui/useModalKeys';
 import { elapsed } from '../core/elapsed';
 import type { AgentsState, AgentsStore } from '../state/store';
 import { TARGET_LABEL } from '../services/integrate';
@@ -49,9 +50,19 @@ export function IntegrateDialog({ target, state, store, now, onClose }: Props): 
   const installed = status?.state === 'installed' || status?.state === 'modified';
   const unusable = status?.state === 'unusable';
 
+  // 焦点圈（2026-10-15 体验评审的全仓齐步）
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef });
+
   return (
     <div className="rd-modal-backdrop" data-testid="agent-integrate-dialog">
-      <div className="rd-modal" role="dialog" aria-modal="true" aria-labelledby="agent-int-title">
+      <div
+        className="rd-modal"
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-int-title"
+      >
         <h2 className="rd-modal-title" id="agent-int-title">
           让 Devtoolkit 知道 {label} 的状态
         </h2>

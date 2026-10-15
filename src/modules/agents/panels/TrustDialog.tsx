@@ -17,7 +17,8 @@
  *    它不是「这台机器以后随便连」，而是「这一次我核对过了」。
  */
 
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
+import { useModalKeys } from '../../../shared/ui/useModalKeys';
 import type { TrustPrompt } from '../state/store';
 import type { AgentsStore } from '../state/store';
 
@@ -29,9 +30,14 @@ interface Props {
 export function TrustDialog({ prompt, store }: Props): ReactNode {
   const mismatch = prompt.expected !== null;
 
+  // 焦点圈（2026-10-15 体验评审）。回车不给提交语义：信任要用户核对过
+  // 指纹才点（和 ssh 那个信任弹窗同一条规矩）。
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalKeys({ ref: modalRef });
+
   return (
     <div className="rd-modal-backdrop" data-testid="agent-trust">
-      <div className="rd-modal" role="dialog" aria-modal="true">
+      <div className="rd-modal" ref={modalRef} role="dialog" aria-modal="true">
         <h3>{mismatch ? '⚠️ 这台机器的密钥变了' : '第一次连这台机器'}</h3>
 
         {mismatch ? (
@@ -66,6 +72,9 @@ export function TrustDialog({ prompt, store }: Props): ReactNode {
         <div className="rd-modal-actions">
           <button
             type="button"
+            // 初始焦点给「取消」（和 ssh 那个信任弹窗同一条规矩）：回车的
+            // 默认语义该是「不信任」
+            autoFocus
             className="rd-btn"
             data-testid="agent-trust-cancel"
             onClick={() => store.dismissTrust()}
