@@ -289,6 +289,10 @@ function WorkspaceHead({
       // 点这一行就切到它那个窗口（右边换一整套分屏）。和「点会话切过去」
       // 是同一件事的两个粒度：点目录 = 整个窗口，点会话 = 窗口里的某一格
       onClick={onActivate}
+      // 双击 = 展开/收起（和文件管理器一个手势）。2026-10-15 体验评审：
+      // 箭头虽然是主要入口，但「点整行没展开」是很多人第一下的直觉 ——
+      // 双击是第二条路，单击的语义（切窗口）不动
+      onDoubleClick={onToggle}
       onContextMenu={(e) => {
         e.preventDefault();
         onMenu(e.clientX, e.clientY);

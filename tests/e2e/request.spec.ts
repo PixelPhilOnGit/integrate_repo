@@ -124,6 +124,44 @@ test('请求头：加一条 → 发出去（假服务器按它决定 401 还是 
   await expect(page.getByTestId('request-header-name').first()).toHaveValue('authorization');
 });
 
+test('回归：请求头那一行的布局（复选框曾吃满整行，把值输入框顶出面板外）', async ({ page }) => {
+  // 背景：全局 `input { width: 100% }` 是给文本框写的元素选择器，复选框也被命中 ——
+  // 一行里的开关算成 894px 宽，名字输入被推到 x=1203、值输入只剩 14px 且落在
+  // 编辑器右边界（1200）之外，点哪都能静默翻转「发不发」。这一条把几何钉住：
+  // 功能用例只按 testid 填值，量不到布局。
+  await page.getByTestId('request-tab-headers').click();
+
+  const headers = await page.getByTestId('request-headers').boundingBox();
+  const row = await page.locator('.rd-req-header-row').first().boundingBox();
+  const toggle = await page.getByTestId('request-header-enabled').first().boundingBox();
+  const value = await page.getByTestId('request-header-value').first().boundingBox();
+  expect(headers).not.toBeNull();
+  expect(row).not.toBeNull();
+  expect(toggle).not.toBeNull();
+  expect(value).not.toBeNull();
+
+  // 开关只是个小盒子，不是整行宽
+  expect(toggle!.width).toBeLessThan(30);
+  // 值输入框真的看得见：有宽度、右缘在编辑器里
+  expect(value!.width).toBeGreaterThan(100);
+  expect(value!.x + value!.width).toBeLessThanOrEqual(headers!.x + headers!.width + 1);
+
+  // 删除 × 平时藏着（鼠标此刻还停在页签上，行没被 hover）——
+  // 此前选择器只认另一种行，它在「头」页签里永远不显示，是个隐形按钮
+  await expect(page.getByTestId('request-header-remove').first()).toBeHidden();
+
+  // 行内空白（值框右侧那截，正常情况下是 × 的位置）不再是沉默开关
+  const checkedBefore = await page.getByTestId('request-header-enabled').first().isChecked();
+  await page.mouse.click(row!.x + row!.width - 6, row!.y + row!.height / 2);
+  await expect(page.getByTestId('request-header-enabled').first()).toBeChecked({
+    checked: checkedBefore,
+  });
+
+  // hover 这一行，× 露出来
+  await page.getByTestId('request-header-name').first().hover();
+  await expect(page.getByTestId('request-header-remove').first()).toBeVisible();
+});
+
 test('读到一半断了：红字说清了断在哪儿，收到的那半截还在下面', async ({ page }) => {
   await send(page, 'https://demo.example/cut');
   await expect(page.getByTestId('request-response-error')).toContainText('读响应体时断了');

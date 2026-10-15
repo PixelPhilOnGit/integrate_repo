@@ -82,7 +82,10 @@ export function TrustDialog({ state, store }: Props): ReactNode {
           </button>
           <button
             type="button"
-            className="rd-danger"
+            // 2026-10-15 体验评审：这是整个弹窗里用户要**明确表态**的主行动，
+            // 之前挂的是 `rd-danger`（危险按钮），和「取消」长得一样 ——
+            // 现在归主按钮（实心强调色）。风险提示的职责在弹窗正文，不在按钮皮肤。
+            className="rd-btn-primary"
             data-testid="ssh-trust-accept"
             onClick={() => void store.trustAndReconnect()}
           >

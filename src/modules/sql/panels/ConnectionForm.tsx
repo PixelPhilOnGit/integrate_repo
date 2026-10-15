@@ -155,6 +155,8 @@ function Form({
         </button>
         <button
           type="button"
+          // 同 redis 那条：删除静止态红字（2026-10-15 体验评审）
+          className="rd-danger"
           data-testid="btn-sql-conn-delete"
           onClick={() => void store.deleteProfile(profile.id)}
         >

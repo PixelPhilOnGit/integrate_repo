@@ -12,6 +12,10 @@
   --muted: #7b8794;
   --accent: #2f80ed;
   --accent-soft: #e8f1fd;
+  /* 主按钮（`.rd-btn-primary`）的两件套：实心底上的字色 + hover 加深档。
+     深色主题里 accent 是浅蓝，白字读不清，所以在那边翻成深字（见下） */
+  --accent-ink: #ffffff;
+  --accent-strong: #2670d0;
   --danger: #d64545;
   --toolbar-h: 46px;
   --status-h: 26px;
@@ -39,6 +43,10 @@
   --muted: #8d99a6;
   --accent: #63b3ed;
   --accent-soft: #23364a;
+  /* 深色主题的 accent 是浅蓝 —— 主按钮上的字反过来用深色（白字在浅蓝上
+     对比度只有 2 出头） */
+  --accent-ink: #16212e;
+  --accent-strong: #7fc0f2;
   --danger: #f08a8a;
   color-scheme: dark;
 }
@@ -89,9 +97,43 @@ button:disabled {
   cursor: default;
 }
 
+/*
+ * 危险按钮**静止态就看得见**（2026-10-15 体验评审：删除连接/删除任务
+ * 和旁边的「连接」「归档」完全同款，最危险的按钮长得最普通）。
+ * 只染文字不染框：一屏里红框会太吵，红字 + hover 红框已经够拉开档次。
+ */
+button.rd-danger {
+  color: var(--danger);
+}
+
 button.rd-danger:hover:not(:disabled) {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/*
+ * 主按钮。2026-10-15 体验评审收编：`rd-btn-primary` 此前是个**空类** ——
+ * 全仓 11 个 tsx 挂着它，CSS 里一个字没有，于是「信任并连接」「确定」这些
+ * 主行动和旁边的按钮长得一模一样（只有 request 的「发送」在作用域里偷了一条，
+ * 见 styles 里 `.rd-req-url-group` 那段的旧注释）。
+ * 现在全局只有这一份：实心强调色 + `--accent-ink`（深浅两套字色，见 :root）。
+ */
+button.rd-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+button.rd-btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+  color: var(--accent-ink);
+}
+
+button.rd-btn-primary:disabled {
+  background: var(--panel);
+  border-color: var(--border);
+  color: var(--muted);
 }
 
 input,
@@ -110,6 +152,26 @@ select:focus,
 textarea:focus {
   outline: 2px solid var(--accent-soft);
   border-color: var(--accent);
+}
+
+/*
+ * ⚠️ 复选框 / 单选框不吃上面那条 `width: 100%`。
+ *
+ * 上面那条是给文本框写的，但它是**元素选择器**，复选框也会被命中 ——
+ * 放进 flex 行里就被撑成整行宽，把同一行后面的控件全顶出可视区。
+ * 2026-10-15 的体验评审抓到的实例：接口调试「头」页签的复选框算成 894px，
+ * 名字输入被推到 x=1203、值输入 x=1389（宽 14px），而编辑器右边界才 x=1200 ——
+ * 用户打开那一页只看得到一排悬空的蓝勾（功能测试全绿是因为它们只按 testid 填值，
+ * 量不到布局）。
+ *
+ * 全仓一共 5 个 checkbox，此前另外 4 个是靠 `.rd-field.rd-check input` 的
+ * 特例活着的 —— 特例一条条地打，就是这个 bug 的形状。所以修在全局这一层，
+ * 那条特例也随之删掉（它的职责现在归这里）。
+ */
+input[type='checkbox'],
+input[type='radio'] {
+  width: auto;
+  min-width: 14px;
 }
 
 /* ------------------------------------------------------------------ 布局 */
@@ -407,6 +469,7 @@ textarea:focus {
 
 /* 悬停 / 选中时出现的「⋯」入口 —— 右键不够容易被发现 */
 .rd-tree-more {
+  position: relative;
   margin-left: auto;
   padding: 0 5px;
   border: none;
@@ -415,6 +478,15 @@ textarea:focus {
   line-height: 1.4;
   border-radius: 4px;
   opacity: 0;
+}
+
+/* 扩命中区（技法见 `.rd-conn-caret` 的注释）：23×18 → 31×22。
+   ⚠️ 纵向只敢探 2px：树行距 23px、按钮高 18px，上下各探 3px 时相邻两行的
+   命中区会在行距里叠上（e2e 的探针正好落进那条缝，打到了下一行的 ⋯） */
+.rd-tree-more::after {
+  content: '';
+  position: absolute;
+  inset: -2px -4px;
 }
 
 .rd-tree-row:hover .rd-tree-more,
@@ -761,9 +833,8 @@ textarea:focus {
   gap: 7px;
 }
 
-.rd-field.rd-check input {
-  width: auto;
-}
+/* 复选框的宽度归全局那条 `input[type='checkbox']` 管（原先这里有一条
+   `width: auto` 的特例，2026-10-15 收编到全局规则里） */
 
 .rd-hint {
   margin: 0;
@@ -979,7 +1050,16 @@ textarea:focus {
 /* ------------------------------------------------- 浏览式界面（连接树 + key） */
 
 /* 连接行左侧的展开箭头（复用文件树那个 .rd-tree-caret 的旋转） */
+/*
+ * 命中区 26×24，视觉仍是 16×16。
+ *
+ * 技法（本轮多处复用，下文只写「扩命中区」）：`::after` 绝对定位往外探
+ * 一圈，点它和点按钮本体一样 —— 布局半个像素不动（宽度真加大的话，
+ * 整棵树的文字都要跟着挪，还会盖住相邻文字的点击）。
+ * 2026-10-15 体验评审：16×16 的目标是「点几次点不到」的常客。
+ */
 .rd-conn-caret {
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;
@@ -990,6 +1070,12 @@ textarea:focus {
   border: none;
   background: transparent;
   color: var(--muted);
+}
+
+.rd-conn-caret::after {
+  content: '';
+  position: absolute;
+  inset: -4px -5px;
 }
 
 .rd-conn-caret:hover {
@@ -1565,29 +1651,45 @@ textarea:focus {
 .rd-ssh-blocks {
   position: relative;
   flex: none;
-  width: 11px;
+  /* 栏从 11px 加宽到 16px：色条**视觉仍是 5px**（见 `.rd-ssh-band::before`），
+     多出来的宽度全是它的命中区 —— 复制整块和折叠都打在这条竖线上，
+     5px 的目标谁也点不中（2026-10-15 体验评审） */
+  width: 16px;
   overflow: hidden;
 }
 
 .rd-ssh-band {
   position: absolute;
-  left: 3px;
-  right: 3px;
+  left: 0;
+  right: 0;
   padding: 0;
   border: 0;
-  border-radius: 3px;
   cursor: pointer;
   opacity: 0.7;
   transition: opacity 0.1s;
+  /* 颜色走变量：状态类只换这个值，画画的活儿归 ::before */
+  --band-bg: var(--accent);
+}
+
+/* 真正被画出来的只有中间 5px；整条 16px 宽都能点 */
+.rd-ssh-band::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  right: 6px;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--band-bg);
 }
 
 /* 相邻两块交替颜色：一眼分得开哪块是哪块 */
 .rd-ssh-band.is-lane0 {
-  background: var(--accent);
+  --band-bg: var(--accent);
 }
 
 .rd-ssh-band.is-lane1 {
-  background: #b07d3f;
+  --band-bg: #b07d3f;
 }
 
 .rd-ssh-band:hover {
@@ -1595,15 +1697,18 @@ textarea:focus {
 }
 
 .rd-ssh-band.is-copied {
-  background: #3fa96a;
+  --band-bg: #3fa96a;
   opacity: 1;
 }
 
 /* 折起来的块画成空心 —— 和实心的「展开」一眼分得开 */
 .rd-ssh-band.is-folded {
-  background: transparent;
-  border: 1px solid var(--accent);
+  --band-bg: transparent;
   opacity: 0.9;
+}
+
+.rd-ssh-band.is-folded::before {
+  border: 1px solid var(--accent);
 }
 
 /* 「已复制」飘一下就走。定位在色条右边，不遮终端里的字 */
@@ -1812,17 +1917,12 @@ textarea:focus {
 /* --- 新建连接弹框（三个连接模块共用，见 shared/connections/ConnectionDialog.tsx）--- */
 
 /*
- * ⚠️ 这两条**故意限定在 `.rd-conn-dialog` 里**，不动全局。
- *
- * `rd-btn-primary` 那个类名全仓有 7 个 tsx 挂着，但 CSS 里**一个字都没有** ——
- * 按钮的样式一直走 `button` 元素选择器，所以那些「主按钮」看起来和普通按钮
- * 一模一样。加一条全局规则确实能把它们一起修好，但也会**顺手改掉别的模块
- * 弹框的外观** —— 那是另一件事，不该混在这次改动里（已记进 HANDOFF）。
+ * 这里原先有一条 `.rd-conn-dialog .rd-btn-primary` 的作用域规则（描边式强调）——
+ * 2026-10-15 体验评审把「主按钮」收编成了全局那一条（实心，见文件上方
+ * `button.rd-btn-primary`），这条特例随之删掉。那个「已记进 HANDOFF」的
+ * 全局欠账，就是这一次还的。
  */
-.rd-conn-dialog .rd-btn-primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
+
 
 /* `.rd-form` 自带 12px 内边距，叠在 `.rd-modal` 的 padding 上会让这个弹框
    比别人胖一圈。字段的间距 `.rd-form` 还是要的，只是把外边距抹平 */
@@ -2031,14 +2131,23 @@ textarea:focus {
 }
 
 .rd-agent-caret {
-  width: 16px;
+  /* 图标按钮的命中区标准（2026-10-15 体验评审定型）：字形 14px、命中框 ≥26×22。
+     ⚠️ 用户为这个箭头报过三次「点不到」；原先 agents 这边只有 16×11（glyph 10px），
+     和连接树那两个头（见下面 `.rd-kind-head` 处的历史注释）对不齐 ——
+     现在三处共用这一份几何，别再各写各的。负 margin 是为了不把行撑高。 */
+  min-width: 26px;
+  min-height: 22px;
+  margin: -4px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--muted);
   cursor: pointer;
   font: inherit;
-  font-size: 10px;
+  font-size: 14px;
 }
 
 .rd-agent-ws-name {
@@ -2056,6 +2165,7 @@ textarea:focus {
 }
 
 .rd-agent-add {
+  position: relative;
   flex: none;
   width: 18px;
   height: 18px;
@@ -2067,6 +2177,13 @@ textarea:focus {
   cursor: pointer;
   font: inherit;
   line-height: 1;
+}
+
+/* 扩命中区（技法见 `.rd-conn-caret` 的注释）：18×18 → 24×24 */
+.rd-agent-add::after {
+  content: '';
+  position: absolute;
+  inset: -3px -3px;
 }
 
 .rd-agent-add:hover {
@@ -2269,6 +2386,7 @@ textarea:focus {
 }
 
 .rd-agent-pane-btn {
+  position: relative;
   flex: none;
   width: 20px;
   height: 18px;
@@ -2281,6 +2399,14 @@ textarea:focus {
   font: inherit;
   font-size: 12px;
   line-height: 1;
+}
+
+/* 扩命中区（技法见 `.rd-conn-caret` 的注释）：三个按钮挨在一起，
+   横向只敢探 1px（探多了会和邻按钮的命中框叠在一起，又变成「点错一个」） */
+.rd-agent-pane-btn::after {
+  content: '';
+  position: absolute;
+  inset: -3px -1px;
 }
 
 .rd-agent-pane-btn:hover {
@@ -2863,6 +2989,7 @@ textarea:focus {
 
 /* ✕：**不藏进 hover**（触摸屏上 hover 根本不存在），做小、做灰，需要时才显眼 */
 .rd-task-material-remove {
+  position: relative;
   margin-left: auto;
   border: none;
   background: none;
@@ -2870,6 +2997,13 @@ textarea:focus {
   color: var(--muted);
   font-size: 11px;
   line-height: 1;
+}
+
+/* 扩命中区（技法见 `.rd-conn-caret` 的注释）：11×13 是这个仓最小的目标 */
+.rd-task-material-remove::after {
+  content: '';
+  position: absolute;
+  inset: -4px -6px;
 }
 
 .rd-task-material-remove:hover:not(:disabled) {
@@ -3034,18 +3168,9 @@ textarea:focus {
    再来「箭头变大点」（2026-10-15）—— 第一次只撑了命中区（字形几乎没动），
    这次**字形本身也放大**（10 → 14px），命中框跟着到 26×22。
    （整行现在也能点折叠了，箭头主要是「这里能折」的视觉标志。）
-   只改这两个头（连接侧栏的目录头/引擎头是同一个形状）；agents 那边的同名类
-   没报过，不顺手改别人的手风。 */
-.rd-kind-head .rd-agent-caret,
-.rd-conn-group-head .rd-agent-caret {
-  min-width: 26px;
-  min-height: 22px;
-  margin: -4px 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-}
+   2026-10-15 体验评审后：这套几何**收编进了 `.rd-agent-caret` 的基础规则**，
+   agents 那边也不再例外（原先 16×11，同一个角色三个模块三种尺寸）。
+   这里只剩一行记录，规则本体见上面 `.rd-agent-caret`。 */
 
 /* 分组成员缩进一层。引擎头下面**不缩进**（那层只是分类，连接才是第一层实体），
    而用户分组底下的连接缩进去 —— 一眼看出「这几条是一组的」。
@@ -3059,6 +3184,7 @@ textarea:focus {
    ⚠️ 别把整行做成 draggable —— 那会让行里的文字选不中，而「主机名能复制」
    是这个仓专门保过的（见 `useConnectionDrag` 的说明） */
 .rd-conn-drag {
+  position: relative;
   flex: none;
   margin-left: 2px;
   padding: 0 3px;
@@ -3068,6 +3194,14 @@ textarea:focus {
   user-select: none;
   font-size: 11px;
   line-height: 1;
+}
+
+/* 扩命中区（技法见 `.rd-conn-caret` 的注释）：14×11 的抓手谁也抓不住，
+   扩到约 24×21。它悬停才露，所以命中框大一点尤其重要。 */
+.rd-conn-drag::after {
+  content: '';
+  position: absolute;
+  inset: -5px -5px;
 }
 
 .rd-conn-row:hover .rd-conn-drag,
@@ -3391,18 +3525,11 @@ textarea:focus {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* 颜色归全局 `button.rd-btn-primary` 管（2026-10-15 收编 —— 它此前是全仓
+   唯一的实心主按钮，其余 10 处同类都因为空类而没生效）；这里只留本工具条
+   自己的尺寸：发送键在 URL 行里要胖一点 */
 .rd-req-url-group .rd-btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
   padding: 3px 14px;
-}
-
-.rd-req-url-group .rd-btn-primary:disabled {
-  background: var(--panel);
-  border-color: var(--border);
-  color: var(--muted);
-  cursor: not-allowed;
 }
 
 /* 「为什么不能发」那句话。⚠️ 它和按钮的禁用条件是同一个判断（`canSend`） */
@@ -3438,6 +3565,9 @@ textarea:focus {
   align-items: center;
   gap: 6px;
   flex: none;
+  /* 兜底：极窄窗口下允许换行。宁可这一行长高，也不能把控件顶出可视区
+     （2026-10-15 之前的实际形态：溢出成横向滚动，值输入框只有 14px 宽） */
+  flex-wrap: wrap;
 }
 
 .rd-req-header-toggle {
@@ -3451,7 +3581,8 @@ textarea:focus {
 
 .rd-req-header-value {
   flex: 1;
-  min-width: 0;
+  /* 不跟着缩到没有：窄到放不下时让整行换行，而不是把值框压成一条缝 */
+  min-width: 120px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -3674,7 +3805,10 @@ textarea:focus {
 .rd-req-link {
   border: none;
   background: transparent;
-  padding: 0;
+  /* 内边距配负外边距：命中区从 15×22 扩到约 23×34，行高不受影响
+     （「清空」在历史标题行里，原来的小目标又是破坏性动作） */
+  padding: 4px 6px;
+  margin: -4px -6px;
   color: var(--accent);
   font-size: 11px;
   cursor: pointer;
@@ -3732,6 +3866,7 @@ textarea:focus {
 
 /* 行上那个 ×。默认**不显示** —— 历史列表里每行挂一个叉，扫起来很吵 */
 .rd-req-row-x {
+  position: relative;
   flex: none;
   border: none;
   background: transparent;
@@ -3741,7 +3876,23 @@ textarea:focus {
   visibility: hidden;
 }
 
-.rd-req-row:hover .rd-req-row-x {
+/* 扩命中区（技法见 `.rd-conn-caret` 的注释）：19×15 → 约 29×23 */
+.rd-req-row-x::after {
+  content: '';
+  position: absolute;
+  inset: -4px -5px;
+}
+
+/*
+ * ⚠️ 两种行都要写上：历史/保存行是 `.rd-req-row`，「头」页签的每一行是
+ * `.rd-req-header-row` —— 只写前者的话头页签的 × 永远不显示（2026-10-15
+ * 体验评审抓到：连 hover 都不亮，等于一个隐形的按钮）。`:focus-within`
+ * 是键盘路径：Tab 进到这一行就露出来。
+ */
+.rd-req-row:hover .rd-req-row-x,
+.rd-req-row:focus-within .rd-req-row-x,
+.rd-req-header-row:hover .rd-req-row-x,
+.rd-req-header-row:focus-within .rd-req-row-x {
   visibility: visible;
 }
 

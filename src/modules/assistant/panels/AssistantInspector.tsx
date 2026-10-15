@@ -167,7 +167,9 @@ export function AssistantInspector({ state, store }: Props): ReactNode {
               </button>
               <button
                 type="button"
-                className="rd-btn"
+                // 删的是钥匙串里那把 key（只写不读，删了只能重填）——危险动作
+                // 静止态红字（2026-10-15 体验评审）
+                className="rd-btn rd-danger"
                 data-testid="assistant-key-clear"
                 disabled={state.savingKey}
                 onClick={() => void store.clearApiKey()}

@@ -139,6 +139,9 @@ function Form({
         </button>
         <button
           type="button"
+          // 2026-10-15 体验评审：删除是这一行里最危险的动作，得和「连接/断开」
+          // 长得不一样（`rd-danger` 静止态就是红字，见 styles.css）
+          className="rd-danger"
           data-testid="btn-conn-delete"
           onClick={() => void store.deleteProfile(profile.id)}
         >
