@@ -200,6 +200,20 @@ test('同步消息会在接收方生成激活条，返回消息会把它闭合',
 
 // ---------------------------------------------------------------- 工作区
 
+test('双击「新建图」只落一个文件（回归：间隔几十毫秒的两次点击曾落两个）', async ({ page }) => {
+  // 2026-10-15 体验评审：建图是异步的，一次双击会在**用户的真实文件夹**里
+  // 落下 未命名 + 未命名2。⚠️ 只挡 in-flight 不够 —— 假文件系统 <40ms 就完成，
+  // 所以要冷却窗把「一次双击」整个手势盖住（真机双击间隔最大 ~500ms）
+  await page.getByTestId('btn-new-diagram').click();
+  await page.waitForTimeout(40);
+  await page.getByTestId('btn-new-diagram').click();
+  await page.waitForTimeout(600);
+
+  // 前缀匹配会把 未命名2 也算进来 —— 数出来 1 就是防住了
+  await expect(page.locator('[data-testid^="tree-file-未命名"]')).toHaveCount(1);
+  await expect(page.getByTestId('tree-file-未命名.seq.json')).toBeVisible();
+});
+
 test('新建图会出现在文件树里并被自动打开', async ({ page }) => {
   await page.getByTestId('btn-new-diagram').click();
 
@@ -1045,6 +1059,9 @@ test('选中一个文件时，新建落在它旁边（同一个目录）', async
   await page.getByTestId('tree-file-新建文件夹/未命名.seq.json').click();
   await expect(page.getByTestId('tree-target')).toContainText('新建文件夹');
 
+  // ⚠️ 等过防双击的冷却窗（见 store 的 `enterCreate`）：这两次「新建图」在
+  // 测试里只隔几十毫秒，对 store 来说和双击没有区别 —— 真人做不到这么快
+  await page.waitForTimeout(400);
   await page.getByTestId('btn-new-diagram').click();
   await expect(page.getByTestId('tree-file-新建文件夹/未命名2.seq.json')).toBeVisible();
 });

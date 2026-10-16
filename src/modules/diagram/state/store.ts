@@ -59,6 +59,28 @@ export class AppStore {
   /** 新建图 / 新建文件夹的重入闸：见 `newDiagram` 的注释 */
   private creating = false;
 
+  /**
+   * 上一次新建**开始**的时刻，按动作种类分。冷却窗用。
+   *
+   * ⚠️ 只有「in-flight」一个闸不够（回归审查实测）：浏览器假文件系统里
+   * 整个过程 <40ms 就完了，间隔 40ms 的双击照样落下 未命名 + 未命名2 ——
+   * 真实 IO 慢一点能挡住，但那是碰运气。冷却窗把「一次双击」这个手势
+   * 整个盖住（系统双击间隔最大 ~500ms，取 350 挡得住又快得感觉不到）。
+   *
+   * ⚠️ **必须按种类分**：「先建文件夹、紧接着把图建进去」是**合法连击**
+   * （e2e 里就这么用），共用一份冷却会把第二下误伤。
+   */
+  private lastCreateAt: Record<'diagram' | 'folder', number> = { diagram: 0, folder: 0 };
+
+  /** 重入闸 + 冷却窗（按种类）。放行则同时记下开始时刻 */
+  private enterCreate(kind: 'diagram' | 'folder'): boolean {
+    const now = Date.now();
+    if (this.creating || now - this.lastCreateAt[kind] < 350) return false;
+    this.creating = true;
+    this.lastCreateAt[kind] = now;
+    return true;
+  }
+
   attachShell(shell: ShellApi): void {
     this.shell = shell;
   }
@@ -249,11 +271,10 @@ export class AppStore {
       this.shell.reportError('请先选择一个工作区目录');
       return;
     }
-    // 重入闸（2026-10-15 体验评审）：建图是异步的，一次双击会在**用户的
-    // 真实文件夹**里落下 未命名 + 未命名2 两个空文件 —— 功能上没错，
-    // 但那是噪音，而且他按住 Enter 弹两下就能复现
-    if (this.creating) return;
-    this.creating = true;
+    // 重入闸 + 冷却窗（2026-10-15 体验评审）：建图是异步的，一次双击会在
+    // **用户的真实文件夹**里落下 未命名 + 未命名2 两个空文件 —— 功能上没错，
+    // 但那是噪音，而且他按住 Enter 弹两下就能复现。冷却窗的理由见字段注释
+    if (!this.enterCreate('diagram')) return;
     try {
       await this.flushSave();
       const path = await platform.createDiagram(root, dir, name);
@@ -278,9 +299,8 @@ export class AppStore {
       this.shell.reportError('请先选择一个工作区目录');
       return;
     }
-    // 重入闸，同 newDiagram（双击不该建出两个「新建文件夹」）
-    if (this.creating) return;
-    this.creating = true;
+    // 重入闸 + 冷却窗，同 newDiagram（双击不该建出两个「新建文件夹」）
+    if (!this.enterCreate('folder')) return;
     try {
       const path = await platform.createFolder(root, dir, name);
       await this.refreshTree();
