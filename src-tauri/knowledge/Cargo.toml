@@ -1,0 +1,45 @@
+[package]
+name = "devtoolkit-knowledge"
+version.workspace = true
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的知识库内核：vault（文件是真相）+ 派生索引 + 文档提取（不依赖 Tauri）"
+license = "MIT"
+
+[dependencies]
+# 每个新依赖说清楚「为什么值得」（tasks/assistant 的惯例）—— 这个 crate 一口气
+# 引了全仓第一套「文档解析栈」，更要说明白。**试装记录**：2026-10-16 在
+# 2 核机上编过一遍才定下来（LanceDB/protoc 的教训：动手前先验）。
+
+# 派生索引。⚠️ **版本和 tasks/store 钉死在同一行**（0.32 + bundled）：
+# libsqlite3-sys 带 `links = "sqlite3"`，依赖图里只允许一个版本 —— 试装时
+# 真踩过：cargo add 默认挑最新（0.40），resolve 直接失败（冲突报错）。
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# xlsx（Excel）：calamine 是纯 Rust 的表格读取器（xlsx/xls/ods），成熟在维护。
+calamine = "0.36.1"
+
+# docx（Word）：docx 就是 zip 里的 XML。只要 deflate —— **默认 features 会把
+# zstd（C 代码，zstd-sys 要编 C）、bzip2、lzma、ppmd 一整排都拉进来**，
+# 对「解压一个 docx」是纯负担。
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
+
+# XML 解析。⚠️ **quick-xml 本来就在 Cargo.lock 里**（plist/tauri 的传递依赖，
+# 0.42.0）—— 直依它一个包都不新增，正合本仓「本来就在依赖树里」的论证。
+quick-xml = "0.42.0"
+
+# pdf 文本抽取（数字版 PDF）。扫描件的 OCR 不在这一轮范围（HANDOFF 记了）。
+pdf-extract = "0.12.1"
+
+# 序列化（索引行 ↔ 命令层）。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 生成管线（runner.rs）：一次性 CLI 进程 + 两条管道并发读 + 超时/取消。
+# tokio 本来就在依赖树里（tauri/assistant 用着），只是补一组 features。
+# 特征面刻意窄：不要 net —— 这个 crate 里没有网络这回事。
+# （macros 是给 `select!` 的：超时和取消两条路要同时等。）
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt", "macros"] }
+
+[dev-dependencies]
+tempfile = "3"

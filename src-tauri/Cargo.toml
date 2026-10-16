@@ -14,7 +14,7 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
-exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "store/**", "tasks/**", "request/**", "target/**"]
+exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "store/**", "tasks/**", "request/**", "knowledge/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
@@ -43,6 +43,13 @@ serde_json = "1"
 # 终端字节在 IPC 上走 base64（两个方向都是）。理由见 ssh_commands.rs
 base64 = "0.22"
 
+# 知识库命令层用 `oneshot`（生成任务的取消开关）和 `join!`（并行探两个 CLI）。
+# ⚠️ 为什么现在才加：这个 crate 此前所有的异步都走 `tauri::async_runtime`
+# 的转发（它不 re-export oneshot），而任务的资料命令用 `channel(1)` 凑合过 ——
+# 知识库的 runner 接口直接收 oneshot，桥接一层只会更绕。tokio 本来就在
+# 依赖树里（tauri 拉着），这里只是补 features，不新增大件。
+tokio = { version = "1", features = ["sync", "macros"] }
+
 # 纯逻辑内核（路径安全校验 + 文件操作）。不依赖 tauri，
 # 所以 `cargo test -p devtoolkit-core` 可以在没有 WebKit/GTK 的机器上单独跑。
 devtoolkit-core = { path = "core" }
@@ -70,6 +77,10 @@ devtoolkit-agents = { path = "agents" }
 # 起一个临时库文件就能跑，不需要 WebKit。
 devtoolkit-tasks = { path = "tasks" }
 
+# 知识库内核（vault 文件是真相 + 派生索引 + 文档提取 + CLI 生成管线）。
+# 同样不依赖 tauri —— 提取解析用现造夹具测、runner 用桩程序测。
+devtoolkit-knowledge = { path = "knowledge" }
+
 # 键值存储（SQLite）。各模块的档案、指纹、偏好都落在这儿，
 # 替掉原来「一个模块一个 JSON 文件」那套。
 devtoolkit-store = { path = "store" }
@@ -92,11 +103,11 @@ devtoolkit-request = { path = "request" }
 
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request"]
+members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request", "knowledge"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request", "knowledge"]
 resolver = "2"
 
 # ⚠️ **Rust 侧的版本号只有这一处。** 各个 crate 一律写 `version.workspace = true`。
@@ -121,7 +132,7 @@ resolver = "2"
 # 「在 src-tauri 下敲 cargo test 只跑 app crate」。这个错在写这一段的当天
 # 就犯了一次，是靠编译输出里那两行 warning 抓回来的。
 [workspace.package]
-version = "0.15.0"
+version = "0.16.0"
 
 [profile.release]
 codegen-units = 1
