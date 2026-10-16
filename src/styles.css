@@ -1194,6 +1194,10 @@ input[type='radio'] {
   gap: 7px;
   width: 100%;
   padding: 3px 8px;
+  /* 行高钉死（2026-10-15 体验评审）：`line-height: normal` 下中文 key
+     （会话:1001 这种）的行盒比纯 ASCII 的高 3px —— 同一份列表里
+     20/23 混排，列表看起来一格高一格矮。16px 行盒 + 6px 内边距 = 22 的统一行高 */
+  line-height: 16px;
   border: none;
   border-radius: 0;
   background: transparent;

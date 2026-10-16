@@ -14,6 +14,7 @@
  */
 
 import type { ReactNode } from 'react';
+import { shortcutLabel } from '../../../shared/platform/detect';
 import { elapsed } from '../core/elapsed';
 import { attentionQueue, statusLine } from '../core/status';
 import type { AgentsState, AgentsStore } from '../state/store';
@@ -35,7 +36,7 @@ export function AttentionQueue({ state, store, now }: Props): ReactNode {
       <div className="rd-agent-queue-head">
         <span>需要你（{queue.length}）</span>
         <span className="rd-spacer" />
-        <span className="rd-muted">Ctrl+Shift+U</span>
+        <span className="rd-muted">{shortcutLabel('Ctrl+Shift+U')}</span>
       </div>
       {queue.map((session) => {
         const workspace = state.workspaces.find((w) => w.id === session.workspaceId);

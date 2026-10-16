@@ -70,7 +70,12 @@ export function useModalKeys({ ref, open = true, onSubmit }: ModalKeysOptions): 
 
       if (e.key === 'Enter') {
         if (!inside) return;
-        const tag = (e.target as HTMLElement).tagName;
+        const target = e.target as HTMLElement;
+        const tag = target.tagName;
+        // ⚠️ 输入框自己带回车语义的（比如「新建目录」那个内联输入），
+        // 挂 `data-modal-enter-ignore` 让路 —— 不然它自己的回车和
+        // 弹框的「提交」会在同一个事件里各干各的
+        if (target.dataset?.modalEnterIgnore !== undefined) return;
         if ((tag === 'INPUT' || tag === 'SELECT') && latestSubmit.current) {
           e.preventDefault();
           latestSubmit.current();

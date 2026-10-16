@@ -81,6 +81,12 @@ export function NewConnectionDialog({
       onGroupChange={(gid) =>
         setDraft((d) => (gid === null ? withoutGroup(d) : withGroup(d, gid)))
       }
+      // 「＋ 新建目录…」（2026-10-15 体验评审）——同 redis 那条注释
+      onCreateGroup={async (name) => {
+        const id = await store.createGroup(null);
+        await store.renameGroup(id, name);
+        return id;
+      }}
       onCancel={onClose}
       onConfirm={submit}
       extra={

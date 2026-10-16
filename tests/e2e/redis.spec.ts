@@ -127,6 +127,23 @@ test('⚠️ 取消和 Esc 都不留痕，重开还是干净的', async ({ page 
   await expect(page.getByTestId('redis-new-name')).toHaveValue('新建连接');
 });
 
+test('新建连接弹框里能直接建目录（回归：此前只能先建连接再右键移入）', async ({ page }) => {
+  await page.getByTestId('btn-new-connection').click();
+  // 下拉末尾的动作项
+  await page.getByTestId('redis-new-group').selectOption('__new_group__');
+
+  // 内联名字框自己吃回车（不能把弹框的「新建」抢走 —— data-modal-enter-ignore）
+  const name = page.getByTestId('redis-new-group-name');
+  await expect(name).toBeFocused();
+  await name.fill('生产环境');
+  await name.press('Enter');
+
+  // 新目录出现在下拉里；确认之后连接就直接落在它下面
+  await expect(page.getByTestId('redis-new-group')).toContainText('生产环境');
+  await page.getByTestId('redis-new-confirm').click();
+  await expect(page.getByTestId('conn-list')).toContainText('生产环境');
+});
+
 test('连不上时给出提示', async ({ page }) => {
   await page.getByTestId('btn-new-connection').click();
   await page.getByTestId('redis-new-confirm').click();

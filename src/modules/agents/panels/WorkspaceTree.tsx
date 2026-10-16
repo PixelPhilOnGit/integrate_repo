@@ -23,6 +23,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { platform } from '../../../shared/platform';
+import { shortcutLabel } from '../../../shared/platform/detect';
 import { FilterChip } from '../../../shared/ui/FilterChip';
 import { RemoteWorkspaceDialog } from './RemoteWorkspaceDialog';
 import { TrustDialog } from './TrustDialog';
@@ -39,6 +40,7 @@ import {
 } from '../core/workspaces';
 import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
+import { AGENTS_SHORTCUTS } from '../shortcuts';
 import { STATUS_LABEL, type AgentSession, type AgentWorkspace, type SessionStatus } from '../core/types';
 import type { AgentsState, AgentsStore } from '../state/store';
 import { NewSessionDialog } from './NewSessionDialog';
@@ -58,6 +60,8 @@ interface OpenMenu {
 
 export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  /** 「快捷键」表的浮层位置（2026-10-15 体验评审：那张表定义了却没渲染） */
+  const [kbdMenu, setKbdMenu] = useState<{ x: number; y: number } | null>(null);
   // ⚠️ 展开状态在 store 里（默认收起），不在这儿：切个模块 React 就把它卸载了，
   // 组件内的状态会让用户刚点开的那一行又合上（这条是 e2e 抓出来的）
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -128,6 +132,15 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
             onClick={() => setAddingRemote(true)}
           >
             远端
+          </button>
+          <button
+            type="button"
+            className="rd-btn"
+            data-testid="agent-shortcuts"
+            title="看快捷键"
+            onClick={(e) => setKbdMenu({ x: e.clientX, y: e.clientY })}
+          >
+            ?
           </button>
         </div>
 
@@ -227,6 +240,22 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+
+      {kbdMenu && (
+        <ContextMenu
+          x={kbdMenu.x}
+          y={kbdMenu.y}
+          // 快捷键表（`AGENTS_SHORTCUTS`，和键盘实现同一份数据）。
+          // 菜单项只作展示 —— 选中即关，不做任何事（ContextMenu 的
+          // `shortcut` 那一栏本来就是为这类用场设计的，见它的头注释）
+          items={AGENTS_SHORTCUTS.map((s) => ({
+            label: s.label,
+            shortcut: shortcutLabel(s.combo),
+            onSelect: () => {},
+          }))}
+          onClose={() => setKbdMenu(null)}
+        />
       )}
 
       {state.trustPrompt !== null && (

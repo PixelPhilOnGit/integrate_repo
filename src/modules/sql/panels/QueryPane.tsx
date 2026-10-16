@@ -21,6 +21,7 @@
  */
 
 import type { KeyboardEvent, ReactNode } from 'react';
+import { shortcutLabel } from '../../../shared/platform/detect';
 import type { SqlState, SqlStore } from '../state/store';
 import { ResultGrid } from './ResultGrid';
 
@@ -101,7 +102,10 @@ export function QueryPane({ state, store }: Props): ReactNode {
                 : undefined
             }
           >
-            {mongo ? 'Ctrl+Enter 执行 · 点左边的集合会自动填一段查询' : 'Ctrl+Enter 执行 · Alt+↑↓ 翻历史'}
+            {/* 修饰键按平台翻（mac 上是 ⌘/⌥）——见 shortcutLabel */}
+            {mongo
+              ? `${shortcutLabel('Ctrl+Enter')} 执行 · 点左边的集合会自动填一段查询`
+              : `${shortcutLabel('Ctrl+Enter')} 执行 · ${shortcutLabel('Alt+↑↓')} 翻历史`}
           </span>
           {profile !== null && (
             <span className="rd-hint rd-right" data-testid="sql-target">

@@ -65,6 +65,13 @@ export function NewConnectionDialog({ state, store, defaultGroupId, onClose }: P
       onGroupChange={(gid) =>
         setDraft((d) => (gid === null ? withoutGroup(d) : withGroup(d, gid)))
       }
+      // 「＋ 新建目录…」（2026-10-15 体验评审）：建目录走 store 的两步 ——
+      // createGroup 造默认名、renameGroup 换成用户填的（复用既有动作，不加新 API）
+      onCreateGroup={async (name) => {
+        const id = await store.createGroup(null);
+        await store.renameGroup(id, name);
+        return id;
+      }}
       onCancel={onClose}
       onConfirm={submit}
       extra={

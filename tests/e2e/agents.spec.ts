@@ -268,6 +268,18 @@ test('一个会话不会同时占两格 —— 已经在屏幕上就不再提供
   await page.keyboard.press('Escape');
 });
 
+test('快捷键表有个看得见的入口（回归：表定义了却从没渲染过）', async ({ page }) => {
+  // 2026-10-15 体验评审：AGENTS_SHORTCUTS 六组组合键写好了、单测也钉着，
+  // 但界面上只有队列头那一处 Ctrl+Shift+U —— 新用户没有任何地方能学到其它的
+  await page.getByTestId('agent-shortcuts').click();
+  const menu = page.getByTestId('context-menu');
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText('在窗格之间移动');
+  await expect(menu).toContainText('跳到需要你的会话');
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+});
+
 test('关掉一个会话：还在跑的先问一句，确认后进程没了、布局里那一格也收掉', async ({ page }) => {
   const id = await newSession(page);
   await expandFirst(page);

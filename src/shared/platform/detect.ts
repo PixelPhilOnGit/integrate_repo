@@ -26,6 +26,21 @@ export function isMacLike(): boolean {
   return typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
 }
 
+/**
+ * 把快捷键提示里的修饰键按平台翻译：mac 上是 ⌘ / ⌥ / ⇧，别的平台原样。
+ *
+ * 为什么必须翻（2026-10-15 体验评审）：macOS 上按 Ctrl 的多数组合会被系统
+ * 截走（Ctrl+点击 = 右键那类），提示里写着 Ctrl、mac 用户照着按却没反应 ——
+ * 实现本身认 `ctrlKey || metaKey`（见 shortcuts.ts），错的只有**显示**。
+ *
+ * 只做字面替换：调用方传的是自己写好的组合串（`Ctrl+Shift+U` 这种），
+ * 别传正文 —— 正文里的 Ctrl 是内容，不是提示。
+ */
+export function shortcutLabel(combo: string): string {
+  if (!isMacLike()) return combo;
+  return combo.replace(/Ctrl/g, '⌘').replace(/Alt/g, '⌥').replace(/Shift/g, '⇧');
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;

@@ -9,6 +9,7 @@
  */
 
 import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { shortcutLabel } from '../shared/platform/detect';
 import { ContextMenu, type MenuItem } from '../shared/ui/ContextMenu';
 import { MODULES } from './registry';
 import { shellStore } from './shellInstance';
@@ -48,8 +49,9 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
               aria-selected={active}
               data-testid={`module-${m.id}`}
               className={`rd-module-btn${active ? ' is-active' : ''}`}
-              // Ctrl+1/2/3 与图标顺序一致，提示里写出来
-              title={`${m.name}（Ctrl+${i + 1}）`}
+              // Ctrl+1/2/3 与图标顺序一致，提示里写出来（mac 上翻成 ⌘，
+              // 见 shortcutLabel 的注释）
+              title={`${m.name}（${shortcutLabel(`Ctrl+${i + 1}`)}）`}
               onClick={() => shellStore.activate(m.id)}
             >
               {m.icon}

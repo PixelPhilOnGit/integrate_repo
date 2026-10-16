@@ -26,10 +26,13 @@
  * `rd-btn-primary` 在 2026-10-15 那一轮已收编成全局规则（实心强调色）。
  */
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useModalKeys } from '../ui/useModalKeys';
 import { groupPath } from './groups';
 import type { ConnectionGroup } from './types';
+
+/** 下拉里那个「动作选项」的哨兵值。目录 id 是随机生成的，撞不上 */
+const NEW_GROUP_OPTION = '__new_group__';
 
 /**
  * 弹框里那四个通用字段。
@@ -84,6 +87,13 @@ export interface ConnectionDialogProps {
   groupId?: string | null;
   /** 换目录。传 `null` = 未分组/顶层 */
   onGroupChange?: (groupId: string | null) => void;
+  /**
+   * 在这个弹框里新建一个目录（下拉里的「＋ 新建目录…」，2026-10-15 体验评审：
+   * 建连接是最常建目录的时刻，此前只能「先建连接 → 再右键移入」）。
+   * 传了才画那个选项；返回新目录 id（失败返回 null = 不选中任何新目录）。
+   * ⚠️ 由调用方实现（store 的 createGroup + renameGroup），壳不认识模块。
+   */
+  onCreateGroup?: (name: string) => Promise<string | null>;
   /** 主按钮能不能点。**由模块算** —— 三边的校验规则差太多。 */
   valid: boolean;
   /** 主按钮的文字。 */
@@ -129,11 +139,26 @@ export function ConnectionDialog({
   groups,
   groupId,
   onGroupChange,
+  onCreateGroup,
   valid,
   confirmLabel = '新建',
   onCancel,
   onConfirm,
 }: ConnectionDialogProps): ReactNode {
+  // 「＋ 新建目录…」的内联输入（草稿在壳里，建的动作也由壳发起 —— 但真正
+  // 落库的是调用方传进来的 onCreateGroup）
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [newGroupDraft, setNewGroupDraft] = useState('');
+
+  const commitNewGroup = async (): Promise<void> => {
+    if (onCreateGroup === undefined) return;
+    const name = newGroupDraft.trim();
+    if (name === '') return;
+    const id = await onCreateGroup(name);
+    setNewGroupOpen(false);
+    setNewGroupDraft('');
+    if (id !== null) onGroupChange?.(id);
+  };
   // Escape 关掉。放在 effect 里而不是直接挂 onKeyDown：弹框是条件渲染的，
   // 挂在 div 上要求它先拿到焦点 —— 而焦点这会儿还在别处（用户刚点的那个按钮）。
   useEffect(() => {
@@ -229,14 +254,23 @@ export function ConnectionDialog({
           )}
 
           {/* 「所在目录」：建完直接落进目录里 —— 省掉「先建再右键移入」那两步
-              （用户报过那个顺序别扭，见 HANDOFF 的目录树那一节） */}
+              （用户报过那个顺序别扭，见 HANDOFF 的目录树那一节）。
+              「＋ 新建目录…」是 2026-10-15 体验评审补的：建连接往往正是
+              第一次想建目录的时刻，不该逼用户关掉弹框去建 */}
           {groups !== undefined && onGroupChange !== undefined && (
             <label className="rd-field">
               <span>所在目录</span>
               <select
                 data-testid={`${p}-group`}
                 value={groupId ?? ''}
-                onChange={(e) => onGroupChange(e.target.value === '' ? null : e.target.value)}
+                onChange={(e) => {
+                  if (e.target.value === NEW_GROUP_OPTION) {
+                    setNewGroupOpen(true);
+                    return;
+                  }
+                  setNewGroupOpen(false);
+                  onGroupChange(e.target.value === '' ? null : e.target.value);
+                }}
               >
                 <option value="">（未分组）</option>
                 {groups.map((g) => (
@@ -244,7 +278,38 @@ export function ConnectionDialog({
                     {groupPath(groups, g.id)}
                   </option>
                 ))}
+                {onCreateGroup !== undefined && (
+                  <option value={NEW_GROUP_OPTION}>＋ 新建目录…</option>
+                )}
               </select>
+            </label>
+          )}
+
+          {newGroupOpen && onCreateGroup !== undefined && (
+            <label className="rd-field">
+              <span>目录名</span>
+              <input
+                data-testid={`${p}-group-name`}
+                // ⚠️ 这个框的回车有主（建目录），别让弹框的「提交」抢走
+                data-modal-enter-ignore="true"
+                value={newGroupDraft}
+                autoFocus
+                onChange={(e) => setNewGroupDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void commitNewGroup();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                data-testid={`${p}-group-confirm`}
+                disabled={newGroupDraft.trim() === ''}
+                onClick={() => void commitNewGroup()}
+              >
+                建
+              </button>
             </label>
           )}
         </div>
