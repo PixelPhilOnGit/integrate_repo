@@ -32,7 +32,13 @@ export function Toolbar({ state, store, layout }: ToolbarProps): ReactNode {
   };
 
   return (
-    <div className="rd-toolbar">
+    <div className="rd-toolbar is-split">
+      {/*
+        ⚠️ 两段式（2026-10-15 体验评审）：左段自己能横向滚，右段（主题 + 导出）
+        钉在可见区内 —— 1280 宽就丢「PNG/Mermaid」、1024 宽连「主题」和
+        「导出 SVG」都滚没了，而且没有任何溢出的提示。
+      */}
+      <div className="rd-toolbar-scroll">
       <div className="rd-group">
         <span className="rd-brand">Devtoolkit</span>
       </div>
@@ -150,6 +156,7 @@ export function Toolbar({ state, store, layout }: ToolbarProps): ReactNode {
         >
           保存
         </button>
+      </div>
       </div>
 
       <div className="rd-group rd-right">

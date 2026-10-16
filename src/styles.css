@@ -198,6 +198,35 @@ input[type='radio'] {
   flex: none;
 }
 
+/*
+ * 两段式工具栏（顺序图模块，2026-10-15 体验评审的 VIS-02）：
+ * 左段整体可横向滚，右段（主题 + 导出）钉在可见区内。
+ * 此前一根 `overflow-x: auto` 的工具栏在 1280 宽就丢掉「PNG / Mermaid」、
+ * 1024 宽连「主题」和「导出 SVG」也不见了，而且没有任何溢出提示。
+ */
+.rd-toolbar.is-split {
+  overflow: hidden;
+}
+
+.rd-toolbar.is-split > .rd-toolbar-scroll {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  /* 右缘渐隐：内容溢出的可见提示（不溢出时那片是空的，看不见） */
+  mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+}
+
+/* 右段的分隔线 + 内边距。⚠️ 它不是 `.rd-group` 的直接兄弟了，
+   `.rd-group + .rd-group` 那条规则够不着它，得单独补 */
+.rd-toolbar.is-split > .rd-group.rd-right {
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+
 .rd-group {
   display: flex;
   align-items: center;

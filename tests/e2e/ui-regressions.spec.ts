@@ -120,6 +120,22 @@ test('小控件的命中区：箭头/抓手/⋯/清空，点偏几像素仍然�
   expect(await hitOutside(page, '.rd-agent-add', 2)).toBe(true);
 });
 
+test('窄窗下工具栏右侧不丢（回归：1024 宽时「主题/导出」被裁在视口外还没提示）', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 700 });
+  await page.getByTestId('current-path').waitFor();
+  // 右段（主题 + 三个导出）钉在可见区内 —— 它们此前跟着左段一起滚出去
+  const inView = async (selector: string): Promise<boolean> => {
+    const b = await page.locator(selector).first().boundingBox();
+    return b !== null && b.x >= 0 && b.x + b.width <= 1024;
+  };
+  expect(await inView('[data-testid="theme-select"]')).toBe(true);
+  expect(await inView('[data-testid="btn-export-png"]')).toBe(true);
+  expect(await inView('[data-testid="btn-export-mermaid"]')).toBe(true);
+  expect(await inView('button:has-text("SVG")')).toBe(true);
+});
+
 test('弹框的焦点圈与回车语义（回归：Tab 曾走出弹框、一次回车曾铡掉助手对话）', async ({
   page,
 }) => {
