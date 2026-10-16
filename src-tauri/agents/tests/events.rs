@@ -9,7 +9,9 @@ mod common;
 use std::time::{Duration, SystemTime};
 
 use common::TempDir;
-use devtoolkit_agents::events::{events_dir, parse_name, scan, EVENT_STATES, PANE_ID_MAX};
+use devtoolkit_agents::events::{
+    events_dir, parse_name, prune_stale, scan, scan_filtered, EVENT_STATES, PANE_ID_MAX,
+};
 
 /// 写一个事件文件，顺手把 mtime 设成指定时刻（时间戳是我们唯一的排序依据）。
 fn write_event(dir: &std::path::Path, name: &str, at: u64) {
@@ -207,4 +209,90 @@ fn 同一时刻的事件顺序是稳定的() {
 
     let first: Vec<String> = scan(dir.path()).expect("扫描").into_iter().map(|e| e.name).collect();
     assert_eq!(first, vec!["done.a", "done.b", "done.c"]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// scan_filtered：多窗口的归属过滤（2026-10-16）。
+//
+// 下面是这个仓库里**最不容易单测、但错了后果最坏**的一条不变量的守门测试：
+// 不是自己的事件文件，**既不返回也不许删**。走错方向的后果是「另一个窗口的
+// 状态点永远不动，而且没有任何报错」—— 没有任何现场，只能靠这里钉住。
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 自己名下的：取走、且文件真的被删了（一次性消费语义不因过滤而改变）。
+#[test]
+fn 过滤_自己名下的照常取走并删除() {
+    let dir = TempDir::new("events-owned-take");
+    write_event(dir.path(), "waiting.pane_mine", 1);
+    write_event(dir.path(), "done.pane_other", 2);
+
+    let events = scan_filtered(dir.path(), |id| id == "pane_mine").expect("扫描");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].name, "waiting.pane_mine");
+    assert!(
+        !dir.path().join("waiting.pane_mine").exists(),
+        "自己名下的事件必须被消费掉（不然下次扫描会重复读到）"
+    );
+}
+
+/// ⚠️ **核心不变量**：非本窗口的文件，一个字节都不许碰 ——
+/// 不返回，**也不删**（删了 = 另一个窗口永远收不到它）。
+#[test]
+fn 过滤_不是自己的既不返回也不删() {
+    let dir = TempDir::new("events-owned-keep");
+    write_event(dir.path(), "waiting.pane_other", 1);
+
+    let events = scan_filtered(dir.path(), |id| id == "pane_mine").expect("扫描");
+    assert!(events.is_empty(), "把别人的事件给出去了：{events:?}");
+    assert!(
+        dir.path().join("waiting.pane_other").exists(),
+        "别人的事件被删了 —— 那是跨窗口抢文件，最坏的一种回归"
+    );
+}
+
+/// 空归属（新窗口第一次轮询、登记还没完成）——一个都不取，
+/// 但目录里的文件原样留着（等它们的主人）。
+#[test]
+fn 过滤_空归属一个都不取也不删() {
+    let dir = TempDir::new("events-owned-empty");
+    write_event(dir.path(), "working.pane_a", 1);
+    write_event(dir.path(), "working.pane_b", 2);
+
+    let events = scan_filtered(dir.path(), |_| false).expect("扫描");
+    assert!(events.is_empty());
+    assert!(dir.path().join("working.pane_a").exists());
+    assert!(dir.path().join("working.pane_b").exists());
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// prune_stale：启动期的 TTL 清理（归属过滤带来的积水，唯一安全的清理点）。
+// ─────────────────────────────────────────────────────────────────────────
+
+/// 过期的（认得出认不出都算）清掉，新鲜的和杂物一个都不动。
+#[test]
+fn 启动清理_只清过期的事件形文件() {
+    let dir = TempDir::new("events-prune");
+    let old_ms = 1_700_000_000_000; // 2023-11 的时间戳，远老于任何 TTL
+    let fresh_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("时钟在 1970 之后")
+        .as_millis() as u64;
+
+    // 过期、名字认得出的 → 清
+    write_event(dir.path(), "waiting.pane_old", old_ms);
+    // 过期、残名（用户自己开 claude 被全局钩子写了 `waiting.` 那种）→ 也清（宽松匹配）
+    write_event(dir.path(), "waiting.", old_ms);
+    // 新鲜、认得出的 → 留（可能还有活着的会话在等它）
+    write_event(dir.path(), "done.pane_new", fresh_ms);
+    // 过期但根本不像事件文件的杂物 → 不动（白名单之外的都不碰）
+    write_event(dir.path(), "README.txt", old_ms);
+    write_event(dir.path(), "working", old_ms);
+
+    let removed = prune_stale(dir.path(), std::time::Duration::from_secs(72 * 3600));
+    assert_eq!(removed, 2, "应该恰好清掉那两个过期的：{removed}");
+    assert!(!dir.path().join("waiting.pane_old").exists());
+    assert!(!dir.path().join("waiting.").exists());
+    assert!(dir.path().join("done.pane_new").exists(), "新鲜的不能被清掉");
+    assert!(dir.path().join("README.txt").exists(), "杂物不归我们管");
+    assert!(dir.path().join("working").exists(), "没有点的不算事件文件名");
 }

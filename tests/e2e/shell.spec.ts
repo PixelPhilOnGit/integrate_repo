@@ -24,15 +24,16 @@ test('图标栏列出所有注册的模块', async ({ page }) => {
 
   // 有几个模块就有几个图标（加模块时**这里就该红** —— 那是故意的：
   // 它逼你想一遍新模块在图标栏里的位置和 Ctrl+数字的顺序）
-  await expect(rail.getByRole('tab')).toHaveCount(9);
+  await expect(rail.getByRole('tab')).toHaveCount(10);
   await expect(page.getByTestId('module-diagram')).toBeVisible();
   await expect(page.getByTestId('module-redis')).toBeVisible();
   await expect(page.getByTestId('module-sql')).toBeVisible();
   await expect(page.getByTestId('module-ssh')).toBeVisible();
   await expect(page.getByTestId('module-agents')).toBeVisible();
-  // ⚠️ 这两个的顺序是**刻意的**：接口调试排在占位模块之前 ——
+  // ⚠️ 这两个的顺序是**刻意的**：接口调试 / 知识库排在占位模块之前 ——
   // 占位模块是「加模块只要一个目录 + 一行」的活样本，永远该排最后
   await expect(page.getByTestId('module-request')).toBeVisible();
+  await expect(page.getByTestId('module-knowledge')).toBeVisible();
   await expect(page.getByTestId('module-devplaceholder')).toBeVisible();
 });
 
@@ -86,8 +87,13 @@ test('Ctrl+1..9 也能切换模块', async ({ page }) => {
   await page.keyboard.press('Control+8');
   await expect(page.getByTestId('request-main')).toBeVisible();
 
-  // 占位模块排最后（注册表顺序 = 图标栏顺序 = Ctrl+数字的顺序）
+  // 知识库排第 9（2026-10-16 插进来的）
   await page.keyboard.press('Control+9');
+  await expect(page.getByTestId('kb-main')).toBeVisible();
+
+  // 占位模块排最后（注册表顺序 = 图标栏顺序 = Ctrl+数字的顺序）；
+  // 它是第 10 个，**没有** Ctrl 快捷键（rail 的提示也不再写「Ctrl+10」）
+  await page.getByTestId('module-devplaceholder').click();
   await expect(page.getByTestId('placeholder-main')).toBeVisible();
 
   await page.keyboard.press('Control+1');
@@ -246,4 +252,46 @@ test('右侧检查器也能拖，方向是反的（往左拖变宽）', async ({
 
   const after = (await slot.boundingBox())?.width ?? 0;
   expect(after).toBeGreaterThan(before + 80);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 多窗口（2026-10-16）。
+//
+// 浏览器版**没有第二个窗口**，所以这里能验的只有两件：新窗口的落点
+// （`#<module>` 的解析与回落）和入口在浏览器版的诚实降级。
+// 真开两个窗口、关窗收尸、事件不串窗那些全部归真机清单
+// （HANDOFF「驱动原生窗口做真机验证」那一节）。
+// ─────────────────────────────────────────────────────────────────────────
+
+test('带 #agents 打开直接落在智能体会话（新窗口的落点机制）', async ({ page }) => {
+  // ⚠️ 用 /index.html 换一次**完整导航**：goto 另一个纯 hash 的地址只会触发
+  // same-document 的 hashchange，应用不会重新挂载，这条用例就没测到东西了
+  await page.goto('/index.html#agents');
+  await expect(page.getByTestId('app-shell')).toBeVisible();
+  await expect(page.getByTestId('module-agents')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('agents-sidebar')).toBeVisible();
+  await expect(page.getByTestId('canvas-svg')).toHaveCount(0);
+});
+
+test('#nope 认不出来，回落第一个模块', async ({ page }) => {
+  await page.goto('/index.html#nope');
+  await expect(page.getByTestId('module-diagram')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByTestId('canvas-svg')).toBeVisible();
+});
+
+test('切模块时窗口标题和 location.hash 跟着变', async ({ page }) => {
+  await expect(page).toHaveTitle(/顺序图/);
+  await page.getByTestId('module-agents').click();
+  await expect(page).toHaveTitle(/智能体会话/);
+  await expect(page).toHaveTitle(/Devtoolkit/);
+  expect(new URL(page.url()).hash).toBe('#agents');
+});
+
+test('图标右键有「在新窗口打开」；浏览器版点了给一句诚实的提示', async ({ page }) => {
+  await page.getByTestId('module-redis').click({ button: 'right' });
+  const item = page.getByTestId('menu-在新窗口打开「Redis」');
+  await expect(item).toBeVisible();
+  await item.click();
+  // 浏览器版没有多窗口：入口不消失（不然 e2e 测不到），点了如实说一句
+  await expect(page.getByTestId('status-text')).toHaveText('这是浏览器版，没有多窗口');
 });

@@ -9,6 +9,7 @@
  */
 
 import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { platform } from '../shared/platform';
 import { shortcutLabel } from '../shared/platform/detect';
 import { ContextMenu, type MenuItem } from '../shared/ui/ContextMenu';
 import { MODULES } from './registry';
@@ -23,6 +24,8 @@ export interface ModuleRailProps {
 export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
   const shell = useSyncExternalStore(shellStore.subscribe, shellStore.getSnapshot);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  /** 图标右键菜单（多窗口）：「在新窗口打开」。和外观菜单分开记状态，互不干扰 */
+  const [railMenu, setRailMenu] = useState<{ x: number; y: number; id: string; name: string } | null>(null);
   if (!visible) return null;
 
   const items: MenuItem[] = THEME_OPTIONS.map(({ choice, label }) => ({
@@ -41,6 +44,9 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
           const active = m.id === shell.activeModule;
           // 角标是模块自己的组件（外壳不认识它的内容），有才渲染
           const Badge = m.badge;
+          // ⚠️ 第 10 个起**不写**快捷键提示：Ctrl+1..9 只到 9，写「Ctrl+10」
+          // 是在指一条不存在的键盘路径（多窗口那一轮顺手修的）
+          const shortcut = i < 9 ? `（${shortcutLabel(`Ctrl+${i + 1}`)}）` : '';
           return (
             <button
               key={m.id}
@@ -51,8 +57,12 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
               className={`rd-module-btn${active ? ' is-active' : ''}`}
               // Ctrl+1/2/3 与图标顺序一致，提示里写出来（mac 上翻成 ⌘，
               // 见 shortcutLabel 的注释）
-              title={`${m.name}（${shortcutLabel(`Ctrl+${i + 1}`)}）`}
+              title={`${m.name}${shortcut}`}
               onClick={() => shellStore.activate(m.id)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setRailMenu({ x: e.clientX, y: e.clientY, id: m.id, name: m.name });
+              }}
             >
               {m.icon}
               {Badge && <Badge />}
@@ -74,6 +84,28 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
 
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={items} onClose={() => setMenu(null)} />
+      )}
+
+      {railMenu && (
+        <ContextMenu
+          x={railMenu.x}
+          y={railMenu.y}
+          onClose={() => setRailMenu(null)}
+          items={[
+            {
+              label: `在新窗口打开「${railMenu.name}」`,
+              onSelect: () => {
+                const id = railMenu.id;
+                setRailMenu(null);
+                if (platform.kind === 'web') {
+                  shellStore.setStatus('这是浏览器版，没有多窗口');
+                  return;
+                }
+                void platform.openModuleWindow(id);
+              },
+            },
+          ]}
+        />
       )}
     </div>
   );

@@ -123,7 +123,33 @@ pub fn parse_name(name: &str) -> Option<(&str, &str)> {
 /// （`working` 紧接着 `waiting` 这一对压成一条就会丢掉「它离开过等待又回来了」
 /// 这个事实），所以这个顺序是语义的一部分，不该让每个调用点自己去排。
 /// 同一毫秒的按文件名排，保证同样的目录每次读出来顺序一样（可测）。
+///
+/// ⚠️ **应用里基本不该直接调它** —— 多窗口之后事件要按窗口归属过滤，
+/// 走 [`scan_filtered`]。`scan` 保留是给单窗口语义的测试和排查用的。
 pub fn scan(dir: &Path) -> Result<Vec<RawEvent>, AgentError> {
+    scan_filtered(dir, |_| true)
+}
+
+/// 同 [`scan`]，但**只收 `keep(pane_id)` 为真的**，其余的**既不返回也不删**。
+///
+/// # 为什么过滤必须发生在 `take` 之前
+///
+/// 多窗口之后每个窗口各轮询同一个目录。如果先全取走再在前端认领，
+/// 窗口 B 会把窗口 A 会话的事件**取走并删掉**，A 认不出、丢掉 ——
+/// 于是 A 的状态点永远不动，而且**没有任何报错**。所以这一层的不变量是：
+/// **不是自己的文件，一个字节都不许碰**（既不返回也不删）。
+///
+/// # 无归属的文件允许积水
+///
+/// 「认不出就静静放着」是老规矩；这里同理：窗口销毁后钩子还可能写一两笔、
+/// 应用崩过留下的、注册完成前那几百毫秒里写进来的 —— 都不该由某个轮询者
+/// 顺手删掉（谁删都等于可能删了别人的）。清理唯一发生在**启动期**
+/// （TTL 清理在命令层做，见 `agent_commands.rs`），活得的事件文件
+/// 会在归属登记完成后的下一次轮询里被它自己的窗口取走。
+pub fn scan_filtered(
+    dir: &Path,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Vec<RawEvent>, AgentError> {
     std::fs::create_dir_all(dir).map_err(|e| AgentError::Events {
         dir: dir.display().to_string(),
         reason: format!("建目录失败：{e}"),
@@ -144,7 +170,11 @@ pub fn scan(dir: &Path) -> Result<Vec<RawEvent>, AgentError> {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
 
-        if parse_name(name).is_none() {
+        let Some((_state, pane_id)) = parse_name(name) else {
+            continue;
+        };
+        // ⚠️ 归属判断在 `take` 之前 —— 见上面的文档。
+        if !keep(pane_id) {
             continue;
         }
 
@@ -171,6 +201,53 @@ pub fn scan(dir: &Path) -> Result<Vec<RawEvent>, AgentError> {
 
     events.sort_by(|a, b| a.at.cmp(&b.at).then_with(|| a.name.cmp(&b.name)));
     Ok(events)
+}
+
+/// 启动期的 TTL 清理：删掉「看起来像事件文件」且 mtime 老于 `max_age` 的，
+/// 返回删掉的数量。**只在应用启动时调用一次**。
+///
+/// # 为什么需要它、为什么只在这里清
+///
+/// [`scan_filtered`] 定的规矩是「无归属的文件一律不碰」，于是没人认领的
+/// 事件文件（窗口销毁后钩子又写了一两笔的、应用崩过留下的、用户自己开的
+/// claude 会话被全局钩子写了 `waiting.` 这种残名的）不会自然消失。
+/// 清理必须发生在**归属表空着**的时刻 —— 启动时正是那一刻：年龄是唯一
+/// 可信的信号，不会有任何「活着的会话正在等这条事件」被误删。
+///
+/// # 判断是宽松的（比 `parse_name` 宽）
+///
+/// 只要 `第一个点之前`是白名单状态名就走，**后面那截不校验** ——
+/// 要清的恰恰是 `waiting.`（残名）这类 `parse_name` 认不出的积水。
+/// 目录是我们自己的应用数据目录，宽一点是安全的。
+pub fn prune_stale(dir: &Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+
+    for entry in entries.flatten() {
+        let name_os = entry.file_name();
+        let Some(name) = name_os.to_str() else { continue };
+        let Some((state, _rest)) = name.split_once('.') else { continue };
+        if !EVENT_STATES.contains(&state.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else { continue };
+        // 时钟回拨/未来时间戳 → duration_since 报错 → 跳过（宁可留着）
+        let Ok(age) = now.duration_since(modified) else { continue };
+        if age < max_age {
+            continue;
+        }
+        if std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// 收下一条事件，然后把它从磁盘上删掉（**一个事件只用一次**）。

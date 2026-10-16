@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { platform } from '../shared/platform';
 import { ModuleRail } from './ModuleRail';
 import { MODULES, moduleById } from './registry';
 import { ResizableSlot } from './ResizableSlot';
@@ -41,6 +42,17 @@ export function AppShell(): ReactNode {
   useEffect(() => {
     void shellStore.initTheme();
   }, []);
+
+  // 窗口标题和 location.hash 跟着当前模块走（多窗口）。
+  // 不同步 hash 的话窗口一刷新就跳回初始模块；标题不设的话两个窗口都叫
+  // 「Devtoolkit」，用户分不清谁是谁（顺带把「标题永不变化」那条欠账清掉 ——
+  // 文档名进标题的部分不在这一轮）。
+  useEffect(() => {
+    if (!mod) return;
+    void platform.setWindowTitle(`${mod.name} — Devtoolkit`);
+    // replaceState 而不是直接赋值：不往历史里堆条目（深链/前进后退不在本轮范围）
+    window.history.replaceState(null, '', `#${mod.id}`);
+  }, [mod]);
 
   useShellShortcuts();
 
@@ -99,11 +111,33 @@ export function AppShell(): ReactNode {
   );
 }
 
-/** 外壳级快捷键：切换模块。其余快捷键归各模块自己 */
+/** 外壳级快捷键：切换模块 + 开新窗口。其余快捷键归各模块自己 */
 function useShellShortcuts(): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       const t = e.target as HTMLElement | null;
+
+      // 新窗口（多窗口）。
+      //
+      // ⚠️ **不是 Ctrl+Shift+N**：那组是 agents 的「同目录再开一个会话」，
+      // 而且它在**捕获阶段**处理、`stopPropagation` —— 外壳（冒泡阶段）
+      // 永远收不到。O = Open，全仓已查空闲。
+      //
+      // ⚠️ 守卫刻意**只挡 INPUT/contentEditable、不挡 TEXTAREA**：终端
+      // （xterm 的隐藏 textarea）聚焦时也要能按出来 —— 这是抄 agents 的
+      // 守卫形状。代价：ssh 终端里会抢掉远端程序的这个组合（记进 HANDOFF）。
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === 'KeyO') {
+        e.preventDefault();
+        if (platform.kind === 'web') {
+          // 浏览器版没有第二个窗口 —— 如实说，别装作没发生
+          shellStore.setStatus('这是浏览器版，没有多窗口');
+          return;
+        }
+        void platform.openModuleWindow(shellStore.getSnapshot().activeModule);
+        return;
+      }
+
+      // 模块切换的守卫更严（TEXTAREA 也挡）：终端里按 Ctrl+1..9 没有意义
       const typing =
         t !== null &&
         (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);

@@ -33,7 +33,7 @@ use devtoolkit_agents::integration::{self, AgentPaths, IntegrationTarget};
 use devtoolkit_agents::registry::forward;
 use devtoolkit_agents::{
     events, AgentError, AgentRegistry, EnvironmentReport, IntegrationOutcome, IntegrationStatus,
-    PtyConfig, PtyEvent, RawEvent, RemoteOutcome, RemoteRegistry, RemoteSpec,
+    PtyConfig, PtyEvent, RawEvent, RemoteOutcome, RemoteRegistry, RemoteSpec, WindowOwnership,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -137,14 +137,26 @@ pub enum AgentOpenOutcome {
 #[tauri::command]
 pub async fn agent_open(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     registry: State<'_, Arc<AgentRegistry>>,
     remotes: State<'_, Arc<RemoteRegistry>>,
+    ownership: State<'_, Arc<WindowOwnership>>,
     id: String,
     config: AgentOpenConfig,
     channel: Channel<PtyEvent>,
 ) -> Result<AgentOpenOutcome, String> {
     if let Some(spec) = config.remote.clone() {
-        return open_remote(&remotes, id, config, spec, channel).await;
+        return open_remote(
+            &app,
+            &window,
+            ownership.inner(),
+            remotes.inner(),
+            id,
+            config,
+            spec,
+            channel,
+        )
+        .await;
     }
 
     let mut config = config.to_pty_config();
@@ -168,9 +180,23 @@ pub async fn agent_open(
 
     let opened = registry.open(&id, &config).map_err(|e| e.to_string())?;
 
+    // —— 归属登记（多窗口）——
+    // ⚠️ 顺序是**先登记、后查窗口**：用户可能在会话起来之前就关掉了这个窗口，
+    // 收割（Destroyed）和这次登记会赛跑，先登记的话两种交错都收得住
+    // （要么收割的 take_all 看见它、要么这里的检查发现窗口没了）。
+    // 反过来写会漏掉「检查通过之后才被收割」那一种，别改。
+    ownership.register(window.label(), &id);
+    if !crate::window_commands::window_alive(&window) {
+        ownership.forget(window.label(), &id);
+        registry.close(&id);
+        return Ok(AgentOpenOutcome::Ready);
+    }
+
     // Channel 和注册表都要搬进转发任务（Channel 尤其重要：留在这儿的话
     // 函数一返回它就被丢掉，前端那条回调立刻注销，终端一片空白还没有报错）
     let registry = Arc::clone(registry.inner());
+    let ownership = Arc::clone(ownership.inner());
+    let owner_label = window.label().to_string();
     let session_id = id.clone();
     let generation = opened.generation;
 
@@ -182,6 +208,8 @@ pub async fn agent_open(
         .await;
         // 收尾时把会话从表里摘掉。带代次，免得误摘掉同 id 的新会话
         registry.forget(&session_id, generation);
+        // 归属也一起注销（窗口销毁的收割会先摘走整格，那时候这里是空操作）
+        ownership.forget(&owner_label, &session_id);
     });
 
     Ok(AgentOpenOutcome::Ready)
@@ -198,6 +226,9 @@ pub async fn agent_open(
 /// 而远端机器上既没有我们的包装脚本、也不该有。
 /// 所以远端会话的状态**只靠 OSC 序列和用户的键盘**两条路（见 HANDOFF）。
 async fn open_remote(
+    _app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    ownership: &Arc<WindowOwnership>,
     remotes: &Arc<RemoteRegistry>,
     id: String,
     config: AgentOpenConfig,
@@ -232,9 +263,21 @@ async fn open_remote(
 
     remotes.insert(&id, generation, session).await;
 
+    // 归属登记：**只在真起来了（Ready）之后** —— 上面两个主机密钥分支根本
+    // 没有会话，登记了只会在收割时多一次空 close（无害，但语义脏）。
+    // 先登记后查窗口的理由同本机那条路（见 `agent_open` 那段注释）。
+    ownership.register(window.label(), &id);
+    if !crate::window_commands::window_alive(window) {
+        ownership.forget(window.label(), &id);
+        remotes.close(&id).await;
+        return Ok(AgentOpenOutcome::Ready);
+    }
+
     // 转发任务：和本机那条路**同一个转发器**（Channel 必须搬进来，否则函数一返回
     // 它就被丢掉，前端那条回调立刻注销、终端一片空白还没有报错）
     let remotes = Arc::clone(remotes);
+    let ownership = Arc::clone(ownership);
+    let owner_label = window.label().to_string();
     let session_id = id.clone();
     tauri::async_runtime::spawn(async move {
         forward(events, |event| {
@@ -243,6 +286,7 @@ async fn open_remote(
         .await;
         // 收尾时把它从远端表里摘掉 —— 和本机那条路一样
         remotes.close(&session_id).await;
+        ownership.forget(&owner_label, &session_id);
     });
 
     Ok(AgentOpenOutcome::Ready)
@@ -364,26 +408,44 @@ pub async fn agent_close(
         .map_err(|e| format!("关窗格的线程没能跑起来：{e}"))
 }
 
-/// 关掉全部窗格。给两件事用：
+/// 关掉**调用窗口名下的**全部窗格。给两件事用：
 ///
 /// 1. 前端 `init()` —— webview 一刷新，它那边的回调 id 全没了，但 Rust 侧的
 ///    pane 还活着，用户在新界面上**看不见也关不掉**它们；
 /// 2. 应用退出（在 `lib.rs` 的 `RunEvent::Exit` 里直接调注册表，不走这条命令）。
+///
+/// # ⚠️ 多窗口之后为什么必须按窗口收
+///
+/// 每个窗口都会在激活模块时调它。按老语义「全收」的话，**新窗口一启动就会把
+/// 别的窗口还在跑的 agent 全杀掉** —— 这是多窗口里后果最重的一个坑。
+/// 改按归属收之后，「刷新收孤儿」那半的语义**原样保住**：webview 刷新时
+/// label 不变，归属表里记着的正是这个窗口上一世的孤儿，收的恰好是它们。
 #[tauri::command]
 pub async fn agent_close_all(
+    window: tauri::WebviewWindow,
     registry: State<'_, Arc<AgentRegistry>>,
     remotes: State<'_, Arc<RemoteRegistry>>,
+    ownership: State<'_, Arc<WindowOwnership>>,
 ) -> Result<(), String> {
-    // 远端那半：它是 async 的，直接 await（不占 blocking 池）
-    remotes.close_all().await;
+    let ids: Vec<String> = ownership.ids_of(window.label()).into_iter().collect();
+
+    // 远端那半：它是 async 的，逐个 await（不占 blocking 池）；
+    // 不在远端表里的是空操作（close 幂等）
+    for id in &ids {
+        remotes.close(id).await;
+    }
 
     // 同上：收尾要杀树 + 拿锁，可能等很久。前端 `init()` 会同步等这个调用，
     // 堵住工作线程等于把「刚打开应用」也拖住
-    let _span = crate::health::span("agent_close_all", "-");
+    let _span = crate::health::span("agent_close_all", window.label());
     let registry = registry.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || registry.close_all())
-        .await
-        .map_err(|e| format!("收尾的线程没能跑起来：{e}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        for id in &ids {
+            registry.close(id);
+        }
+    })
+    .await
+    .map_err(|e| format!("收尾的线程没能跑起来：{e}"))
 }
 
 /// 事件目录的绝对路径（前端要把它塞进 `env.DEVTOOLKIT_EVENT_DIR`）。
@@ -419,11 +481,21 @@ fn ensure_events_dir(app: &AppHandle) -> Result<String, String> {
 /// 返回按时间升序排好的一批 `{ name, at }`。**应用没开着时攒下的事件也在这里
 /// 一次性读到**，所以前端要逐条按时间顺序喂给状态机（不是「每个会话留最新
 /// 那条」，那样会把「它离开过等待又回来了」这件事压没）。
+///
+/// ⚠️ **只取本窗口名下 panes 的**，别人的文件**既不返回也不删** ——
+/// 多窗口之前这里是「全取走」的，那样窗口 B 会把窗口 A 会话的事件取走、
+/// 认不出、丢掉，A 的状态点就永远不动了（而且没有任何报错）。
+/// 过滤语义和「无归属的一律不碰」见 `events.rs` 的 `scan_filtered`。
 #[tauri::command]
-pub async fn agent_take_events(app: AppHandle) -> Result<Vec<RawEvent>, String> {
+pub async fn agent_take_events(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    ownership: State<'_, Arc<WindowOwnership>>,
+) -> Result<Vec<RawEvent>, String> {
     let paths = paths(&app)?;
     let dir = events::events_dir(&paths.data_dir);
-    events::scan(&dir).map_err(|e| e.to_string())
+    let owned = ownership.ids_of(window.label());
+    events::scan_filtered(&dir, |pane| owned.contains(pane)).map_err(|e| e.to_string())
 }
 
 /// 看一眼钩子装了没有。**不改任何东西。**

@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
+use devtoolkit_agents::WindowOwnership;
 use devtoolkit_ssh::{forward, OpenOutcome, SshConfig, SshRegistry, TerminalEvent};
 use tauri::ipc::Channel;
 use tauri::State;
@@ -39,6 +40,8 @@ use tauri::State;
 #[tauri::command]
 pub async fn ssh_open(
     registry: State<'_, Arc<SshRegistry>>,
+    window: tauri::WebviewWindow,
+    ownership: State<'_, Arc<WindowOwnership>>,
     id: String,
     config: SshConfig,
     channel: Channel<TerminalEvent>,
@@ -49,7 +52,21 @@ pub async fn ssh_open(
         .map_err(|e| e.to_string())?;
 
     if matches!(opened.outcome, OpenOutcome::Ready(_)) {
+        // —— 归属登记（多窗口）——
+        // ⚠️ **只在 Ready 之后**：TOFU 那两种拒绝（`HostKeyUnknown` /
+        // `HostKeyMismatch`）根本没有会话 —— 用户点「不信任」也不会有点会话
+        // 可关，登记了只会在收割时多一次空 close。
+        // 先登记后查窗口的竞态理由见 `agent_commands.rs` 的 `agent_open`。
+        ownership.register(window.label(), &id);
+        if !crate::window_commands::window_alive(&window) {
+            ownership.forget(window.label(), &id);
+            registry.close(&id).await;
+            return Ok(opened.outcome);
+        }
+
         let registry = Arc::clone(registry.inner());
+        let ownership = Arc::clone(ownership.inner());
+        let owner_label = window.label().to_string();
         let session_id = id.clone();
         let generation = opened.generation;
 
@@ -62,6 +79,7 @@ pub async fn ssh_open(
             })
             .await;
             registry.forget(&session_id, generation);
+            ownership.forget(&owner_label, &session_id);
         });
     }
 
@@ -110,13 +128,23 @@ pub async fn ssh_close(registry: State<'_, Arc<SshRegistry>>, id: String) -> Res
     Ok(())
 }
 
-/// 关掉全部会话。
+/// 关掉**调用窗口名下的**全部会话。
 ///
 /// 给「前端重新加载了」兜底：webview 一刷新，它那边的回调 id 全没了，但 Rust 侧的
 /// 会话还活着 —— 用户在新界面上**看不见也关不掉**它们，远端那边还挂着登录着的
 /// shell。前端 `init()` 时调一次这个，等于把孤儿收干净。
+///
+/// ⚠️ **按归属收，不是全局收**（和 `agent_close_all` 同批改的，理由一样）：
+/// 全局收的话，第二个窗口一激活 SSH 模块就会把第一个窗口的会话全杀掉。
+/// 刷新场景的语义不变：label 不变，收的正是这个窗口上一世的孤儿。
 #[tauri::command]
-pub async fn ssh_close_all(registry: State<'_, Arc<SshRegistry>>) -> Result<(), String> {
-    registry.close_all().await;
+pub async fn ssh_close_all(
+    registry: State<'_, Arc<SshRegistry>>,
+    window: tauri::WebviewWindow,
+    ownership: State<'_, Arc<WindowOwnership>>,
+) -> Result<(), String> {
+    for id in ownership.ids_of(window.label()) {
+        registry.close(&id).await;
+    }
     Ok(())
 }

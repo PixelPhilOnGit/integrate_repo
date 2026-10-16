@@ -18,6 +18,27 @@ export interface FileNode {
   children?: FileNode[];
 }
 
+/**
+ * 文件浏览器的一个目录项（**单层**列表，Rust 侧 `DirEntry` 的镜像）。
+ *
+ * ⚠️ 和 `FileNode` 分开是刻意的：那个的 `children` 语义是「递归树」，
+ * 这个是「一层、没有 children」—— 见 Rust 侧 `DirEntry` 的注释。
+ */
+export interface DirEntry {
+  name: string;
+  /** 相对 `listDir` 的 root 参数，正斜杠（和 FileNode 同一约定） */
+  path: string;
+  kind: 'file' | 'dir';
+  /** 符号链接（按 `kind:"file"` 报，点开成不成由 Rust 的路径闸门裁决） */
+  isSymlink: boolean;
+}
+
+/** 文件预览的三态（Rust 侧 `Preview` 的镜像，serde 判别联合） */
+export type Preview =
+  | { kind: 'text'; text: string }
+  | { kind: 'binary' }
+  | { kind: 'tooLarge'; size: number };
+
 export interface Prefs {
   recentWorkspaces: string[];
   lastWorkspace: string | null;
@@ -100,6 +121,41 @@ export interface Platform {
    * 用户取消时返回 null。
    */
   exportFile(fileName: string, data: Uint8Array, mime: string): Promise<string | null>;
+
+  /**
+   * **单层**列出目录（文件浏览器的懒加载用）。`root` 是绝对路径（用户选的工作
+   * 目录），`rel` 是目录内相对路径（空串 = 根）。不过滤：隐藏项、任意后缀都列；
+   * 目录在前。和 `listTree` 是两条路，见 Rust 侧 `list_dir` 的注释。
+   */
+  listDir(root: string, rel: string): Promise<DirEntry[]>;
+
+  /** 读文件预览（文本 / 二进制 / 超限 三态）。先 stat 再读，>2 MiB 不读内容。 */
+  readPreview(root: string, rel: string): Promise<Preview>;
+
+  /**
+   * 用系统默认程序打开 `root` 里的一个文件/目录（「用系统程序打开」）。
+   * 浏览器版没有系统程序可开 —— 空操作（菜单项在调用方就不渲染）。
+   */
+  openPath(root: string, rel: string): Promise<void>;
+
+  /**
+   * 在新窗口里打开某个模块（多窗口）。
+   *
+   * 桌面端走 Rust 的 `open_window` 命令 —— 窗口构造必须和主窗口带**同一套
+   * flag**（clipboard、drag-drop 那些每窗口能力），所以不能在前端用 JS API
+   * 另起一个，见 `window_commands.rs`。浏览器版**没有第二个窗口**：实现是
+   * 空操作，调用方（外壳的两个入口）负责说一句诚实的话。
+   */
+  openModuleWindow(moduleId: string): Promise<void>;
+
+  /**
+   * 设置当前窗口的标题（切模块时跟着变）。
+   *
+   * 桌面端走 `getCurrentWindow().setTitle()`；浏览器版写 `document.title`。
+   * 多窗口之后标题是**分窗口身份**的一部分 —— 两个窗口都叫「Devtoolkit」
+   * 的话用户分不清谁是谁。
+   */
+  setWindowTitle(title: string): Promise<void>;
 
   getPrefs(): Promise<Prefs>;
   setPrefs(patch: Partial<Prefs>): Promise<void>;

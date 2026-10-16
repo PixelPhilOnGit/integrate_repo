@@ -10,7 +10,7 @@
  * 这样在浏览器里验证过的交互行为，在桌面端不会因为"列目录的顺序不一样"而失效。
  */
 
-import type { FileNode, Platform, Prefs } from './types';
+import type { DirEntry, FileNode, Platform, Prefs, Preview } from './types';
 import { EMPTY_PREFS } from './types';
 import {
   basename,
@@ -317,6 +317,61 @@ export function createWebPlatform(): Platform {
       // 立刻 revoke 会让部分浏览器来不及取数据，延后释放
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
       return fileName;
+    },
+
+    async openModuleWindow(_moduleId: string): Promise<void> {
+      // 浏览器版**没有第二个窗口**。空操作是刻意的：入口在两边都渲染，
+      // 由外壳的调用方（快捷键、图标栏右键菜单）看 `kind` 说一句诚实的话 ——
+      // 那样 e2e 也测得到「点了会发生什么」，而不是给一个点不动的死按钮。
+    },
+
+    async listDir(_root: string, rel: string): Promise<DirEntry[]> {
+      // ⚠️ **忽略 root**：浏览器里 agents 的工作目录可能是一条磁盘路径
+      //（预置数据里的 `D:\work\alpha` 这种），它在本机不存在 —— 但文件浏览器
+      // 在浏览器版里永远展示同一棵虚拟工作区，所以照 `listTree` / `readText`
+      // 的 `_root` 惯例，参数收下、不用。这样 UI 加出来的 `/工作区` 和预置的
+      // `D:\...` 都能列出同一棵树，e2e 才有得驱动。
+      const root = readTree();
+      const node = rel === '' ? root : findNode(root, splitPath(rel));
+      if (!node || node.kind !== 'dir') throw new Error(`目录不存在：${rel === '' ? '/' : rel}`);
+
+      const entries: DirEntry[] = (node.children ?? []).map((child) => ({
+        name: child.name,
+        path: joinPath(rel, child.name),
+        kind: child.kind,
+        isSymlink: false,
+      }));
+      // 排序口径和 Rust 侧**一字不差**（目录在前 → 忽略大小写 → 原文定胜负）：
+      // 不用 localeCompare —— 那和 Rust 的 to_lowercase + 码点比较不是一回事，
+      // 浏览器里验过的顺序在桌面端会变
+      entries.sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1;
+        const al = a.name.toLowerCase();
+        const bl = b.name.toLowerCase();
+        if (al !== bl) return al < bl ? -1 : 1;
+        return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+      });
+      return entries;
+    },
+
+    async readPreview(_root: string, rel: string): Promise<Preview> {
+      const node = findNode(readTree(), splitPath(rel));
+      if (!node || node.kind !== 'file') throw new Error(`文件不存在：${rel}`);
+      // 图片后缀返回**二进制假态**：虚拟工作区里装不了真图片字节，
+      // 但 e2e 要靠它覆盖「二进制提示 + 用系统程序打开」那条 UI 分支
+      if (/\.(png|jpe?g|gif|webp|ico|bmp)$/i.test(node.name)) return { kind: 'binary' };
+      return { kind: 'text', text: node.content ?? '' };
+    },
+
+    async openPath(_root: string, rel: string): Promise<void> {
+      // 浏览器版没有系统程序可开。菜单项在 FileExplorer 里对 web 版本就不渲染，
+      // 这里留个空操作只是把接口补齐。
+      void rel;
+    },
+
+    async setWindowTitle(title: string): Promise<void> {
+      // 浏览器版写 document.title 就行（Tauri 那边要过 API，见 tauri.ts）
+      document.title = title;
     },
 
     async getPrefs(): Promise<Prefs> {

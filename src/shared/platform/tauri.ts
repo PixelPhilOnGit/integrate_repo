@@ -7,7 +7,7 @@
  * 动态 import + 缓存既能保证浏览器路径完全不加载它们，又不会每次调用都重新解析。
  */
 
-import type { FileNode, Platform, Prefs } from './types';
+import type { DirEntry, FileNode, Platform, Prefs, Preview } from './types';
 import { EMPTY_PREFS } from './types';
 import { createSqliteKeyValue } from './kv';
 import { invoke } from './invoke';
@@ -18,6 +18,19 @@ type DialogModule = typeof import('@tauri-apps/plugin-dialog');
 let dialogMod: Promise<DialogModule> | null = null;
 
 const dialog = (): Promise<DialogModule> => (dialogMod ??= import('@tauri-apps/plugin-dialog'));
+
+/**
+ * `@tauri-apps/api/window`：同样是动态 import + 缓存。
+ *
+ * ⚠️ 静态 import 会把它打进浏览器产物（见文件头），而 `getCurrentWindow()`
+ * 在纯浏览器里会直接抛 —— 那是「16 个 e2e 全红」级别的错法。
+ */
+type TauriWindowModule = typeof import('@tauri-apps/api/window');
+
+let windowMod: Promise<TauriWindowModule> | null = null;
+
+const tauriWindow = (): Promise<TauriWindowModule> =>
+  (windowMod ??= import('@tauri-apps/api/window'));
 
 /**
  * 外壳偏好走**和模块一样的那套键值存储**（SQLite）。
@@ -115,6 +128,27 @@ export function createTauriPlatform(): Platform {
       return target;
     },
 
+    async openModuleWindow(moduleId: string): Promise<void> {
+      await invoke<void>('open_window', { module: moduleId });
+    },
+
+    async listDir(root: string, rel: string): Promise<DirEntry[]> {
+      return invoke<DirEntry[]>('fs_list_dir', { root, rel });
+    },
+
+    async readPreview(root: string, rel: string): Promise<Preview> {
+      return invoke<Preview>('fs_read_preview', { root, rel });
+    },
+
+    async openPath(root: string, rel: string): Promise<void> {
+      await invoke<void>('fs_open_path', { root, rel });
+    },
+
+    async setWindowTitle(title: string): Promise<void> {
+      const { getCurrentWindow } = await tauriWindow();
+      await getCurrentWindow().setTitle(title);
+    },
+
     async getPrefs(): Promise<Prefs> {
       const recent = await prefsKv.get<string[]>('recentWorkspaces');
       const last = await prefsKv.get<string | null>('lastWorkspace');
@@ -131,13 +165,14 @@ export function createTauriPlatform(): Platform {
     },
 
     async setPrefs(patch: Partial<Prefs>): Promise<void> {
-      const current = await this.getPrefs();
-      const next: Prefs = { ...EMPTY_PREFS, ...current, ...patch };
-      await prefsKv.set('recentWorkspaces', next.recentWorkspaces);
-      await prefsKv.set('lastWorkspace', next.lastWorkspace);
-      await prefsKv.set('theme', next.theme);
-      await prefsKv.set('sidePanelWidths', next.sidePanelWidths);
-      await prefsKv.set('inspectorPanelWidths', next.inspectorPanelWidths);
+      // ⚠️ **只写 patch 里出现的键。** 老写法是「读全 5 个键 → 合并 → 全写回」，
+      // 多窗口之后那是一个覆盖窗口：窗口 B 拖一次侧栏宽度，会把本地快照里
+      // 那 4 个键一并写回，正好冲掉窗口 A 刚写的 `recentWorkspaces`。
+      // 每键各存各的（下面 kv 本来就是单键 UPSERT），冲突面就缩到一个键。
+      // （`recentWorkspaces` / `lastWorkspace` 的调用方本来就给整份，语义不变。）
+      for (const [key, value] of Object.entries(patch)) {
+        await prefsKv.set(key, value);
+      }
     },
   };
 }

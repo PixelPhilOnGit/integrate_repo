@@ -27,7 +27,7 @@ use base64::Engine as _;
 use std::sync::Arc;
 
 use devtoolkit_agents::registry::forward;
-use devtoolkit_agents::{AgentRegistry, PtyConfig, PtyEvent};
+use devtoolkit_agents::{AgentRegistry, PtyConfig, PtyEvent, WindowOwnership};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
@@ -58,7 +58,9 @@ impl Default for LocalTerminals {
 #[tauri::command]
 pub async fn local_open(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     terminals: State<'_, LocalTerminals>,
+    ownership: State<'_, Arc<WindowOwnership>>,
     id: String,
     shell: String,
     cols: u32,
@@ -89,9 +91,20 @@ pub async fn local_open(
 
     let opened = terminals.0.open(&id, &config).map_err(|e| e.to_string())?;
 
+    // —— 归属登记（多窗口）——先登记后查窗口，理由见 agent_commands.rs
+    // 的 agent_open（两种「登记 vs 窗口销毁」的交错都必须收得到）
+    ownership.register(window.label(), &id);
+    if !crate::window_commands::window_alive(&window) {
+        ownership.forget(window.label(), &id);
+        terminals.0.close(&id);
+        return Ok(());
+    }
+
     // Channel 必须搬进转发任务（和 `agent_open` 同一个坑：留在这儿的话
     // 函数一返回它就被丢掉，前端那条回调立刻注销，终端一片空白且不报错）
     let registry = Arc::clone(&terminals.0);
+    let ownership = Arc::clone(ownership.inner());
+    let owner_label = window.label().to_string();
     let session_id = id.clone();
     let generation = opened.generation;
 
@@ -101,6 +114,7 @@ pub async fn local_open(
         })
         .await;
         registry.forget(&session_id, generation);
+        ownership.forget(&owner_label, &session_id);
     });
 
     Ok(())
@@ -161,13 +175,26 @@ pub async fn local_close(
         .map_err(|e| format!("关终端的线程没能跑起来：{e}"))
 }
 
-/// 关掉全部本地终端。前端 `init()` 里调一次（webview 一刷新，那边认不得
-/// Rust 侧还活着的会话了，不收的话用户看不见也关不掉它们）。
+/// 关掉**调用窗口名下的**本地终端。前端 `init()` 里调一次（webview 一刷新，
+/// 那边认不得 Rust 侧还活着的会话了，不收的话用户看不见也关不掉它们）。
+///
+/// ⚠️ 按归属收而不是全局收 —— 同 `agent_close_all` / `ssh_close_all`：
+/// 全局收的话第二个窗口一开就把第一个窗口的终端全杀了。刷新语义不变
+/// （label 不变，收的正是自己上一世的孤儿）。
 #[tauri::command]
-pub async fn local_close_all(terminals: State<'_, LocalTerminals>) -> Result<(), String> {
-    let _span = crate::health::span("local_close_all", "-");
+pub async fn local_close_all(
+    terminals: State<'_, LocalTerminals>,
+    window: tauri::WebviewWindow,
+    ownership: State<'_, Arc<WindowOwnership>>,
+) -> Result<(), String> {
+    let ids: Vec<String> = ownership.ids_of(window.label()).into_iter().collect();
+    let _span = crate::health::span("local_close_all", window.label());
     let registry = Arc::clone(&terminals.0);
-    tauri::async_runtime::spawn_blocking(move || registry.close_all())
-        .await
-        .map_err(|e| format!("收尾的线程没能跑起来：{e}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        for id in &ids {
+            registry.close(id);
+        }
+    })
+    .await
+    .map_err(|e| format!("收尾的线程没能跑起来：{e}"))
 }

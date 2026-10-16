@@ -31,6 +31,7 @@ pub mod events;
 #[cfg(windows)]
 mod job;
 pub mod integration;
+pub mod ownership;
 pub mod pty;
 pub mod registry;
 pub mod remote;
@@ -41,6 +42,7 @@ pub mod remote;
 mod contract;
 
 pub use error::AgentError;
+pub use ownership::WindowOwnership;
 pub use pty::{probe_environment, EnvironmentReport};
 pub use events::{events_dir, RawEvent, EVENT_STATES, EVENTS_DIR_NAME};
 pub use integration::{

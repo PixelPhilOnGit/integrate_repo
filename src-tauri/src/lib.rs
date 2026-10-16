@@ -14,6 +14,7 @@ mod agent_commands;
 mod assistant_commands;
 mod commands;
 mod health;
+mod kb_commands;
 mod kv_commands;
 mod local_commands;
 mod open;
@@ -23,6 +24,7 @@ mod secret_commands;
 mod sql_commands;
 mod ssh_commands;
 mod task_commands;
+mod window_commands;
 
 /// 供 `main.rs`（以及将来的移动端入口）调用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -42,6 +44,9 @@ pub fn run() {
         // 智能体会话的 pane 表。同样包一层 Arc：读线程和等待线程要活到会话结束，
         // 而它们收尾时（转发任务里）要回头把会话从表里摘掉（`forget`）。
         .manage(std::sync::Arc::new(devtoolkit_agents::AgentRegistry::new()))
+        // 会话 → 窗口 的归属表（多窗口）。纯逻辑在 agents crate 里
+        // （CI 测得到），这里只是挂上。什么时候登记/收割见 `window_commands.rs`。
+        .manage(std::sync::Arc::new(devtoolkit_agents::WindowOwnership::new()))
         // 远端会话（连别的机器开 agent）。**单独一张表**：本机那两个注册表
         // 装的是同步的 `Arc<PtySession>`，这个装的是 async 的远端会话 ——
         // 合并的话每个方法都要 match 两种（见 `agents/src/remote.rs` 的说明）
@@ -54,6 +59,9 @@ pub fn run() {
         .manage(std::sync::Arc::new(task_commands::TasksState::new()))
         // 键值库（各模块的档案/指纹/偏好）。同样惰性打开 —— 见 kv_commands.rs
         .manage(std::sync::Arc::new(kv_commands::KvState::new()))
+        // 知识库：打开过的 vault 句柄表（vault + 派生索引 + 取消开关），
+        // 惰性打开 —— 见 kb_commands.rs
+        .manage(std::sync::Arc::new(kb_commands::KbState::new()))
         // 助手：审批闸门 + 正在跑的 run + 会话记录库。包一层 Arc 是因为
         // 跑一次对话要活到 run 结束（转发任务得把 run 从表里摘掉）。
         .manage(std::sync::Arc::new(assistant_commands::AssistantRuntime::new()))
@@ -88,16 +96,10 @@ pub fn run() {
             //
             // 也就是说**三个平台各有各的缺口，这个应用一个都没补**（此前没有菜单、
             // 窗口又是配置建的）。用户报的就是 Windows 上那一个。
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                .title("Devtoolkit")
-                .inner_size(1280.0, 800.0)
-                .min_inner_size(900.0, 600.0)
-                .resizable(true)
-                .center()
-                // 对应配置里原来的 `"dragDropEnabled": false`
-                .disable_drag_drop_handler()
-                .enable_clipboard_access()
-                .build()?;
+            // 构造器在 `window_commands.rs`：`main` 和新窗口（多窗口）共用同一份
+            // flag —— 这些每窗口的能力（clipboard、drag-drop）漏一个就是一类
+            // 悄悄坏掉的交互，两边各写一遍迟早漂移。
+            window_commands::build_workspace_window(app, "main", None, None)?;
 
             let edit = Submenu::with_items(
                 app,
@@ -125,6 +127,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_tree,
+            // 文件浏览器（智能体会话的「文件」标签）：单层列目录 + 三态预览 +
+            // 用系统程序打开。见 commands.rs 里的 doc 和 core 的 file_browser 测试
+            commands::fs_list_dir,
+            commands::fs_read_preview,
+            commands::fs_open_path,
             commands::read_text_file,
             commands::write_text_file,
             commands::create_diagram,
@@ -198,6 +205,30 @@ pub fn run() {
             secret_commands::secret_store,
             secret_commands::secret_available,
 
+            // 多窗口：开一个新窗口（label 生成/模块白名单/级联偏移都在那边）
+            window_commands::open_window,
+
+            // 知识库（vault 文件是真相 + 派生索引 + CLI 生成）。
+            // 参数表里只有 vault 名和相对路径 —— 绝对路径全在这层算
+            kb_commands::kb_vaults,
+            kb_commands::kb_vault_create,
+            kb_commands::kb_vault_delete,
+            kb_commands::kb_vault_reveal,
+            kb_commands::kb_sync,
+            kb_commands::kb_cards,
+            kb_commands::kb_card_read,
+            kb_commands::kb_card_set_status,
+            kb_commands::kb_card_set_archived,
+            kb_commands::kb_card_delete,
+            kb_commands::kb_search,
+            kb_commands::kb_sources,
+            kb_commands::kb_source_add,
+            kb_commands::kb_source_delete,
+            kb_commands::kb_generate,
+            kb_commands::kb_generate_cancel,
+            kb_commands::kb_runs,
+            kb_commands::kb_cli_probe,
+
             // 助手的凭据。**只写不读** —— 理由见 assistant_commands.rs
             assistant_commands::assistant_api_key_status,
             assistant_commands::assistant_set_api_key,
@@ -258,48 +289,132 @@ pub fn run() {
     // （`KILL_ON_JOB_CLOSE`），Devtoolkit **崩了**也一样收尸。Unix 上则靠
     // pty 主端被关掉时内核给前台进程组发的 SIGHUP 兜底。
     app.run(|handle, event| {
-        if let tauri::RunEvent::Exit = event {
-            use tauri::Manager as _;
-            let registry = handle
-                .state::<std::sync::Arc<devtoolkit_agents::AgentRegistry>>()
-                .inner()
-                .clone();
+        use tauri::Manager as _;
+        match event {
+            // 应用退出（**最后一个窗口**被销毁时三平台都会走到这里）。
+            tauri::RunEvent::Exit => {
+                let registry = handle
+                    .state::<std::sync::Arc<devtoolkit_agents::AgentRegistry>>()
+                    .inner()
+                    .clone();
 
-            // ⚠️ **不能在主线程上同步收尾。**
+                // ⚠️ **不能在主线程上同步收尾。**
+                //
+                // `close_all` 里是 `TerminateJobObject`（**等整棵树死**）加两把锁，
+                // 每一项都可能等很久（锁可能被一个卡在写 PTY 的线程握着）。
+                // 主线程是**窗口事件循环**那根线：在这儿等，窗口就再也关不上了 ——
+                // 用户看到的是「点了关闭没反应，只能去任务管理器杀进程」（真机上出过）。
+                //
+                // 所以丢给一个线程，然后**由进程退出兜底**：exit 之后内核会关掉
+                // 我们持有的 Job Object 句柄，`KILL_ON_JOB_CLOSE` 保证那一树进程
+                // 一起走。也就是说这条线程只是「尽量收拾得干净点」，不是最后一道保险
+                // —— 最后一道保险一直是作业对象本身（见上面那段注释）。
+                // 本地终端也是**独立进程**（shell），同样不能留着 —— 一起收
+                let locals = handle
+                    .state::<local_commands::LocalTerminals>()
+                    .0
+                    .clone();
+
+                // 远端会话（连别的机器那几个）：收拾它是**锦上添花**而不是保险 ——
+                // 它是 SSH 连接，进程一退 socket 就断，远端那个 shell 自己会结束。
+                // 所以这里丢给异步运行时就行，不占上面那个线程（`close_all` 是 async）
+                let remotes = handle
+                    .state::<std::sync::Arc<devtoolkit_agents::RemoteRegistry>>()
+                    .inner()
+                    .clone();
+                tauri::async_runtime::spawn(async move {
+                    remotes.close_all().await;
+                });
+
+                std::thread::Builder::new()
+                    .name("agents-exit".to_string())
+                    .spawn(move || {
+                        registry.close_all();
+                        locals.close_all();
+                    })
+                    .ok();
+            }
+
+            // 关掉的是**其中一个**窗口（不是最后一个，最后一个走上面的 Exit）：
+            // 按归属表把它名下的会话收干净。不收就是「用户完全看不见、还在
+            // 调 API 改文件」的孤儿进程 —— 这个模块的头号大忌，见 agents crate 文档。
             //
-            // `close_all` 里是 `TerminateJobObject`（**等整棵树死**）加两把锁，
-            // 每一项都可能等很久（锁可能被一个卡在写 PTY 的线程握着）。
-            // 主线程是**窗口事件循环**那根线：在这儿等，窗口就再也关不上了 ——
-            // 用户看到的是「点了关闭没反应，只能去任务管理器杀进程」（真机上出过）。
-            //
-            // 所以丢给一个线程，然后**由进程退出兜底**：exit 之后内核会关掉
-            // 我们持有的 Job Object 句柄，`KILL_ON_JOB_CLOSE` 保证那一树进程
-            // 一起走。也就是说这条线程只是「尽量收拾得干净点」，不是最后一道保险
-            // —— 最后一道保险一直是作业对象本身（见上面那段注释）。
-            // 本地终端也是**独立进程**（shell），同样不能留着 —— 一起收
-            let locals = handle
-                .state::<local_commands::LocalTerminals>()
-                .0
-                .clone();
+            // ⚠️ **只能走归属表，不能用 `get_webview_window(label)`**：Tauri 把
+            // `Destroyed` 派发到这里之前，已经先把窗口从 manager 里摘掉了 ——
+            // 那个调用**必为 None**，任何「拿到窗口再关」的写法都是死路
+            // （`WindowOwnership::take_all` 的注释里也钉了同一条）。
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } => {
+                let ownership = handle
+                    .state::<std::sync::Arc<devtoolkit_agents::WindowOwnership>>()
+                    .inner()
+                    .clone();
+                let ids = ownership.take_all(&label);
+                if ids.is_empty() {
+                    return;
+                }
+                health::line(
+                    "WINDOW_DESTROYED",
+                    &format!("{label}：收掉名下 {} 个会话", ids.len()),
+                );
 
-            // 远端会话（连别的机器那几个）：收拾它是**锦上添花**而不是保险 ——
-            // 它是 SSH 连接，进程一退 socket 就断，远端那个 shell 自己会结束。
-            // 所以这里丢给异步运行时就行，不占上面那个线程（`close_all` 是 async）
-            let remotes = handle
-                .state::<std::sync::Arc<devtoolkit_agents::RemoteRegistry>>()
-                .inner()
-                .clone();
-            tauri::async_runtime::spawn(async move {
-                remotes.close_all().await;
-            });
+                let registry = handle
+                    .state::<std::sync::Arc<devtoolkit_agents::AgentRegistry>>()
+                    .inner()
+                    .clone();
+                let locals = handle.state::<local_commands::LocalTerminals>().0.clone();
+                let ssh = handle
+                    .state::<std::sync::Arc<devtoolkit_ssh::SshRegistry>>()
+                    .inner()
+                    .clone();
+                let remotes = handle
+                    .state::<std::sync::Arc<devtoolkit_agents::RemoteRegistry>>()
+                    .inner()
+                    .clone();
 
-            std::thread::Builder::new()
-                .name("agents-exit".to_string())
-                .spawn(move || {
-                    registry.close_all();
-                    locals.close_all();
-                })
-                .ok();
+                // 本机那两张表是同步 close（杀树 + 拿锁，可能等很久）——
+                // 丢线程，理由和上面 Exit 那段一模一样：主线程是窗口事件循环
+                let ids_sync = ids.clone();
+                std::thread::Builder::new()
+                    .name("rd-window-reap".to_string())
+                    .spawn(move || {
+                        for id in &ids_sync {
+                            registry.close(id);
+                            locals.close(id);
+                        }
+                    })
+                    .ok();
+
+                // 远端两张表（ssh / remote）的 close 是 async，丢给异步运行时
+                tauri::async_runtime::spawn(async move {
+                    for id in &ids {
+                        ssh.close(id).await;
+                        remotes.close(id).await;
+                    }
+                });
+            }
+
+            // 启动期清一次事件目录的过期文件。多窗口的归属过滤（见
+            // `events.rs` 的 `scan_filtered`）定的是「无归属的一律不碰」，
+            // 于是目录会缓慢积水 —— 唯一安全的清理时机是这里：此刻还没有任何
+            // 窗口和会话，归属表是空的，**年龄是唯一可信的信号**。
+            tauri::RunEvent::Ready => {
+                if let Ok(data_dir) = handle.path().app_data_dir() {
+                    let dir = devtoolkit_agents::events_dir(&data_dir);
+                    let removed = devtoolkit_agents::events::prune_stale(
+                        &dir,
+                        std::time::Duration::from_secs(72 * 3600),
+                    );
+                    if removed > 0 {
+                        health::line("EVENTS_PRUNE", &format!("清掉 {removed} 个过期事件文件"));
+                    }
+                }
+            }
+
+            _ => {}
         }
     });
 }
