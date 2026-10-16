@@ -259,6 +259,20 @@ const sweeps = [
       await page.keyboard.press('Enter');
       await page.waitForTimeout(900);
       await shot('agents-waiting', '「需要你」状态：琥珀窗格 + 侧栏队列 + 角标');
+
+      // 文件浏览器（2026-10-16）：默认不展示、点「文件」才出现。
+      // 虚拟工作区自带 diagram 的种子（示例.seq.json + 归档/旧版.seq.json），
+      // 展开一层就能看到「树 + 预览」的真实样子
+      await page.getByTestId('agent-tab-files').click();
+      await page.waitForTimeout(400);
+      const anyDir = page.locator('[data-testid^="agent-dir-"]').first();
+      if ((await anyDir.count()) > 0) await anyDir.click();
+      await page.waitForTimeout(400);
+      const anyFile = page.locator('[data-testid^="agent-file-"]').first();
+      if ((await anyFile.count()) > 0) await anyFile.click();
+      await page.waitForTimeout(400);
+      await shot('agents-files', '检查器「文件」标签：目录树 + 文件预览（点开才有）');
+      await page.getByTestId('agent-tab-session').click();
     },
   },
   {
@@ -291,6 +305,30 @@ const sweeps = [
       await page.getByTestId('task-set-done').click();
       await page.waitForTimeout(400);
       await shot('tasks-done', '标记完成之后的列表与详情');
+    },
+  },
+  {
+    module: 'knowledge',
+    async run(page, shot) {
+      // 浏览器版自带种子库（示例库）：卡片墙 / 阅读器（含 seq 图）/ 生成面板
+      await vis(page, 'kb-sidebar');
+      await vis(page, 'kb-wall');
+      await shot('kb-wall', '卡片墙：未评审在左缘带强调色，标签和状态就位');
+
+      await page.getByTestId('kb-wall-登录流程.md').click();
+      await page.waitForTimeout(400);
+      await shot('kb-reader', '阅读器：markdown + 只读顺序图（seq 围栏）');
+
+      await page.getByTestId('kb-back').click();
+      await page.getByTestId('kb-source-add').click();
+      await page.waitForTimeout(300);
+      await page.getByTestId('kb-generate-_sources/示例资料1.md').click();
+      await page.waitForTimeout(200);
+      await shot('kb-generate-dialog', '生成对话框：挑 CLI + 可选补充要求');
+      await page.getByTestId('kb-gen-start').click();
+      await page.waitForTimeout(600);
+      await shot('kb-generating', '生成进度面板（右下浮层）');
+      await page.getByTestId('kb-gen-dismiss').click();
     },
   },
   {
