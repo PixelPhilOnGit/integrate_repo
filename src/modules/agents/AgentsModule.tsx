@@ -11,10 +11,12 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { attentionQueue } from './core/status';
 import { AttentionQueue } from './panels/AttentionQueue';
+import { FileExplorer } from './panels/FileExplorer';
 import { SessionForm } from './panels/SessionForm';
 import { SplitView } from './panels/SplitView';
 import { WorkspaceTree } from './panels/WorkspaceTree';
 import { shortcutFor, type ShortcutAction } from './shortcuts';
+import { explorerStore } from './state/explorer';
 import { agentsStore } from './state/store';
 
 /** 订阅模块自己的 store。外壳不掺和模块的状态 */
@@ -93,6 +95,9 @@ function runAction(action: ShortcutAction): void {
       }
       return;
     }
+    case 'show-files':
+      explorerStore.setTab('files');
+      return;
   }
 }
 
@@ -119,10 +124,55 @@ export function AgentsMain(): ReactNode {
   );
 }
 
+/**
+ * 右侧检查器：两个标签 ——「会话」（选中会话的详情，默认）和「文件」
+ * （文件浏览器，**默认不展示、点击才出现** —— 用户拍板的形态）。
+ *
+ * ⚠️ 面板外壳（`.rd-panel` + `agent-inspector` testid）在这一层提供：
+ * `SessionForm` 原来的外壳已经摘掉，再嵌一层会出两条 border-left。
+ * `.rd-tabs button { flex:1 }` 是两格均分用的 —— **别往里塞第三个控件**
+ * （SSH 模块复用这个类时踩过：标签和 × 各占一半，点标签中间把标签关了）。
+ */
 export function AgentsInspector(): ReactNode {
   const state = useAgents();
   const now = useNow();
-  return <SessionForm state={state} store={agentsStore} now={now} />;
+  const explorer = useSyncExternalStore(explorerStore.subscribe, explorerStore.getSnapshot);
+  const showFiles = explorer.tab === 'files';
+
+  return (
+    <div className="rd-panel" data-testid="agent-inspector">
+      <div className="rd-tabs" role="tablist" aria-label="检查器视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!showFiles}
+          className={showFiles ? '' : 'is-active'}
+          data-testid="agent-tab-session"
+          onClick={() => explorerStore.setTab('session')}
+        >
+          会话
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={showFiles}
+          className={showFiles ? 'is-active' : ''}
+          data-testid="agent-tab-files"
+          onClick={() => explorerStore.setTab('files')}
+        >
+          文件
+        </button>
+      </div>
+
+      {showFiles ? (
+        <FileExplorer />
+      ) : (
+        <div className="rd-panel-body">
+          <SessionForm state={state} store={agentsStore} now={now} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 状态栏右侧：几个会话、几个在等 */

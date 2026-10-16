@@ -41,7 +41,9 @@ export type ShortcutAction =
   /** 跳到等得最久的那个「需要你」 */
   | { kind: 'jump-attention' }
   /** 在同一个工作目录里新开一个会话 */
-  | { kind: 'new-session' };
+  | { kind: 'new-session' }
+  /** 检查器切到「文件」标签（文件浏览器，默认不展示、这个键请它出来） */
+  | { kind: 'show-files' };
 
 /** 界面上要显示的快捷键表。提示文案和实现从同一份数据来，免得对不上 */
 export const AGENTS_SHORTCUTS: ReadonlyArray<{ combo: string; label: string }> = [
@@ -51,6 +53,7 @@ export const AGENTS_SHORTCUTS: ReadonlyArray<{ combo: string; label: string }> =
   { combo: 'Ctrl+Shift+方向键', label: '在窗格之间移动' },
   { combo: 'Ctrl+Shift+U', label: '跳到需要你的会话' },
   { combo: 'Ctrl+Shift+N', label: '在同一个目录里再开一个' },
+  { combo: 'Ctrl+Shift+F', label: '看当前目录的文件' },
 ];
 
 export function shortcutFor(e: KeyEventLike): ShortcutAction | null {
@@ -67,6 +70,8 @@ export function shortcutFor(e: KeyEventLike): ShortcutAction | null {
       return { kind: 'close-pane' };
     case 'KeyN':
       return { kind: 'new-session' };
+    case 'KeyF':
+      return { kind: 'show-files' };
     case 'KeyU':
       return { kind: 'jump-attention' };
     case 'ArrowLeft':

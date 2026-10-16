@@ -40,6 +40,7 @@ import {
 } from '../core/workspaces';
 import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
+import { explorerStore } from '../state/explorer';
 import { AGENTS_SHORTCUTS } from '../shortcuts';
 import { STATUS_LABEL, type AgentSession, type AgentWorkspace, type SessionStatus } from '../core/types';
 import type { AgentsState, AgentsStore } from '../state/store';
@@ -227,7 +228,13 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
                         focused={active && session.id === state.focusedId}
                         onScreen={isOnScreen(state, session)}
                         now={now}
-                        onClick={() => store.jumpTo(session.id)}
+                        onClick={() => {
+                          store.jumpTo(session.id);
+                          // 补位：检查器的标签翻转靠 `explorerStore` 订阅
+                          // selectedId 的**变化**推导，而「点一个已经选中的
+                          // 会话」不产生变化 —— 那种情况下用户同样是要看它
+                          explorerStore.setTab('session');
+                        }}
                         onMenu={(x, y) => setMenu({ x, y, items: sessionMenu(store, state, session) })}
                       />
                     ))}

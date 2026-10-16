@@ -193,3 +193,34 @@ test('弹框的焦点圈与回车语义（回归：Tab 曾走出弹框、一次�
     '好了。'
   );
 });
+
+/**
+ * 文件浏览器（智能体会话「文件」标签，2026-10-16）的几何护栏：
+ * 刷新按钮的命中区、分界线的拖拽目标宽度、标签按钮的高度。
+ * 空态下这些控件都不在 DOM 里，所以要先把「文件」标签点出来。
+ */
+test('文件浏览器：刷新按钮命中区、分界线够宽、标签不矮', async ({ page }) => {
+  await page.getByTestId('module-agents').click();
+  await page.getByTestId('agent-empty').waitFor();
+  await page.getByTestId('agent-add-workspace-empty').click();
+  await page.getByTestId('agent-tab-files').click();
+  await page.getByTestId('agent-explorer').waitFor();
+
+  // 常规按钮量**盒子**（≥22 双方）—— 口径同 request 的「清空历史」。
+  // hitOutside 探针是留给「::after 往外探」的小字形控件（⋯、抓手）的，
+  // 普通按钮没有扩容机制，探外面必然落空
+  const refresh = await box(page, '[data-testid="agent-explorer-refresh"]');
+  expect(refresh.height).toBeGreaterThanOrEqual(22);
+  expect(refresh.width).toBeGreaterThanOrEqual(22);
+
+  // 分界线是**拖拽目标**：按 .rd-slot-handle 同一条口径量宽度（≥6px），
+  // 不用 hitOutside —— 它没有 ::after 扩容，量本体就行
+  const split = await box(page, '[data-testid="agent-explorer-split"]');
+  expect(split.height).toBeGreaterThanOrEqual(6);
+
+  // 两个标签按钮都得有常规命中高度（`.rd-tabs button` 的 padding 撑起来的）
+  for (const id of ['agent-tab-session', 'agent-tab-files']) {
+    const tab = await box(page, `[data-testid="${id}"]`);
+    expect(tab.height).toBeGreaterThanOrEqual(22);
+  }
+});

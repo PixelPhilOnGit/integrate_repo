@@ -86,6 +86,40 @@ impl FileNode {
     }
 }
 
+/// 文件浏览器的一个目录项（**单层**列表的元素）。字段名固定，前端照着写。
+///
+/// ⚠️ **刻意不复用 `FileNode`**：那个的 `children` 语义是「递归树、只有 dir
+/// 才有」，而这里是「一层、没有 children」——同一个类型背两种语义，迟早有
+/// 一边按错的假设用（比如把 `children: None` 当成「空目录」）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    /// 展示用的名字（不含父目录）。
+    pub name: String,
+    /// 相对根目录的路径，正斜杠分隔（和 `FileNode` 同一约定）。
+    pub path: String,
+    /// `"file"` 或 `"dir"`。⚠️ 符号链接**按 `"file"` 报**（见 [`Workspace::list_dir`]）。
+    pub kind: String,
+    /// 是不是符号链接。前端画个小箭头；点开成不成由 `resolve` 的闸门裁决。
+    pub is_symlink: bool,
+}
+
+/// 文件预览的三态结果。`#[serde(tag = "kind")]` → 前端收的是
+/// `{kind:"text",text}` / `{kind:"binary"}` / `{kind:"tooLarge",size}` 的判别联合。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Preview {
+    /// 文本（合法 UTF-8 且不含 NUL 字节）。
+    Text { text: String },
+    /// 二进制 —— **不返回内容**（不是 UTF-8，或含 NUL）。
+    Binary,
+    /// 超过上限 —— **不读内容**，只报大小。
+    TooLarge { size: u64 },
+}
+
+/// 预览的体积上限：2 MiB（和接口调试那条响应横幅同源）。
+pub const PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
+
 /// 一个已经打开的工作区。持有一个**规范化之后**的根目录。
 #[derive(Debug, Clone)]
 pub struct Workspace {
@@ -362,6 +396,107 @@ impl Workspace {
         });
 
         Ok(nodes)
+    }
+
+    /// 列出目录的**单层**内容（文件浏览器用）。
+    ///
+    /// 和 [`Self::list_tree`] 的差别是刻意的，**别合并**：
+    ///
+    /// * 只列一层 —— 前端按展开懒加载，`node_modules` 那种目录不会被递归打爆；
+    /// * **不过滤** —— 隐藏项、任意后缀都列（列的是用户自己的项目目录，
+    ///   不是图工作区，没有「只认 .seq.json」这回事）。
+    ///
+    /// 排序口径和 `list_tree` 一致：目录在前，然后按名字（忽略大小写）。
+    ///
+    /// # 符号链接：列出来，但按 `"file"` 报
+    ///
+    /// 跟随链接去判断「它指向目录还是文件」会给自己造一个 TOCTOU 面
+    /// （判断和使用之间链接可能被换掉）——这是本模块开篇就写明的已知边界。
+    /// 所以这里只标 `is_symlink`，**点开时的 `resolve` 闸门才是唯一裁决**：
+    /// 指向根内的链接照常能用，跳出去的会拿到 `OutsideWorkspace`。
+    pub fn list_dir(&self, rel: &str) -> Result<Vec<DirEntry>, CoreError> {
+        let dir = self.resolve_dir(rel)?;
+        let entries = fs::read_dir(&dir).map_err(|e| CoreError::io(&dir, e))?;
+
+        let mut nodes = Vec::new();
+        for entry in entries {
+            // 单个条目读失败（权限、竞态删除）不该让整个列表挂掉，跳过即可 ——
+            // 和 walk 同一条规矩
+            let Ok(entry) = entry else { continue };
+            let name = entry.file_name().to_string_lossy().into_owned();
+
+            // file_type() 不跟随符号链接：链接看到的就是链接本身
+            let Ok(ft) = entry.file_type() else { continue };
+            let kind = if ft.is_dir() { "dir" } else { "file" };
+
+            nodes.push(DirEntry {
+                name,
+                path: self.rel_path(&entry.path())?,
+                kind: kind.to_string(),
+                is_symlink: ft.is_symlink(),
+            });
+        }
+
+        // 排序口径和 walk 一字不差（目录在前、忽略大小写、再按原文定胜负）
+        nodes.sort_by(|a, b| {
+            let (a_dir, b_dir) = (a.kind == "dir", b.kind == "dir");
+            b_dir
+                .cmp(&a_dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        Ok(nodes)
+    }
+
+    /// 文件预览：文本 / 二进制 / 超限 三态。
+    ///
+    /// # 两条顺序上的硬要求
+    ///
+    /// * **先 stat 再谈读**：不是普通文件（目录、FIFO、设备）直接拒 ——
+    ///   读到 FIFO 会**永久阻塞**（HANDOFF 那条「界面假死」的教训）；
+    ///   超过上限的文件也不许先读进内存再判断大小。
+    /// * 上限判断在**读之前**，所以这条路上没有任何截断逻辑 ——
+    ///   「多字节文字被切成半个字符」这类问题在源头就不存在。
+    pub fn read_preview(&self, rel: &str) -> Result<Preview, CoreError> {
+        let path = self.resolve(rel)?;
+
+        // resolve 已经把符号链接规范化过了（跳出去的在上一行就报错），这里
+        // 再用 symlink_metadata 是纵深防御（写作时路径理论上不含链接分量）
+        let meta = fs::symlink_metadata(&path).map_err(|e| {
+            // 「文件不在了」是浏览时最常见的一种正常变化（agent 刚删/改过），
+            // 单独给 NotFound —— 前端要靠它说一句人话（「文件不在了，刷新一下」），
+            // 而不是弹一个带系统路径的 IO 错误
+            if e.kind() == io::ErrorKind::NotFound {
+                CoreError::NotFound {
+                    path: rel.to_string(),
+                }
+            } else {
+                CoreError::io(&path, e)
+            }
+        })?;
+        if !meta.is_file() {
+            return Err(CoreError::WrongKind {
+                path: rel.to_string(),
+                reason: "不是普通文件",
+            });
+        }
+
+        let size = meta.len();
+        if size > PREVIEW_MAX_BYTES {
+            return Ok(Preview::TooLarge { size });
+        }
+
+        let bytes = fs::read(&path).map_err(|e| CoreError::io(&path, e))?;
+        // NUL 先判（git 同款启发式）：二进制文件里塞一段合法 UTF-8 很常见，
+        // 反过来不成立 —— 先过 NUL 这关，`from_utf8` 只是兜底
+        if bytes.contains(&0) {
+            return Ok(Preview::Binary);
+        }
+        match String::from_utf8(bytes) {
+            Ok(text) => Ok(Preview::Text { text }),
+            Err(_) => Ok(Preview::Binary),
+        }
     }
 
     /// 读取文本文件。

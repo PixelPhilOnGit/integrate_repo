@@ -534,6 +534,118 @@ input[type='radio'] {
   border: none;
 }
 
+/* 隐藏项（.env / .git 这类）画得暗一点 —— 列目录不过滤它们，只影响外观 */
+.rd-tree-row.is-hidden .rd-tree-name {
+  color: var(--muted);
+}
+
+/* ------------------------------------------- 文件浏览器（智能体会话检查器） */
+
+.rd-explorer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.rd-explorer-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-explorer-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-explorer-tree {
+  flex: 1;
+  min-height: 60px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.rd-explorer-symlink {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/*
+ * 树和预览之间的分界线。
+ * ⚠️ 它是**拖拽目标**，命中区不能小 —— 7px 和 `.rd-slot-handle` 对齐
+ * （ui-regressions 里按「拖拽目标 ≥6px」钉着这一条）。
+ */
+.rd-explorer-split {
+  height: 7px;
+  flex: none;
+  cursor: row-resize;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-explorer-split:hover {
+  background: var(--accent-soft);
+}
+
+.rd-explorer-preview {
+  flex: 0 0 45%;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.rd-explorer-preview-head {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* 文本预览：单色 + 保留空白（和接口调试的响应体同一个姿态，也刻意没上高亮） */
+.rd-explorer-text {
+  flex: 1;
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+
+.rd-explorer-note {
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+/* 面板底部的安静状态行（列目录/打开失败）—— 和错误条区分开：那是外壳级的 */
+.rd-explorer-status {
+  flex: none;
+  padding: 5px 10px;
+  font-size: 11px;
+  color: var(--danger);
+  border-top: 1px solid var(--border);
+}
+
 /* ------------------------------------------------------------- 右键菜单 */
 
 .rd-menu {
@@ -4023,4 +4135,387 @@ body.rd-resizing {
 
 body.rd-resizing * {
   cursor: col-resize !important;
+}
+
+/* ----------------------------------------------- 知识库（2026-10-16） */
+
+.rd-kb-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rd-kb-vault {
+  flex: 1;
+  min-width: 0;
+}
+
+.rd-kb-list {
+  flex: 1;
+  min-height: 80px;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.rd-kb-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.rd-kb-row:hover {
+  background: var(--accent-soft);
+}
+
+.rd-kb-row.is-selected {
+  background: var(--accent-soft);
+}
+
+.rd-kb-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-kb-row-mark {
+  color: var(--muted);
+  flex: none;
+}
+
+/*
+ * 状态点：未评审 = 强调色（要你处理），已评审 = 安静，归档 = 更暗。
+ * 形状用方块而不是圆 —— 和 agents 的会话状态点（圆）区分开，免得混成一个概念。
+ */
+.rd-kb-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--muted);
+}
+
+.rd-kb-dot.is-unreviewed {
+  background: var(--accent);
+}
+
+.rd-kb-dot.is-reviewed {
+  background: var(--border);
+}
+
+.rd-kb-dot.is-archived {
+  opacity: 0.4;
+}
+
+.rd-kb-sources {
+  flex: none;
+  max-height: 40%;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+}
+
+.rd-kb-sources-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.rd-kb-sources-empty {
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.rd-kb-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.rd-kb-source-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* ------- 主区 */
+
+.rd-kb-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.rd-kb-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+
+.rd-kb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 10px 12px;
+  min-height: 96px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.rd-kb-card:hover {
+  border-color: var(--accent);
+}
+
+/* 未评审的卡片：左边一条强调色，一眼看出哪些还没看 */
+.rd-kb-card.is-unreviewed {
+  border-left: 3px solid var(--accent);
+}
+
+.rd-kb-card-title {
+  font-weight: 600;
+}
+
+.rd-kb-card-excerpt {
+  color: var(--muted);
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rd-kb-card-foot {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.rd-kb-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.rd-kb-badge.is-reviewed {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rd-kb-tag {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ------- 阅读器 */
+
+.rd-kb-reader {
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+.rd-kb-reader-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rd-kb-reader-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-kb-reader-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 10px 0 6px;
+}
+
+.rd-kb-reader-meta {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.rd-kb-reader-body {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+/* ------- markdown 正文 */
+
+.rd-kb-md-h {
+  margin: 14px 0 6px;
+}
+
+.rd-kb-md-p {
+  margin: 6px 0;
+  line-height: 1.7;
+}
+
+.rd-kb-md-list {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+
+.rd-kb-md-quote {
+  margin: 8px 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.rd-kb-md-code,
+.rd-kb-seq-raw {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.rd-kb-md-icode {
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.rd-kb-md-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+.rd-kb-md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: text;
+}
+
+.rd-kb-md-wiki {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+/* 断链：点不动的样子 + 虚线红——一眼看出目标不在了 */
+.rd-kb-md-wiki.is-broken {
+  color: var(--danger);
+  text-decoration: line-through dotted;
+}
+
+.rd-kb-md-image {
+  display: inline-block;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-kb-seq {
+  margin: 10px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  overflow: auto;
+}
+
+.rd-kb-seq svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.rd-kb-seq-broken {
+  margin: 10px 0;
+}
+
+/* ------- 生成面板（右下角浮层） */
+
+.rd-kb-gen {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  width: 320px;
+  max-height: 60%;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  padding: 10px 12px;
+}
+
+.rd-kb-gen-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  gap: 8px;
+}
+
+.rd-kb-gen-notes {
+  margin: 6px 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-kb-gen-done {
+  color: var(--accent);
+}
+
+.rd-kb-gen-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.rd-kb-gen-note {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+
+.rd-kb-gen-cli {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0;
 }

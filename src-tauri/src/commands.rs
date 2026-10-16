@@ -21,7 +21,7 @@
 //! 下面每个命令都返回 `Result<T, String>`。失败时 `invoke` 的 Promise 会 reject，
 //! 字符串是已经中文化好的错误文案，前端直接弹出来即可。
 
-use devtoolkit_core::{FileNode, Workspace};
+use devtoolkit_core::{CoreError, DirEntry, FileNode, Preview, Workspace};
 
 /// 打开工作区并把 `CoreError` 转成中文错误串。
 fn with_workspace<T>(
@@ -30,6 +30,20 @@ fn with_workspace<T>(
 ) -> Result<T, String> {
     let ws = Workspace::open(root).map_err(|e| e.to_string())?;
     f(&ws).map_err(|e| e.to_string())
+}
+
+/// 把一段同步的文件操作丢进 blocking 池。
+///
+/// ⚠️ 新加的几条命令一律走它：同步命令跑在 IPC 线程上，而目录可能在网络盘、
+/// 可能有几十万项 —— 把线程拖住就是「界面假死」（HANDOFF 里那条真机教训）。
+pub(crate) fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> impl std::future::Future<Output = Result<T, String>> {
+    async move {
+        tauri::async_runtime::spawn_blocking(f)
+            .await
+            .map_err(|e| format!("文件操作的线程没能跑起来：{e}"))?
+    }
 }
 
 /// 递归列出工作区目录树。只列 `.seq.json` 文件；目录在前、按名称排序。
@@ -84,6 +98,59 @@ pub fn delete_entry(root: String, path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn move_entry(root: String, path: String, new_dir: String) -> Result<String, String> {
     with_workspace(&root, |ws| ws.move_entry(&path, &new_dir))
+}
+
+/// 单层列出目录（文件浏览器的懒加载用）。**不过滤**：隐藏项、任意后缀都列。
+///
+/// 和 `list_tree` 是两条路：那个是图工作区的递归树，这个是「拿用户自己的
+/// 项目目录当浏览对象」（智能体会话的「文件」标签）。见 `Workspace::list_dir`。
+#[tauri::command]
+pub async fn fs_list_dir(root: String, rel: String) -> Result<Vec<DirEntry>, String> {
+    blocking(move || with_workspace(&root, |ws| ws.list_dir(&rel))).await
+}
+
+/// 读文件预览：文本 / 二进制 / 超限（2 MiB）三态。
+///
+/// 先 stat 再谈读（FIFO/设备直接拒、超限不读内容），见 `Workspace::read_preview`。
+#[tauri::command]
+pub async fn fs_read_preview(root: String, rel: String) -> Result<Preview, String> {
+    blocking(move || with_workspace(&root, |ws| ws.read_preview(&rel))).await
+}
+
+/// 用系统默认程序打开工作区里的一个文件或目录（「用系统程序打开」）。
+///
+/// # ⚠️ 这是安全姿势上的**例外之二**，别再加第三个
+///
+/// 和 tasks 那条「参数表里没有路径」的立场不同（见 `task_commands.rs` 头部），
+/// 这里是文件浏览器：路径本来就来自**用户自己选的工作目录**。边界仍然收紧在
+/// `(root, rel)` 上 —— 相对路径 + `Workspace::resolve` 的闸门（拒绝对路径 /
+/// `..` / 符号链接逃逸），换不出工作区外面去。README 的「安全模型」一节
+/// 和 HANDOFF 都有这条（例外之一是 `write_export`）。
+///
+/// 打开本身的命令链（Windows 上 explorer → rundll32 → cmd 的三层退让、
+/// 为什么不再依赖文件名清洗表）在 `open.rs` 的模块头。
+#[tauri::command]
+pub async fn fs_open_path(root: String, rel: String) -> Result<(), String> {
+    let abs = blocking(move || {
+        with_workspace(&root, |ws| {
+            let abs = ws.resolve(&rel)?;
+            // resolve 只保证「在工作区里」，不保证「真的存在」（尾部段落不参与
+            // canonicalize）。交给系统程序之前先确认它在，否则用户得到的是
+            // 「资源管理器弹一句找不到」而不是我们这句人话。
+            let exists = abs
+                .symlink_metadata()
+                .map(|m| m.is_file() || m.is_dir())
+                .unwrap_or(false);
+            if !exists {
+                return Err(CoreError::NotFound { path: rel.clone() });
+            }
+            Ok(abs)
+        })
+    })
+    .await?;
+
+    // 起进程很快（收尸有专门的线程，见 open.rs），出了 blocking 池再调没问题
+    crate::open::open_path(&abs)
 }
 
 /// 导出到工作区**之外**的绝对路径（用户在「另存为」对话框里选的）。

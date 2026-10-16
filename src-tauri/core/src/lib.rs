@@ -14,4 +14,4 @@ mod workspace;
 
 pub use error::CoreError;
 pub use export::write_export;
-pub use workspace::{FileNode, Workspace, DIAGRAM_EXT};
+pub use workspace::{DirEntry, FileNode, Preview, Workspace, DIAGRAM_EXT, PREVIEW_MAX_BYTES};

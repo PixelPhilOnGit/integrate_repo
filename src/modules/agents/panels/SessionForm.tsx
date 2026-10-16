@@ -33,10 +33,11 @@ export function SessionForm({ state, store, now }: Props): ReactNode {
   const workspace =
     session === null ? null : (state.workspaces.find((w) => w.id === session.workspaceId) ?? null);
 
+  // ⚠️ 这里**不再渲染 `.rd-panel` 外壳**：多标签之后外壳归 `AgentsInspector`
+  // 统一提供（`agent-inspector` 这个 testid 也在那边）。这一层再套一层
+  // panel 会嵌成两层 flex 列 + 两条 border-left —— 见 AgentsModule.tsx。
   return (
     <>
-      <div className="rd-panel" data-testid="agent-inspector">
-        <div className="rd-panel-body">
           {session === null ? (
             <div className="rd-empty">点左边的一个会话，这里显示它的详情</div>
           ) : (
@@ -149,8 +150,6 @@ export function SessionForm({ state, store, now }: Props): ReactNode {
               </p>
             )}
           </div>
-        </div>
-      </div>
 
       {dialog !== null && (
         <IntegrateDialog
