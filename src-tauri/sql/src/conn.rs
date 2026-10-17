@@ -245,23 +245,34 @@ impl ConnectionRegistry {
     /// 支持一次提交多条语句（`simple_query` 天然支持），结果取**最后一条**产出行的那组，
     /// 前面的影响行数会累加进 `affected`。
     pub async fn query(&self, id: &str, sql: &str) -> Result<QueryResult, SqlError> {
+        self.query_with_cap(id, sql, MAX_ROWS).await
+    }
+
+    /// 同 [`Self::query`]，但行数上限由调用方给（命令层的「再取 1000 行」用；
+    /// 调用方负责过 [`crate::result::clamp_max_rows`]）。
+    pub async fn query_with_cap(
+        &self,
+        id: &str,
+        sql: &str,
+        max_rows: usize,
+    ) -> Result<QueryResult, SqlError> {
         let started = Instant::now();
 
         let result = match self.handle(id)? {
-            HandleRef::Postgres(client) => pg_query(&client, sql).await,
+            HandleRef::Postgres(client) => pg_query(&client, sql, max_rows).await,
             HandleRef::Mysql(conn) => {
                 // 锁在 send 之前拿、答案回来之后放。`AsyncMutexGuard` 是 Send，
                 // 跨 await 持有不会让 future 变成非 Send
                 let mut guard = conn.lock().await;
-                my_query(&mut guard, sql).await
+                my_query(&mut guard, sql, max_rows).await
             }
             // ⚠️ Mongo 这条路上 `sql` 其实是**那段 JSON 命令**（见模块头），
             // 而默认库要从这条连接的配置里拿
             HandleRef::Mongodb(client) => {
                 let default_db = self.config(id).ok().and_then(|c| c.database);
-                crate::mongo::query(&client, sql, default_db.as_deref()).await
+                crate::mongo::query(&client, sql, default_db.as_deref(), max_rows).await
             }
-            HandleRef::Clickhouse(client) => crate::clickhouse::query(&client, sql).await,
+            HandleRef::Clickhouse(client) => crate::clickhouse::query(&client, sql, max_rows).await,
         };
 
         match result {
@@ -527,6 +538,7 @@ async fn my_scalar(conn: &mut mysql_async::Conn, sql: &str) -> Option<String> {
 async fn pg_query(
     client: &tokio_postgres::Client,
     sql: &str,
+    max_rows: usize,
 ) -> Result<QueryResult, Failure> {
     // 列信息要**单独问一次**：简单查询协议返回的 `SimpleColumn` 只有列名、没有类型，
     // 而且**零行的 SELECT 连 RowDescription 都不给** —— 那种情况下什么列都拿不到。
@@ -570,7 +582,7 @@ async fn pg_query(
                         })
                         .collect();
                 }
-                if current_rows.len() >= MAX_ROWS {
+                if current_rows.len() >= max_rows {
                     truncated = true;
                     continue;
                 }
@@ -613,7 +625,7 @@ async fn pg_query(
         last_columns
     };
 
-    let truncated = truncated || crate::result::is_truncated(last_rows.len());
+    let truncated = truncated || crate::result::is_truncated(last_rows.len(), max_rows);
 
     Ok(QueryResult {
         columns,
@@ -625,7 +637,11 @@ async fn pg_query(
     })
 }
 
-async fn my_query(conn: &mut mysql_async::Conn, sql: &str) -> Result<QueryResult, Failure> {
+async fn my_query(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    max_rows: usize,
+) -> Result<QueryResult, Failure> {
     use mysql_async::prelude::Queryable;
 
     let mut result = conn.query_iter(sql).await.map_err(classify_mysql)?;
@@ -651,7 +667,7 @@ async fn my_query(conn: &mut mysql_async::Conn, sql: &str) -> Result<QueryResult
     // `Result<Option<Row>>`），不是 `StreamExt::next` —— 所以不用也不能
     // 引入 futures_util::StreamExt，引了反而是个未使用的 import
     while let Some(row) = result.next().await.map_err(classify_mysql)? {
-        if rows.len() >= MAX_ROWS {
+        if rows.len() >= max_rows {
             truncated = true;
             continue;
         }
@@ -672,7 +688,7 @@ async fn my_query(conn: &mut mysql_async::Conn, sql: &str) -> Result<QueryResult
         (columns.is_empty() && n > 0).then_some(n)
     };
 
-    let truncated = truncated || crate::result::is_truncated(rows.len());
+    let truncated = truncated || crate::result::is_truncated(rows.len(), max_rows);
 
     Ok(QueryResult {
         columns,

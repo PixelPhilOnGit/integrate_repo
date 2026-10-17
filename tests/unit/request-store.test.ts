@@ -45,6 +45,7 @@ function harness(): Harness {
   const shell: ShellApi = {
     setStatus: (m) => statuses.push(m ?? ''),
     reportError: (e) => errors.push(e instanceof Error ? e.message : String(e)),
+    openInspector: () => {},
   };
   store.attachShell(shell);
   return {

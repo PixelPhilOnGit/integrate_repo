@@ -11,7 +11,7 @@
 
 import { createChannel, invoke } from '../../../shared/platform/invoke';
 import type { EnvironmentReport, PtyChannelEvent } from '../core/types';
-import type {
+import type { RemoteListOutcome,
   AgentOpenOutcome,
   AgentsClient,
   EnvironmentProbe,
@@ -32,6 +32,11 @@ export function createTauriAgentsClient(): AgentsClient {
   let writes: Promise<unknown> = Promise.resolve();
 
   return {
+
+    async remoteListDirs(payload, path) {
+      return invoke<RemoteListOutcome>('agent_remote_list_dirs', { spec: payload, path });
+    },
+
     async open(request: PtyOpenRequest): Promise<AgentOpenOutcome> {
       // ⚠️ **每次 open 都新建一个通道。** Rust 侧把通道丢掉时会往 JS 发一条
       // `{end: true}`，JS 收到就把 `onmessage` 注销 —— 复用通道对象的话，

@@ -71,6 +71,31 @@ export interface Task {
    * 列表上做的 —— 不同步带上就搜不着。
    */
   attachments: Attachment[];
+  /**
+   * 这条任务下的**待办项**（小清单），按加入顺序。
+   *
+   * 和资料的分工：资料是「要留着的东西」，待办项是**「还差哪几步」**。
+   * 也随 `list()` 一起回来（搜索要能搜到待办文字，同 attachments 的理由）。
+   */
+  todos: TodoItem[];
+}
+
+/**
+ * 一条待办项：任务里的小清单条目（「先改配置」「再跑回归」）。
+ * 和 Rust 侧 `TodoItem` 一一对应。
+ */
+export interface TodoItem {
+  id: string;
+  taskId: string;
+  text: string;
+  done: boolean;
+  /** 毫秒时间戳 */
+  createdAt: number;
+  /**
+   * 勾掉的那一刻；取消勾选会清回 `null` —— 「什么时候干完的」只对真干完的
+   * 有意义，留着过期时间只会骗到回顾的人。
+   */
+  doneAt: number | null;
 }
 
 /** 一条进度记录：什么时候干了什么。回顾时读的就是它 */

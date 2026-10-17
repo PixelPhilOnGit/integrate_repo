@@ -30,8 +30,17 @@
 
 export type SplitDir = 'row' | 'col';
 
+/**
+ * 叶子 = **一列标签页**（2026-10-16 用户拍板：「单个终端不能作为叶子，
+ * 叶子属于窗口，一个窗口可能多个终端」）。
+ *
+ * * `tabs`：这一格里的会话，按加入顺序（标签栏就这么排）
+ * * `active`：当前显示的那个 —— 必须在 `tabs` 里（构造和读盘都保证）
+ *
+ * 布局整体**不落盘**（见 store 的注释），所以这个形状变化没有迁移问题。
+ */
 export type PaneLayout =
-  | { kind: 'leaf'; sessionId: string }
+  | { kind: 'leaf'; tabs: readonly string[]; active: string }
   | { kind: 'split'; dir: SplitDir; ratio: number; a: PaneLayout; b: PaneLayout };
 
 /** 相对比例矩形 */
@@ -59,18 +68,37 @@ export function clampRatio(ratio: number): number {
 }
 
 export function leafPane(sessionId: string): PaneLayout {
-  return { kind: 'leaf', sessionId };
+  return { kind: 'leaf', tabs: [sessionId], active: sessionId };
 }
 
-/** 从左到右、从上到下的顺序列出所有会话 id。也是「下一个 pane」的顺序 */
+/** 从左到右、从上到下、每格按标签顺序列出**所有会话 id** */
 export function panesOf(layout: PaneLayout): string[] {
-  if (layout.kind === 'leaf') return [layout.sessionId];
+  if (layout.kind === 'leaf') return [...layout.tabs];
   return [...panesOf(layout.a), ...panesOf(layout.b)];
 }
 
+/** 「这一格的当前标签」的 id（按几何序）——找邻居、算矩形都以格为单位 */
+export function activePanesOf(layout: PaneLayout): string[] {
+  if (layout.kind === 'leaf') return [layout.active];
+  return [...activePanesOf(layout.a), ...activePanesOf(layout.b)];
+}
+
+/** 某个会话所在的格子（不存在返回 null） */
+export function leafOf(layout: PaneLayout, sessionId: string): Extract<PaneLayout, { kind: 'leaf' }> | null {
+  if (layout.kind === 'leaf') {
+    return layout.tabs.includes(sessionId) ? layout : null;
+  }
+  return leafOf(layout.a, sessionId) ?? leafOf(layout.b, sessionId);
+}
+
 export function hasPane(layout: PaneLayout, sessionId: string): boolean {
-  if (layout.kind === 'leaf') return layout.sessionId === sessionId;
-  return hasPane(layout.a, sessionId) || hasPane(layout.b, sessionId);
+  return leafOf(layout, sessionId) !== null;
+}
+
+/** 格子数（= 矩形数） */
+export function paneCount(layout: PaneLayout): number {
+  if (layout.kind === 'leaf') return 1;
+  return paneCount(layout.a) + paneCount(layout.b);
 }
 
 /**
@@ -88,7 +116,7 @@ export function splitPane(
   before: boolean,
 ): PaneLayout {
   if (root.kind === 'leaf') {
-    if (root.sessionId !== target) return root;
+    if (!root.tabs.includes(target)) return root;
     const fresh = leafPane(newSessionId);
     return {
       kind: 'split',
@@ -114,7 +142,7 @@ export function splitPane(
  */
 export function closePane(root: PaneLayout, sessionId: string): PaneLayout | null {
   if (root.kind === 'leaf') {
-    return root.sessionId === sessionId ? null : root;
+    return root.tabs.includes(sessionId) ? null : root;
   }
 
   // 子节点整块被关掉时，**这一层就没了**，由剩下的那个兄弟代替父节点
@@ -154,19 +182,66 @@ export function setRatio(root: PaneLayout, path: SplitPath, ratio: number): Pane
   return b === root.b ? root : { ...root, b };
 }
 
-/** 把这一块换成显示另一个会话（侧栏点一下就上屏，走这里） */
-export function replacePane(
-  root: PaneLayout,
-  target: string,
-  newSessionId: string,
-): PaneLayout {
+/**
+ * 把会话摆进 `target` 所在的那一格：已经是标签就**激活**它，不是就**加到
+ * 标签栏最后**并激活（侧栏点一下上屏、分屏按钮选「已有的摆旁边」都走这里）。
+ *
+ * （旧名叫 `replacePane` —— 那时一个格子只放得下一个人。）
+ */
+export function showInPane(root: PaneLayout, target: string, sessionId: string): PaneLayout {
   if (root.kind === 'leaf') {
-    return root.sessionId === target ? leafPane(newSessionId) : root;
+    if (!root.tabs.includes(target)) return root;
+    if (root.tabs.includes(sessionId)) {
+      // 无变化要**保持同一引用**（调用方的变更检测靠 a !== root.a 那套）
+      return root.active === sessionId ? root : { ...root, active: sessionId };
+    }
+    return { ...root, tabs: [...root.tabs, sessionId], active: sessionId };
   }
-  const a = replacePane(root.a, target, newSessionId);
+  const a = showInPane(root.a, target, sessionId);
   if (a !== root.a) return { ...root, a };
-  const b = replacePane(root.b, target, newSessionId);
+  const b = showInPane(root.b, target, sessionId);
   return b === root.b ? root : { ...root, b };
+}
+
+/** 激活某一格里的某个标签（该标签必须已经在格子里） */
+export function activateTab(root: PaneLayout, sessionId: string): PaneLayout {
+  if (root.kind === 'leaf') {
+    if (!root.tabs.includes(sessionId) || root.active === sessionId) return root;
+    return { ...root, active: sessionId };
+  }
+  const a = activateTab(root.a, sessionId);
+  if (a !== root.a) return { ...root, a };
+  const b = activateTab(root.b, sessionId);
+  return b === root.b ? root : { ...root, b };
+}
+
+/**
+ * 从格子里摘掉一个标签（标签栏上的 ×）。**会话不杀** —— 它回到侧栏，
+ * 点一下还能上屏（和「关一格 ≠ 关会话」同一条语义）。
+ *
+ * 摘完格子空了就整格关掉（兄弟顶上来），返回 `null` = 这是最后一格。
+ *
+ * 返回 `{ layout, closedPane }`：`closedPane` 让调用方知道要不要重新选焦点
+ * （激活的标签被摘掉时，焦点要落到同格的下一个标签）。
+ */
+export function removeTab(root: PaneLayout, sessionId: string): { layout: PaneLayout | null; closedPane: boolean } {
+  if (root.kind === 'leaf') {
+    if (!root.tabs.includes(sessionId)) return { layout: root, closedPane: false };
+    const tabs = root.tabs.filter((t) => t !== sessionId);
+    if (tabs.length === 0) return { layout: null, closedPane: true };
+    const active = root.active === sessionId ? (tabs[0] ?? sessionId) : root.active;
+    return { layout: { ...root, tabs, active }, closedPane: false };
+  }
+
+  const a = removeTab(root.a, sessionId);
+  if (a.layout === null) return { layout: root.b, closedPane: true };
+  // ⚠️ closedPane 要**沿树传上来**：吞掉它的话调用方以为格子在、
+  // 其实里面的标签已经摘光了（焦点会落在一个不存在的标签上）
+  if (a.layout !== root.a) return { layout: { ...root, a: a.layout }, closedPane: a.closedPane };
+  const b = removeTab(root.b, sessionId);
+  if (b.layout === null) return { layout: root.a, closedPane: true };
+  if (b.layout !== root.b) return { layout: { ...root, b: b.layout }, closedPane: b.closedPane };
+  return { layout: root, closedPane: false };
 }
 
 /**
@@ -177,7 +252,7 @@ export function replacePane(
  */
 export function replaceWith(root: PaneLayout, target: string, next: PaneLayout): PaneLayout {
   if (root.kind === 'leaf') {
-    return root.sessionId === target ? next : root;
+    return root.tabs.includes(target) ? next : root;
   }
   const a = replaceWith(root.a, target, next);
   if (a !== root.a) return { ...root, a };
@@ -259,7 +334,9 @@ export function rectsOf(layout: PaneLayout): Record<string, PaneRect> {
 
 function walk(layout: PaneLayout, rect: PaneRect, out: Record<string, PaneRect>): void {
   if (layout.kind === 'leaf') {
-    out[layout.sessionId] = rect;
+    // 键 = 这一格的**激活标签**：邻居查找、焦点矩形都以「格」为单位，
+    // 而焦点会话永远等于它所在格的激活标签（store 的不变量）
+    out[layout.active] = rect;
     return;
   }
 
@@ -358,9 +435,20 @@ export function parseLayout(raw: unknown, depth = 0): PaneLayout | null {
   const node = raw as Record<string, unknown>;
 
   if (node['kind'] === 'leaf') {
+    // 新形状：tabs + active
+    const tabsRaw = node['tabs'];
+    if (Array.isArray(tabsRaw)) {
+      const tabs = tabsRaw.filter((t): t is string => typeof t === 'string' && t !== '');
+      if (tabs.length === 0 || tabs.length !== tabsRaw.length) return null;
+      if (new Set(tabs).size !== tabs.length) return null;
+      const activeRaw = node['active'];
+      const active = typeof activeRaw === 'string' && tabs.includes(activeRaw) ? activeRaw : (tabs[0] as string);
+      return { kind: 'leaf', tabs, active };
+    }
+    // 兼容单会话的旧形状（layouts 本来不落盘，留着是为了手写的测试夹具）
     const sessionId = node['sessionId'];
     if (typeof sessionId !== 'string' || sessionId === '') return null;
-    return { kind: 'leaf', sessionId };
+    return leafPane(sessionId);
   }
 
   if (node['kind'] === 'split') {

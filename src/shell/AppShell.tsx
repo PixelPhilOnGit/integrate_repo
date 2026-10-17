@@ -15,12 +15,14 @@ import { platform } from '../shared/platform';
 import { ModuleRail } from './ModuleRail';
 import { MODULES, moduleById } from './registry';
 import { ResizableSlot } from './ResizableSlot';
+import { ScenarioControl } from './ScenarioControl';
 import { shellStore } from './shellInstance';
 
 export function AppShell(): ReactNode {
   const shell = useSyncExternalStore(shellStore.subscribe, shellStore.getSnapshot);
   const mod = moduleById(shell.activeModule) ?? MODULES[0];
   const prevId = useRef<string | null>(null);
+  const inspectorOpen = mod !== undefined && shellStore.inspectorOpen(mod.id);
 
   /**
    * 模块的装载/卸载钩子。
@@ -84,10 +86,29 @@ export function AppShell(): ReactNode {
               <Sidebar />
             </ResizableSlot>
             <Main />
-            {Inspector && (
+            {/*
+              检查器**默认折叠**（用户点名要的：「最右侧的展示，最起码默认是
+              折叠的」）。展开态按模块记在偏好里；右边这条窄把手永远在，
+              不然用户找不到「那块东西去哪了」。
+            */}
+            {Inspector && inspectorOpen && (
               <ResizableSlot side="right" moduleId={mod.id}>
                 <Inspector />
               </ResizableSlot>
+            )}
+            {Inspector && (
+              <button
+                type="button"
+                className={`rd-inspector-toggle${inspectorOpen ? ' is-open' : ''}`}
+                data-testid="inspector-toggle"
+                aria-pressed={inspectorOpen}
+                title={inspectorOpen ? '收起检查器' : '展开检查器'}
+                onClick={() => shellStore.setInspectorOpen(mod.id, !inspectorOpen)}
+              >
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M6 4l4 4-4 4" />
+                </svg>
+              </button>
             )}
           </div>
         </div>
@@ -95,6 +116,7 @@ export function AppShell(): ReactNode {
 
       <div className="rd-statusbar">
         <span data-testid="status-text">{shell.status ?? ''}</span>
+        <ScenarioControl />
         <span className="rd-spacer" />
         {StatusItems && <StatusItems />}
       </div>

@@ -144,6 +144,10 @@ export function createTauriPlatform(): Platform {
       await invoke<void>('fs_open_path', { root, rel });
     },
 
+    async applyScenario(name: string): Promise<void> {
+      await invoke<void>('scenario_set', { name });
+    },
+
     async setWindowTitle(title: string): Promise<void> {
       const { getCurrentWindow } = await tauriWindow();
       await getCurrentWindow().setTitle(title);
@@ -155,12 +159,28 @@ export function createTauriPlatform(): Platform {
       const theme = await prefsKv.get<string>('theme');
       const sidePanelWidths = await prefsKv.get<Record<string, number>>('sidePanelWidths');
       const inspectorPanelWidths = await prefsKv.get<Record<string, number>>('inspectorPanelWidths');
+      const scenario = await prefsKv.get<string>('scenario');
+      const scenarios = await prefsKv.get<string[]>('scenarios');
+      const scenarioWorkspaces = await prefsKv.get<Record<string, { recent: string[]; last: string | null }>>(
+        'scenarioWorkspaces'
+      );
+      const inspectorOpen = await prefsKv.get<Record<string, boolean>>('inspectorOpen');
       return {
         recentWorkspaces: Array.isArray(recent) ? recent : [],
         lastWorkspace: typeof last === 'string' ? last : null,
         theme: typeof theme === 'string' ? theme : EMPTY_PREFS.theme,
         sidePanelWidths: readWidths(sidePanelWidths),
         inspectorPanelWidths: readWidths(inspectorPanelWidths),
+        scenario: typeof scenario === 'string' ? scenario : '',
+        scenarios: Array.isArray(scenarios)
+          ? scenarios.filter((x): x is string => typeof x === 'string')
+          : [],
+        scenarioWorkspaces:
+          typeof scenarioWorkspaces === 'object' && scenarioWorkspaces !== null
+            ? scenarioWorkspaces
+            : {},
+        inspectorOpen:
+          typeof inspectorOpen === 'object' && inspectorOpen !== null ? inspectorOpen : {},
       };
     },
 

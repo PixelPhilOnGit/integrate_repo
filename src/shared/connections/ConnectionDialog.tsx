@@ -45,6 +45,11 @@ export interface ConnectionDialogValues {
   host: string;
   port: number;
   username: string;
+  /**
+   * 「本地终端用哪个 shell」（SSH 的本地连接用；别的模块没有这个字段）。
+   * `''` = 平台默认。
+   */
+  localShell?: string;
 }
 
 /** 四个通用字段里，哪几个会画错误提示。 */
@@ -77,6 +82,15 @@ export interface ConnectionDialogProps {
   errors?: Partial<Record<ConnectionDialogField, string>>;
   /** 主机 / 端口 / 用户名那一段画不画。SSH 选「本地终端」时传 `false`。 */
   showMachine?: boolean;
+  /**
+   * 「本地终端用哪个 shell」那一格。**传了才画**（SSH 的本地终端用；
+   * 2026-10-16 用户提的：建的时候就要能选 cmd / PowerShell —— 此前这个选择
+   * 只在建完之后的属性面板里有，等于藏起来了）。
+   *
+   * 选项由模块给（壳不认识「shell 有哪些」），值是受控的
+   * `values.localShell`。
+   */
+  localShellOptions?: ReadonlyArray<{ value: string; label: string }>;
   /**
    * 目录树 + 当前选中的目录 —— 画「所在目录」下拉用。
    * **不传就整格不画**（别的调用方一个字不动）。`ConnectionGroup` 就在
@@ -136,6 +150,7 @@ export function ConnectionDialog({
   onChange,
   errors,
   showMachine = true,
+  localShellOptions,
   groups,
   groupId,
   onGroupChange,
@@ -257,6 +272,27 @@ export function ConnectionDialog({
               （用户报过那个顺序别扭，见 HANDOFF 的目录树那一节）。
               「＋ 新建目录…」是 2026-10-15 体验评审补的：建连接往往正是
               第一次想建目录的时刻，不该逼用户关掉弹框去建 */}
+          {localShellOptions !== undefined && (
+            <label className="rd-field">
+              <span>用哪个 shell</span>
+              <select
+                data-testid={`${p}-local-shell`}
+                value={values.localShell ?? ''}
+                onChange={(e) => onChange({ localShell: e.target.value })}
+              >
+                {localShellOptions.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <p className="rd-hint rd-muted">
+                本地终端在本机起一个 shell。要 cmd 和 PowerShell 各来一个，
+                就建两条本地连接、这里各选各的；建完还能在右边属性面板里改。
+              </p>
+            </label>
+          )}
+
           {groups !== undefined && onGroupChange !== undefined && (
             <label className="rd-field">
               <span>所在目录</span>

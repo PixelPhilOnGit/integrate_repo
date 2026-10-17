@@ -9,10 +9,10 @@
  * 在假实现上通过、到真机上全是 bug —— 这是这个仓库反复踩过的坑。
  */
 
-import type { Attachment, Progress, Task, TaskPatch } from '../core/types';
+import type { Attachment, Progress, Task, TaskPatch, TodoItem } from '../core/types';
 
 export interface TasksClient {
-  /** 全部任务（最近改过的在前，资料内嵌在里面）。Rust 那边排好序 */
+  /** 全部任务（最近改过的在前，资料/待办内嵌在里面）。Rust 那边排好序 */
   list(): Promise<Task[]>;
   create(title: string, body: string): Promise<Task>;
   update(id: string, patch: TaskPatch): Promise<Task>;
@@ -22,6 +22,17 @@ export interface TasksClient {
   progressOf(taskId: string): Promise<Progress[]>;
   /** 记一笔进度（时间由后端给） */
   addProgress(taskId: string, text: string): Promise<Progress>;
+
+  // ---------------------------------------------------------------- 待办项
+
+  /** 加一条待办（空文字会被后端拒） */
+  addTodo(taskId: string, text: string): Promise<TodoItem>;
+  /** 勾/取消勾（取消会把 doneAt 清回去） */
+  setTodoDone(id: string, done: boolean): Promise<TodoItem>;
+  /** 改一条待办的文字 */
+  updateTodoText(id: string, text: string): Promise<TodoItem>;
+  /** 删一条待办 */
+  removeTodo(id: string): Promise<void>;
 
   // ---------------------------------------------------------------- 资料
 

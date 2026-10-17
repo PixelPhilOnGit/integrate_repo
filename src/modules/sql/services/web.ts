@@ -14,6 +14,7 @@ import {
   runFakeMongoQuery,
   runFakeQuery,
 } from '../core/fakeSql';
+import { MAX_ROWS_DEFAULT } from '../core/types';
 import type { QueryResult, ServerInfo, SqlKind, TableInfo } from '../core/types';
 import type { SqlClient } from './types';
 
@@ -84,11 +85,19 @@ export function createWebSqlClient(): SqlClient {
       sessions.delete(id);
     },
 
-    async query(id: string, text: string): Promise<QueryResult> {
+    async query(id: string, text: string, maxRows?: number): Promise<QueryResult> {
       const session = sessionOf(id);
       // 假引擎是同步的，但接口是异步的（真实现要走网络）
       // Mongo 那边传的是 **JSON 查询**而不是 SQL（见 core/query.ts 的说明）
-      return session.kind === 'mongodb' ? runFakeMongoQuery(text) : runFakeQuery(text);
+      const result =
+        session.kind === 'mongodb' ? runFakeMongoQuery(text) : runFakeQuery(text);
+      // 上限：和真实现同一条语义（切片 + truncated 标记）——「再取 1000 行」
+      // 在 e2e/单测里都有得测
+      const cap = maxRows ?? MAX_ROWS_DEFAULT;
+      if (result.rows.length > cap) {
+        return { ...result, rows: result.rows.slice(0, cap), truncated: true };
+      }
+      return result;
     },
 
     async databases(id: string): Promise<string[]> {

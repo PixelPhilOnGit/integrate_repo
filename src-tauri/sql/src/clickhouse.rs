@@ -79,7 +79,7 @@ pub async fn open(config: &ConnectionConfig) -> Result<(Client, ServerInfo), Sql
 ///
 /// **引擎拒绝（表不存在、语法错）算 `Failure::Sql`**，和另外两个引擎一个口径 ——
 /// 见 `conn.rs` 里 `Failure` 的说明。
-pub async fn query(client: &Client, sql: &str) -> Result<QueryResult, Failure> {
+pub async fn query(client: &Client, sql: &str, max_rows: usize) -> Result<QueryResult, Failure> {
     let body = client
         .query(sql)
         .fetch_bytes("JSON")
@@ -89,7 +89,7 @@ pub async fn query(client: &Client, sql: &str) -> Result<QueryResult, Failure> {
         .map_err(classify)?;
 
     let text = String::from_utf8_lossy(&body).into_owned();
-    parse_body(&text)
+    parse_body(&text, max_rows)
 }
 
 /// 取一个标量（版本号这种）。入参是**表达式**，不是整条 SQL。
@@ -203,7 +203,7 @@ fn hint_for_code(code: &str) -> Option<&'static str> {
 /// * **正常 JSON** —— 按 meta + data 建表
 /// * **别的**（比如服务端直接回的一段纯文本）—— 当成引擎错误报出去，
 ///   而不是硬解析成空结果（那会让人以为"查询成功但没数据"）
-pub fn parse_body(body: &str) -> Result<QueryResult, Failure> {
+pub fn parse_body(body: &str, max_rows: usize) -> Result<QueryResult, Failure> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         // DDL / INSERT 走这儿。⚠️ **影响行数报不出来**：ClickHouse 把
@@ -243,7 +243,7 @@ pub fn parse_body(body: &str) -> Result<QueryResult, Failure> {
         // 列顺序以 meta 为准：`data` 里是对象，键的顺序不保证
         let names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
         for item in data {
-            if rows.len() >= MAX_ROWS {
+            if rows.len() >= max_rows {
                 truncated = true;
                 break;
             }
@@ -255,7 +255,7 @@ pub fn parse_body(body: &str) -> Result<QueryResult, Failure> {
         }
     }
 
-    let truncated = truncated || crate::result::is_truncated(rows.len());
+    let truncated = truncated || crate::result::is_truncated(rows.len(), max_rows);
 
     Ok(QueryResult { columns, rows, affected: None, truncated, elapsed_ms: 0, error: None })
 }
@@ -285,7 +285,7 @@ mod tests {
             "rows": 2
         }"#;
 
-        let result = parse_body(body).expect("应当解析成功");
+        let result = parse_body(body, crate::result::MAX_ROWS).expect("应当解析成功");
         // ⚠️ 列顺序按 meta（data 里对象键的顺序不保证），值按列名取
         assert_eq!(result.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "name"]);
         assert_eq!(result.columns[0].type_name, "UInt64");
@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn 空_body_是_ddl_的正常返回() {
         // CREATE TABLE / INSERT 都回空 body —— 不是错误，也不该编影响行数出来
-        let result = parse_body("  \n ").expect("空 body 不该报错");
+        let result = parse_body("  \n ", crate::result::MAX_ROWS).expect("空 body 不该报错");
         assert!(result.columns.is_empty());
         assert!(result.rows.is_empty());
         assert_eq!(result.affected, None, "拿不到影响行数时不能编一个");
@@ -306,7 +306,7 @@ mod tests {
     fn 不是_json_的_body_当引擎错误报出来() {
         // 与其硬解析成"查询成功但没数据"，不如把它当错误 —— 后者会让人
         // 以为表是空的
-        let failure = parse_body("Code: 60. DB::Exception: Table x doesn't exist");
+        let failure = parse_body("Code: 60. DB::Exception: Table x doesn't exist", crate::result::MAX_ROWS);
         assert!(matches!(failure, Err(Failure::Sql(_))));
     }
 
@@ -314,7 +314,7 @@ mod tests {
     fn null_和空串是两回事() {
         let body = r#"{"meta":[{"name":"a","type":"Nullable(String)"},{"name":"b","type":"String"}],
                        "data":[{"a":null,"b":""}]}"#;
-        let result = parse_body(body).expect("解析");
+        let result = parse_body(body, crate::result::MAX_ROWS).expect("解析");
         assert_eq!(result.rows[0][0].text, None, "null 是 SQL 的 NULL");
         assert_eq!(result.rows[0][1].text.as_deref(), Some(""), "空串是空串");
     }
@@ -323,7 +323,7 @@ mod tests {
     fn 数字_数组_嵌套对象都转成文本() {
         let body = r#"{"meta":[{"name":"n","type":"Float64"},{"name":"arr","type":"Array(UInt8)"},{"name":"obj","type":"Map"}],
                        "data":[{"n":1.5,"arr":[1,2],"obj":{"k":"v"}}]}"#;
-        let result = parse_body(body).expect("解析");
+        let result = parse_body(body, crate::result::MAX_ROWS).expect("解析");
         assert_eq!(result.rows[0][0].text.as_deref(), Some("1.5"));
         assert_eq!(result.rows[0][1].text.as_deref(), Some("[1,2]"));
         assert_eq!(result.rows[0][2].text.as_deref(), Some(r#"{"k":"v"}"#));
@@ -334,15 +334,27 @@ mod tests {
         // 服务端少给键（版本差异之类）时，行还是要出来的 —— 少一列比少一行好
         let body = r#"{"meta":[{"name":"a","type":"UInt8"},{"name":"b","type":"UInt8"}],
                        "data":[{"a":1}]}"#;
-        let result = parse_body(body).expect("解析");
+        let result = parse_body(body, crate::result::MAX_ROWS).expect("解析");
         assert_eq!(result.rows[0][0].text.as_deref(), Some("1"));
         assert_eq!(result.rows[0][1].text, None);
     }
 
     #[test]
     fn 没有_meta_的_json_当空表处理而不是崩掉() {
-        let result = parse_body(r#"{"rows": 0}"#).expect("解析");
+        let result = parse_body(r#"{"rows": 0}"#, crate::result::MAX_ROWS).expect("解析");
         assert!(result.columns.is_empty());
         assert!(result.rows.is_empty());
+    }
+
+    #[test]
+    fn 超过上限就停下并标出截断() {
+        // 上限是**调用方给的**（`sql_query` 的 max_rows，夹在 [1, 50000]），
+        // 解析层照着截 —— 多读出来的行既不进内存也不进界面。
+        // 「再取 1000 行」那个按钮就靠 truncated 知道还有没有。
+        let body = r#"{"meta":[{"name":"a","type":"UInt8"}],
+                       "data":[{"a":1},{"a":2},{"a":3}]}"#;
+        let result = parse_body(body, 2).expect("解析");
+        assert_eq!(result.rows.len(), 2);
+        assert!(result.truncated, "被截断要如实标出来，界面才挂得上「再取」按钮");
     }
 }

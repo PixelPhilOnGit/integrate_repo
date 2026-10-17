@@ -55,6 +55,16 @@ export interface RemoteTargetPayload {
   acceptNewHostKey: boolean;
 }
 
+/**
+ * 「列远端目录」的三种结局（和 `agent_commands.rs` 的 `RemoteListOutcome`
+/// 一字对应）。两个信任态是 **`Ok` 变体**：它们是「需要用户做决定」，
+/// 不是「失败了」—— 确认之后把 acceptNewHostKey 带上重发就是重试。
+ */
+export type RemoteListOutcome =
+  | { kind: 'ready'; path: string; parent: string | null; dirs: string[] }
+  | { kind: 'hostKeyUnknown'; algorithm: string; fingerprint: string }
+  | { kind: 'hostKeyMismatch'; expected: string; algorithm: string; actual: string };
+
 export interface PtyOpenRequest {
   /** 会话 id。同时会作为 `DEVTOOLKIT_PANE_ID` 注入进去 */
   id: string;
@@ -101,6 +111,11 @@ export interface EventFile {
 }
 
 export interface AgentsClient {
+  /**
+   * 连一次远端、列一个目录（`path = null` = 主目录）。
+   * 「加远端工作目录」两步向导的第二步用它；浏览器版是假实现（e2e 用）。
+   */
+  remoteListDirs(payload: RemoteTargetPayload, path: string | null): Promise<RemoteListOutcome>;
   /**
    * 起一个会话。
    *

@@ -20,7 +20,7 @@ import {
   removeGroupTree,
   withGroup,
 } from '../../../shared/connections/groups';
-import type { ConnectionGroup } from '../../../shared/connections/types';
+import { ConnectionGroup } from '../../../shared/connections/types';
 import { platform } from '../../../shared/platform';
 import { describeError } from '../../../shared/platform/types';
 import { suggestMongoQuery, suggestSelect } from '../core/query';
@@ -34,6 +34,7 @@ import {
   validateProfile,
   type SqlProfileInit,
 } from '../core/profile';
+import { HARD_MAX_ROWS, MAX_ROWS_DEFAULT } from '../core/types';
 import type {
   QueryResult,
   SqlKind,
@@ -75,6 +76,10 @@ export interface SqlState {
   editor: string;
   /** 上一次执行的结果 */
   result: QueryResult | null;
+  /** 这一次要的上限（「再取 1000 行」会加大它；新查询重置回默认） */
+  maxRows: number;
+  /** 上一次真正跑过的（连接 id + SQL）——「再取」重跑它，不用动编辑器 */
+  lastRun: { id: string; sql: string } | null;
   running: boolean;
   /** 执行历史（最近的在最后），上键回溯用 */
   history: readonly string[];
@@ -89,10 +94,16 @@ export class SqlStore {
   private listeners = new Set<() => void>();
   private state: SqlState;
   private initPromise: Promise<void> | null = null;
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
 
   constructor(private services: SqlServices) {
     this.state = {
+      maxRows: MAX_ROWS_DEFAULT,
+      lastRun: null,
       ready: false,
       profiles: [],
       groups: [],
@@ -122,6 +133,11 @@ export class SqlStore {
   };
 
   getSnapshot = (): SqlState => this.state;
+
+  /** 给界面组件用的一句话反馈（导出成功之类）——走外壳状态栏 */
+  reportStatus(msg: string | null): void {
+    this.shell.setStatus(msg);
+  }
 
   attachShell(shell: ShellApi): void {
     this.shell = shell;
@@ -580,16 +596,48 @@ export class SqlStore {
     }
 
     const id = profile.id;
+    // 新的一次执行：上限重置回默认（上一轮的「再取」不能带过来）
+    void this.runFor(id, sql, { pushHistory: true, maxRows: MAX_ROWS_DEFAULT });
+  }
+
+  /**
+   * 「再取 1000 行」：上限 +1000（到硬顶为止）重跑**上一次的**查询。
+   *
+   * 重跑而不是续传：各家引擎的游标续传语义不一致（OFFSET 在没排序的查询上
+   * 本来就不稳定），而把上限调大重跑是**行为最可预期**的一条路。
+   */
+  fetchMore(): void {
+    const run = this.state.lastRun;
+    const result = this.state.result;
+    if (run === null || result === null || result.truncated !== true || this.state.running) {
+      return;
+    }
+    const next = Math.min(this.state.maxRows + MAX_ROWS_DEFAULT, HARD_MAX_ROWS);
+    if (next === this.state.maxRows) {
+      this.shell.setStatus(`已经取到上限（${HARD_MAX_ROWS} 行）了，再多请收窄查询条件`);
+      return;
+    }
+    void this.runFor(run.id, run.sql, { pushHistory: false, maxRows: next });
+  }
+
+  private async runFor(
+    id: string,
+    sql: string,
+    opts: { pushHistory: boolean; maxRows: number },
+  ): Promise<void> {
     this.set({
       running: true,
       result: null,
       tab: 'result',
-      history: pushHistory(this.state.history, sql),
-      historyIndex: null,
+      maxRows: opts.maxRows,
+      lastRun: { id, sql },
+      ...(opts.pushHistory
+        ? { history: pushHistory(this.state.history, sql), historyIndex: null }
+        : {}),
     });
 
     try {
-      const result = await this.services.client.query(id, sql);
+      const result = await this.services.client.query(id, sql, opts.maxRows);
       // 期间用户可能切走了连接 —— 只认最后那一次的结果
       if (this.state.selectedId !== id) return;
       this.set({ result });

@@ -85,6 +85,13 @@ export interface Cell {
   binary?: boolean;
 }
 
+/**
+ * 一次查询默认取多少行；「再取 1000 行」一次加这么多。
+ * ⚠️ 和 Rust 侧 `MAX_ROWS` / `HARD_MAX_ROWS`（result.rs）**同一个数**，改要一起改。
+ */
+export const MAX_ROWS_DEFAULT = 1000;
+export const HARD_MAX_ROWS = 50_000;
+
 export interface QueryResult {
   columns: ColumnInfo[];
   rows: Cell[][];

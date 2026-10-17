@@ -10,6 +10,7 @@
 
 import { platform } from '../shared/platform';
 import { clampPanelWidth, DEFAULT_PANEL_WIDTH } from '../shared/platform/panelWidths';
+import { validateScenarioName } from '../shared/platform/scenario';
 import { applyTheme, parseThemeChoice, resolveTheme, systemPrefersDark, type ThemeChoice } from './theme';
 import type { ShellApi } from './types';
 
@@ -32,6 +33,16 @@ export interface ShellState {
    */
   sideWidths: Record<string, number>;
   inspectorWidths: Record<string, number>;
+  /** 当前场景（'' = 默认场景，见 `shared/platform/scenario.ts`） */
+  scenario: string;
+  /** 用户建过的场景（当前那个也在里面） */
+  scenarios: string[];
+  /**
+   * 检查器**展开**状态（按模块 id 存）。
+   * ⚠️ 默认是**折叠**（不在表里 = 关着）—— 用户点名要的：
+   * 「最右侧的展示，最起码默认是折叠的」。
+   */
+  inspectorOpen: Record<string, boolean>;
 }
 
 export class ShellStore implements ShellApi {
@@ -49,6 +60,9 @@ export class ShellStore implements ShellApi {
       theme: 'system',
       sideWidths: {},
       inspectorWidths: {},
+      scenario: '',
+      scenarios: [],
+      inspectorOpen: {},
     };
 
     // **默认值在这里就应用**，不等读盘：它要在 React 渲染之前生效，
@@ -122,6 +136,10 @@ export class ShellStore implements ShellApi {
         theme,
         sideWidths: prefs.sidePanelWidths,
         inspectorWidths: prefs.inspectorPanelWidths,
+        // 场景列表/当前场景也在这里一并读回来（同一次偏好读取）
+        scenario: prefs.scenario,
+        scenarios: prefs.scenarios,
+        inspectorOpen: prefs.inspectorOpen,
       });
       this.applyCurrentTheme();
     } catch {
@@ -192,6 +210,74 @@ export class ShellStore implements ShellApi {
     delete inspectorWidths[moduleId];
     this.set({ inspectorWidths });
     void platform.setPrefs({ inspectorPanelWidths: inspectorWidths }).catch(() => undefined);
+  }
+
+  // ---------------------------------------------------------------- 检查器折叠
+
+  /** 这个模块的检查器开着吗。**默认折叠**（不在表里 = 关着） */
+  inspectorOpen(moduleId: string): boolean {
+    return this.state.inspectorOpen[moduleId] ?? false;
+  }
+
+  setInspectorOpen(moduleId: string, open: boolean): void {
+    if (this.inspectorOpen(moduleId) === open) return;
+    const inspectorOpen = { ...this.state.inspectorOpen, [moduleId]: open };
+    this.set({ inspectorOpen });
+    void platform.setPrefs({ inspectorOpen }).catch(() => undefined);
+  }
+
+  /**
+   * `ShellApi` 那一条：把**当前模块**的检查器露出来。
+   *
+   * 模块拿到的是本实例（`onActivate(shellStore)`），所以这里不用再传模块 id ——
+   * 「当前模块」就是外壳自己知道的那一个。只开不收：模块没有权利把用户的
+   * 检查器关掉。
+   */
+  openInspector(): void {
+    this.setInspectorOpen(this.state.activeModule, true);
+  }
+
+  // ---------------------------------------------------------------- 场景
+
+  /**
+   * 切场景：写偏好 + **整窗重载**。
+   *
+   * 为什么用重载而不是「通知各 store 重读」：场景换的是**存储命名空间**
+   * （每个模块的 kv 在构造时就带上了后缀），逐个 store 去写重读逻辑 =
+   * 每个模块都要改一遍、而且漏一个就是「这个模块还停在旧场景的数据上」
+   * 这种静悄悄的错。重载是唯一不用逐模块维护的做法。
+   *
+   * 代价如实告诉用户：本窗口开着的终端/会话会被收掉（重载的孤儿清理那条
+   * 既有语义）。别的窗口不受影响（场景是全局偏好，它们各自切到自己为止）。
+   */
+  async switchScenario(name: string): Promise<void> {
+    if (name === this.state.scenario) return;
+    const label = name === '' ? '默认' : name;
+    const ok = await platform.confirm(
+      `切到场景「${label}」？\n\n这个窗口会重新加载，各模块换成这个场景的数据；` +
+        '本窗口开着的终端 / 会话会被收掉。别的窗口不受影响。',
+      '切换场景'
+    );
+    if (!ok) return;
+    await platform.setPrefs({ scenario: name });
+    window.location.reload();
+  }
+
+  /** 新建场景并直接切过去（建完即用，别让用户点两下）。返回是否成功。 */
+  async createScenario(name: string): Promise<boolean> {
+    const err = validateScenarioName(name);
+    if (err !== null) {
+      this.reportError(err);
+      return false;
+    }
+    if (name === this.state.scenario || this.state.scenarios.includes(name)) {
+      this.reportError(`场景「${name}」已经有了`);
+      return false;
+    }
+    const scenarios = [...this.state.scenarios, name].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+    await platform.setPrefs({ scenarios, scenario: name });
+    window.location.reload();
+    return true;
   }
 }
 

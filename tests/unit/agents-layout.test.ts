@@ -7,6 +7,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  activateTab,
+  activePanesOf,
   clampRatio,
   closePane,
   gridColsFor,
@@ -17,10 +19,12 @@ import {
   MIN_RATIO,
   neighborOf,
   panesOf,
+  leafOf,
   parseLayout,
   rectsOf,
-  replacePane,
+  removeTab,
   replaceWith,
+  showInPane,
   setRatio,
   splitPane,
   type PaneLayout,
@@ -58,8 +62,8 @@ describe('splitPane', () => {
       kind: 'split',
       dir: 'row',
       ratio: 0.5,
-      a: { kind: 'leaf', sessionId: 'A' },
-      b: { kind: 'leaf', sessionId: 'B' },
+      a: leafPane('A'),
+      b: leafPane('B'),
     });
   });
 
@@ -83,8 +87,8 @@ describe('splitPane', () => {
 describe('closePane', () => {
   it('关掉两块中的一块，兄弟节点顶上来（树塌缩成一块）', () => {
     const layout = splitPane(leafPane('A'), 'A', 'row', 'B', false);
-    expect(closePane(layout, 'A')).toEqual({ kind: 'leaf', sessionId: 'B' });
-    expect(closePane(layout, 'B')).toEqual({ kind: 'leaf', sessionId: 'A' });
+    expect(closePane(layout, 'A')).toEqual(leafPane('B'));
+    expect(closePane(layout, 'B')).toEqual(leafPane('A'));
   });
 
   it('关掉嵌套里的中间一块，那一层塌缩，另外两块都还在', () => {
@@ -275,27 +279,122 @@ describe('neighborOf', () => {
   });
 });
 
-describe('panesOf / hasPane / replacePane', () => {
-  it('按从左到右、从上到下的顺序列出', () => {
+describe('panesOf / hasPane / showInPane / 标签', () => {
+  it('按从左到右、从上到下的顺序列出（每格按标签顺序）', () => {
     expect(panesOf(threePanes())).toEqual(['A', 'B', 'C']);
   });
 
-  it('hasPane 认得深层的那一块', () => {
-    const layout = threePanes();
+  it('hasPane 认得深层那一格里的任意标签', () => {
+    const layout = showInPane(threePanes(), 'A', 'X');
     expect(hasPane(layout, 'B')).toBe(true);
+    expect(hasPane(layout, 'X')).toBe(true); // 新加的标签
     expect(hasPane(layout, '不存在')).toBe(false);
   });
 
-  it('replacePane 把这一块换成显示另一个会话，位置不动', () => {
+  it('showInPane 把新会话**加成标签并激活**，格子的位置不动', () => {
     const layout = threePanes();
-    const next = replacePane(layout, 'A', 'X');
-    const rects = rectsOf(next);
-    expect(panesOf(next)).toEqual(['X', 'B', 'C']);
-    expect(rects['X']).toEqual({ x: 0, y: 0, w: 0.5, h: 0.5 });
+    const next = showInPane(layout, 'A', 'X');
+    expect(panesOf(next)).toEqual(['A', 'X', 'B', 'C']);
+    // 矩形以「激活标签」为键：A 那格现在显示的 X
+    expect(rectsOf(next)['X']).toEqual({ x: 0, y: 0, w: 0.5, h: 0.5 });
+    expect(activePanesOf(next)).toEqual(['X', 'B', 'C']);
+  });
+
+  it('showInPane 目标已经在格子里 → 只激活它（不出现第二份）', () => {
+    const layout = showInPane(threePanes(), 'A', 'X');
+    const again = showInPane(layout, 'A', 'X'); // 注意 target 用旧标签 A 定位格子
+    expect(again).toBe(layout);
+  });
+
+  it('showInPane 找不到目标格就原样返回（按钮来自上一帧的时序）', () => {
+    const layout = threePanes();
+    expect(showInPane(layout, '不存在', 'X')).toBe(layout);
+  });
+
+  it('activateTab 换当前显示的标签；不在格里就原样', () => {
+    const layout = showInPane(threePanes(), 'A', 'X');
+    const back = activateTab(layout, 'A');
+    expect(activePanesOf(back)).toEqual(['A', 'B', 'C']);
+    expect(activeTabOf(back)).toBe('A');
+    expect(activateTab(layout, '不存在')).toBe(layout);
+  });
+
+  it('leafOf 找会话所在的格子', () => {
+    const layout = showInPane(threePanes(), 'A', 'X');
+    const leaf = leafOf(layout, 'A');
+    expect(leaf?.tabs).toEqual(['A', 'X']);
+    expect(leafOf(layout, '不存在')).toBeNull();
   });
 });
 
+describe('removeTab（标签上的 ×：收终端不杀会话）', () => {
+  it('摘掉非激活的标签：格子在、active 不动', () => {
+    let layout = showInPane(threePanes(), 'A', 'X'); // A 格里 [A, X]，active=X
+    const r = removeTab(layout, 'A');
+    expect(r.closedPane).toBe(false);
+    expect(leafOf(r.layout!, 'X')?.tabs).toEqual(['X']);
+    expect(activeTabOf(r.layout!)).toBe('X');
+  });
+
+  it('摘掉激活的标签：active 落到同格的下一个（焦点留在这一格）', () => {
+    const layout = showInPane(threePanes(), 'A', 'X'); // active = X
+    const r = removeTab(layout, 'X');
+    expect(r.layout).not.toBeNull();
+    expect(leafOf(r.layout!, 'A')?.active).toBe('A');
+    expect(activeTabOf(r.layout!)).toBe('A');
+  });
+
+  it('摘光一格的标签：整格关掉、兄弟顶上来', () => {
+    const layout = splitPane(leafPane('A'), 'A', 'row', 'B', false);
+    const r = removeTab(layout, 'A');
+    expect(r.closedPane).toBe(true);
+    expect(r.layout).toEqual(leafPane('B'));
+  });
+
+  it('摘掉嵌套里的整格：那一层塌缩，别的格子都还在', () => {
+    const r = removeTab(threePanes(), 'A');
+    expect(r.closedPane).toBe(true);
+    expect(panesOf(r.layout!)).toEqual(['B', 'C']);
+  });
+
+  it('最后一块摘光返回 null —— 调用方显示空态', () => {
+    const r = removeTab(leafPane('A'), 'A');
+    expect(r.layout).toBeNull();
+    expect(r.closedPane).toBe(true);
+  });
+
+  it('摘一个不存在的标签：原样返回', () => {
+    const layout = threePanes();
+    const r = removeTab(layout, '不存在');
+    expect(r.layout).toBe(layout);
+    expect(r.closedPane).toBe(false);
+  });
+});
+
+/** 测试用：第一格的激活标签 */
+function activeTabOf(layout: PaneLayout): string {
+  return activePanesOf(layout)[0]!;
+}
+
 describe('parseLayout', () => {
+  it('往返（含多标签的格子）：写出去再读回来是一样的', () => {
+    const layout = showInPane(threePanes(), 'A', 'X');
+    const round = parseLayout(JSON.parse(JSON.stringify(layout)));
+    expect(round).toEqual(layout);
+  });
+
+  it('新形状：tabs 里有重复、或 active 不在 tabs 里都处理得住', () => {
+    expect(parseLayout({ kind: 'leaf', tabs: ['A', 'A'], active: 'A' })).toBeNull();
+    // active 不在 tabs 里 = 坏数据 → 回退第一个标签（读得出来比读错强）
+    const leaf = parseLayout({ kind: 'leaf', tabs: ['A', 'B'], active: 'X' });
+    expect(leaf).toEqual({ kind: 'leaf', tabs: ['A', 'B'], active: 'A' });
+    expect(parseLayout({ kind: 'leaf', tabs: [], active: '' })).toBeNull();
+  });
+
+  it('兼容旧的单会话叶子形状（手写夹具还在用）', () => {
+    expect(parseLayout({ kind: 'leaf', sessionId: 'A' })).toEqual(leafPane('A'));
+  });
+
   it('往返：写出去再读回来是一样的', () => {
     const layout = threePanes();
     const round = parseLayout(JSON.parse(JSON.stringify(layout)));

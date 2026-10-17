@@ -24,4 +24,4 @@ mod result;
 
 pub use conn::{ConnectionConfig, ConnectionRegistry, ServerInfo, SqlKind, TableInfo, CONNECT_TIMEOUT};
 pub use error::SqlError;
-pub use result::{Cell, ColumnInfo, QueryResult, MAX_ROWS};
+pub use result::{clamp_max_rows, Cell, ColumnInfo, QueryResult, HARD_MAX_ROWS, MAX_ROWS};

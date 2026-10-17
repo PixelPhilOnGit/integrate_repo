@@ -298,3 +298,35 @@ async fn disconnect_forgets_the_connection() {
     let err = registry.query(ID, "SELECT 1").await.expect_err("断开之后不该能查询");
     assert!(matches!(err, SqlError::NotConnected { .. }), "实际是 {err:?}");
 }
+
+/// 「再取更多」：上限**按调用方给的走**（1000 → 2000 → …），默认路径一个字不变。
+///
+/// 旧的截断测试（`huge_results_are_truncated_and_flagged`）钉的是默认值；
+/// 这一条钉的是**上限可调**——用户提的「有的可能有很多的没展示全」的落点。
+#[tokio::test]
+async fn 上限按调用方给的走_再取更多就是把它调大() {
+    let registry = connected().await;
+
+    let small = registry
+        .query_with_cap(ID, "SELECT generate_series(1, 30) AS n", 10)
+        .await
+        .unwrap();
+    assert!(small.error.is_none(), "{:?}", small.error);
+    assert_eq!(small.rows.len(), 10);
+    assert!(small.truncated, "给了 10 的上限，30 行就该标截断");
+
+    let enough = registry
+        .query_with_cap(ID, "SELECT generate_series(1, 30) AS n", 100)
+        .await
+        .unwrap();
+    assert_eq!(enough.rows.len(), 30);
+    assert!(!enough.truncated, "上限够就不该标截断");
+
+    // 默认入口（query）行为不变
+    let def = registry
+        .query(ID, "SELECT generate_series(1, 30) AS n")
+        .await
+        .unwrap();
+    assert_eq!(def.rows.len(), 30);
+    assert!(!def.truncated);
+}

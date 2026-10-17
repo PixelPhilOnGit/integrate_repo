@@ -76,9 +76,135 @@ export function TaskDetail({ task, store, progress }: Props): ReactNode {
           onSave={(body) => void store.patch(task.id, { body })}
         />
 
+        <TodosBox key={`${task.id}-todos`} task={task} store={store} />
+
         <MaterialsBox key={`${task.id}-materials`} task={task} store={store} />
 
         <ProgressBox task={task} store={store} progress={progress} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 待办项：任务里的小清单（「还差哪几步」）。
+ *
+ * 和资料的分工：资料是「要留着的东西」，待办项是**会一样样勾掉的施工步骤**。
+ * 放卡片最上面（描述之下、资料之上）——打开一条「进行中」的任务，第一眼要
+ * 看到的往往是「还差什么」。
+ */
+function TodosBox({ task, store }: { task: Task; store: TasksStore }): ReactNode {
+  const [draft, setDraft] = useState('');
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+
+  const total = task.todos.length;
+  const done = task.todos.filter((t) => t.done).length;
+
+  const submit = (): void => {
+    const text = draft.trim();
+    if (text === '') return;
+    setDraft('');
+    void store.addTodo(text);
+  };
+
+  return (
+    <div className="rd-task-section" data-testid="task-todos">
+      <h4 className="rd-agent-section-title">
+        待办
+        {total > 0 && (
+          <span className="rd-muted rd-task-todo-count" data-testid="task-todos-count">
+            {done}/{total}
+          </span>
+        )}
+      </h4>
+
+      {total === 0 ? (
+        <p className="rd-hint rd-muted" data-testid="task-todos-empty">
+          还差哪几步？一条条加进来，做一样勾一样。
+        </p>
+      ) : (
+        <ul className="rd-task-todos" data-testid="task-todos-list">
+          {task.todos.map((item) =>
+            renaming === item.id ? (
+              <li key={item.id} className="rd-task-todo">
+                <input
+                  className="rd-rename-input"
+                  autoFocus
+                  value={renameDraft}
+                  aria-label="改待办文字"
+                  data-testid={`task-todo-rename-${item.id}`}
+                  onChange={(e) => setRenameDraft(e.target.value)}
+                  onBlur={() => {
+                    const text = renameDraft.trim();
+                    setRenaming(null);
+                    if (text !== '' && text !== item.text) void store.updateTodoText(item.id, text);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    if (e.key === 'Escape') setRenaming(null);
+                    e.stopPropagation();
+                  }}
+                />
+              </li>
+            ) : (
+              <li
+                key={item.id}
+                className={`rd-task-todo${item.done ? ' is-done' : ''}`}
+                data-testid={`task-todo-${item.id}`}
+              >
+                <label className="rd-task-todo-main">
+                  <input
+                    type="checkbox"
+                    checked={item.done}
+                    data-testid={`task-todo-check-${item.id}`}
+                    onChange={(e) => void store.setTodoDone(item.id, e.target.checked)}
+                  />
+                  <span
+                    className="rd-task-todo-text"
+                    title={item.done && item.doneAt !== null ? `${formatTime(item.doneAt)} 勾掉的` : formatTime(item.createdAt)}
+                    onDoubleClick={() => {
+                      setRenaming(item.id);
+                      setRenameDraft(item.text);
+                    }}
+                  >
+                    {item.text}
+                  </span>
+                </label>
+                {item.done && item.doneAt !== null && (
+                  <span className="rd-mono rd-muted rd-task-todo-time">{formatTime(item.doneAt)}</span>
+                )}
+                <button
+                  type="button"
+                  className="rd-btn rd-task-todo-del"
+                  data-testid={`task-todo-del-${item.id}`}
+                  title="删掉这条待办"
+                  onClick={() => void store.deleteTodo(item.id)}
+                >
+                  ×
+                </button>
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+
+      <div className="rd-task-todo-add">
+        <input
+          className="rd-task-todo-input"
+          data-testid="task-todo-input"
+          value={draft}
+          placeholder="加一条待办，回车"
+          aria-label="加一条待办"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') submit();
+            e.stopPropagation();
+          }}
+        />
+        <button type="button" className="rd-btn" data-testid="task-todo-add" onClick={submit}>
+          加上
+        </button>
       </div>
     </div>
   );

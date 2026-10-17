@@ -17,6 +17,8 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('app-shell')).toBeVisible();
   await page.getByTestId('module-tasks').click();
   await expect(page.getByTestId('task-sidebar')).toBeVisible();
+  // 检查器默认折叠之后，「标完成」这些在检查器里的控件要先点开
+  await openInspector(page);
 });
 
 /** 侧栏里某一行的标题（按 id 选不稳，id 是随机生成的） */
@@ -30,6 +32,16 @@ function materials(page: Page) {
 }
 
 /** 建一条任务并把标题改成 `title`（标题框是自动聚焦的） */
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
 async function newTask(page: Page, title: string): Promise<void> {
   await page.getByTestId('task-new').click();
   const titleBox = page.getByTestId('task-title');
@@ -304,4 +316,51 @@ test('资料：挂文件 → 缩略图 → 点开大图 → 文件名也进搜�
   await item.locator('[data-testid^="task-material-remove-"]').click();
   await expect(item).toHaveCount(0);
   await expect(page.getByTestId('task-materials-empty')).toBeVisible();
+});
+
+test('待办项：加、勾、取消勾、改文字、删（清单一条条走完）', async ({ page }) => {
+  await newTask(page, '上线前的检查');
+
+  // 空态在
+  await expect(page.getByTestId('task-todos-empty')).toBeVisible();
+
+  // 加两条（回车提交）
+  const input = page.getByTestId('task-todo-input');
+  await input.fill('先改配置');
+  await input.press('Enter');
+  await input.fill('再跑回归');
+  await input.press('Enter');
+
+  const todos = page.locator('li[data-testid^="task-todo-"]');
+  await expect(todos).toHaveCount(2);
+  await expect(page.getByTestId('task-todos-count')).toHaveText('0/2');
+
+  // 勾掉第一条：计数变、文字带删除线（class is-done）
+  const first = todos.filter({ hasText: '先改配置' });
+  await first.locator('input[type="checkbox"]').check();
+  await expect(page.getByTestId('task-todos-count')).toHaveText('1/2');
+  await expect(first).toHaveClass(/is-done/);
+
+  // 取消勾选：回到 0/2（doneAt 由后端清掉，界面上就是回到没勾的样子）
+  await first.locator('input[type="checkbox"]').uncheck();
+  await expect(page.getByTestId('task-todos-count')).toHaveText('0/2');
+  await expect(first).not.toHaveClass(/is-done/);
+
+  // 双击改文字
+  await first.getByText('先改配置').dblclick();
+  const rename = page.locator('[data-testid^="task-todo-rename-"]');
+  await rename.fill('先改好配置');
+  await rename.press('Enter');
+  await expect(todos.filter({ hasText: '先改好配置' })).toHaveCount(1);
+
+  // 删一条
+  const second = todos.filter({ hasText: '再跑回归' });
+  await second.locator('button').click();
+  await expect(todos).toHaveCount(1);
+  await expect(page.getByTestId('task-todos-count')).toHaveText('0/1');
+
+  // 搜索能搜到待办里的词（「那条要改配置的任务」）
+  await page.getByTestId('task-search').fill('改好配置');
+  await expect(rows(page)).toHaveCount(1);
+  await page.getByTestId('task-search').fill('');
 });

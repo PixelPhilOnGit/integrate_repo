@@ -70,7 +70,11 @@ export class TasksStore {
   };
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
 
   constructor() {
     // 订上「会话结束了」那条通知（派出去的任务要往进度里回写一笔）。
@@ -171,6 +175,50 @@ export class TasksStore {
       await tasksClient.addProgress(id, text);
       await this.loadProgress(id);
       // 记一笔会顶起 updated_at（列表按它排）—— 重新读一遍让顺序对上
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  // -------------------------------------------------------------- 待办项
+  //
+  // 和资料同一套路：动完 `reload()`，界面从选中那条任务上自然读到新数据。
+  // 勾选是**最高频**的交互（比加资料频繁得多），所以这里不做乐观更新也不
+  // 转圈：本地假实现和真库都是毫秒级，`reload()` 一趟就回来了。
+
+  async addTodo(text: string): Promise<void> {
+    const id = this.state.selectedId;
+    if (id === null) return;
+    try {
+      await tasksClient.addTodo(id, text);
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  async setTodoDone(todoId: string, done: boolean): Promise<void> {
+    try {
+      await tasksClient.setTodoDone(todoId, done);
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  async updateTodoText(todoId: string, text: string): Promise<void> {
+    try {
+      await tasksClient.updateTodoText(todoId, text);
+      await this.reload();
+    } catch (e) {
+      this.shell.reportError(e);
+    }
+  }
+
+  async deleteTodo(todoId: string): Promise<void> {
+    try {
+      await tasksClient.removeTodo(todoId);
       await this.reload();
     } catch (e) {
       this.shell.reportError(e);

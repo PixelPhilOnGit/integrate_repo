@@ -97,6 +97,9 @@ function runAction(action: ShortcutAction): void {
     }
     case 'show-files':
       explorerStore.setTab('files');
+      // 顺带把检查器请出来：标签在里面，而检查器**默认折叠** ——
+      // 少了这一句，按键看着毫无反应（回归：这条被 e2e 抓过）
+      agentsStore.revealInspector();
       return;
   }
 }

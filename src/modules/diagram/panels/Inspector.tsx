@@ -295,8 +295,8 @@ function PropsTab({ state, store }: InspectorProps): ReactNode {
           {endMsg ? `绑定在 ${labelOf(a.endMessageId)}` : '自动延伸到下一条激活条'}。
         </p>
         <p className="rd-hint">
-          起止都跟着消息走 —— 拖动消息它会自动跟随。也可以直接**拖激活条的下边缘**
-          来截断，拖到最下面会恢复自动延伸。
+          起止都跟着消息走 —— 拖动消息它会自动跟随。也可以直接
+          <strong>拖激活条的下边缘</strong>来截断，拖到最下面会恢复自动延伸。
         </p>
 
         <h4>分段执行</h4>

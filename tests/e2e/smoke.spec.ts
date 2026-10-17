@@ -13,6 +13,9 @@ test('应用能加载，并且自动打开工作区里的第一张图', async ({
   // 种子工作区里有一张「示例」图，应当被自动打开
   await expect(page.getByTestId('status-text')).toHaveText('');
   await expect(page.getByTestId('file-tree')).toBeVisible();
+  // 检查器默认折叠（v0.16.0）：把手在，点开之后面板才出现
+  await expect(page.getByTestId('inspector-toggle')).toBeVisible();
+  await page.getByTestId('inspector-toggle').click();
   await expect(page.getByTestId('inspector')).toBeVisible();
 
   // 画布上应该真的画出了参与者

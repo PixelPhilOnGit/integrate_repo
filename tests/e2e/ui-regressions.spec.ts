@@ -11,6 +11,17 @@
  */
 import { expect, test, type Page } from '@playwright/test';
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
   await page.goto('/');
@@ -93,6 +104,7 @@ test('小控件的命中区：箭头/抓手/⋯/清空，点偏几像素仍然�
   // 连接树：折叠箭头 + 拖拽抓手（要连上，行里才有库列表和抓手）
   await page.getByTestId('module-redis').click();
   await page.getByTestId('redis-main').waitFor();
+  await openInspector(page); // 连接属性在检查器里
   await page.getByTestId('btn-new-connection').click();
   await page.getByTestId('redis-new-confirm').click();
   await page.getByTestId('btn-conn-toggle').click();
@@ -113,6 +125,7 @@ test('小控件的命中区：箭头/抓手/⋯/清空，点偏几像素仍然�
   // sql 引擎分组头的「＋」和目标 —— 和 agents 的加号共用一套几何
   await page.getByTestId('module-sql').click();
   await page.getByTestId('sql-main').waitFor();
+  await openInspector(page);
   await page.getByTestId('btn-new-sql-connection').click();
   await page.getByTestId('sql-new-confirm').click();
   await page.getByTestId('btn-sql-conn-toggle').click();
@@ -159,6 +172,7 @@ test('弹框的焦点圈与回车语义（回归：Tab 曾走出弹框、一次�
   //     BODY 上，Tab 两下再回车能把底下的模块切走
   await page.getByTestId('module-ssh').click();
   await page.getByTestId('ssh-main').waitFor();
+  await openInspector(page); // 密码那一格在检查器里
   await page.getByTestId('ssh-btn-new').click();
   await page.getByTestId('ssh-new-confirm').click();
   await page.getByTestId('ssh-field-password').fill('secret');
@@ -176,6 +190,7 @@ test('弹框的焦点圈与回车语义（回归：Tab 曾走出弹框、一次�
   // (c) 助手审批：焦点进到「允许」；这时按回车 = 允许。
   //     此前焦点留在刚点过的按钮上（它已经变成「停止」），一次回车把整轮对话铡了
   await page.getByTestId('module-assistant').click();
+  await openInspector(page);
   await page.getByTestId('assistant-inspector').waitFor();
   await page.getByTestId('assistant-key-input').fill('sk-test');
   await page.getByTestId('assistant-key-save').click();
@@ -203,6 +218,7 @@ test('文件浏览器：刷新按钮命中区、分界线够宽、标签不矮',
   await page.getByTestId('module-agents').click();
   await page.getByTestId('agent-empty').waitFor();
   await page.getByTestId('agent-add-workspace-empty').click();
+  await openInspector(page); // 「文件」标签在检查器里
   await page.getByTestId('agent-tab-files').click();
   await page.getByTestId('agent-explorer').waitFor();
 

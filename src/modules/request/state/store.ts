@@ -103,7 +103,11 @@ export class RequestStore {
    * 多出几个替换字符。所以每次 `send` 都新建一个。
    */
   private stream: BodyStream | null = null;
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
   private state: RequestState = {
     ready: false,
     draft: newDraft(),

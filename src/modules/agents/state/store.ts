@@ -36,7 +36,11 @@ import {
   leafPane,
   neighborOf,
   rectsOf,
-  replacePane,
+  showInPane,
+  activateTab,
+  hasPane,
+  leafOf,
+  removeTab,
   replaceWith,
   setRatio,
   splitPane,
@@ -233,7 +237,11 @@ export class AgentsStore {
   };
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   /**
    * 每个会话一个 OSC 扫描器。
@@ -288,6 +296,17 @@ export class AgentsStore {
 
   attachShell(shell: ShellApi): void {
     this.shell = shell;
+  }
+
+  /**
+   * 请外壳把检查器露出来（`Ctrl+Shift+F` 那条路）。
+   *
+   * 「文件」标签住在检查器里，而检查器**默认折叠** —— 不请它出来的话，
+   * 用户按了快捷键什么都看不见，只会以为键坏了。这里只转发给外壳：
+   * 检查器的开合是外壳的状态，模块不自己改。
+   */
+  revealInspector(): void {
+    this.shell.openInspector();
   }
 
   private patch(patch: Partial<AgentsState>): void {
@@ -881,8 +900,9 @@ export class AgentsStore {
   /**
    * 新建一个会话并让它上屏。
    *
-   * `split` 给了就往那个方向分屏（新会话在新的一半），没给就**替换当前聚焦
-   * 的那一块** —— 用户刚建的会话应该立刻出现在眼前，而不是悄悄躺在侧栏里。
+   * `split` 给了就往那个方向分屏（新会话在新的一半），没给就**在聚焦那一格
+   * 的标签栏末尾加一个标签并激活**（2026-10-16 起「一格=多个终端」）——
+   * 用户刚建的会话应该立刻出现在眼前，而不是悄悄躺在侧栏里。
    */
   async createSession(
     workspaceId: string,
@@ -1121,7 +1141,9 @@ export class AgentsStore {
     // 当前显示的那一套不该动
     const workspaceId = session.workspaceId;
     const current = this.layoutOf(workspaceId);
-    const layout = current === null ? null : closePane(current, sessionId);
+    // ⚠️ 摘的是**这一个标签**：同一格里别的终端必须活着（旧语义里一格只有
+    // 一个会话，closePane 和 removeTab 是同一件事；现在不是了）
+    const layout = current === null ? null : removeTab(current, sessionId).layout;
     const remaining = this.state.sessions.filter((s) => s.id !== sessionId);
 
     this.setLayout(workspaceId, layout, {
@@ -1223,7 +1245,9 @@ export class AgentsStore {
   /**
    * 把一个会话摆到**它自己那个窗口**里，并把那个窗口切到前面。
    *
-   * `split` 给了就切一块出去，没给就**替换**目标那一块的内容。
+   * `split` 给了就切一块出去（新格子的第一个标签），没给就在目标格子的
+   * 标签栏末尾**加一个标签并激活**；已经在屏幕上（任意格子里）的会话
+   * **只激活**，绝不出现第二份（同一个会话在两地各画一个终端，语义就乱了）。
    */
   putOnScreen(sessionId: string, split: SplitDir | null): void {
     const session = this.sessionById(sessionId);
@@ -1243,11 +1267,31 @@ export class AgentsStore {
       return;
     }
 
+    // 已经在屏幕上：
+    if (hasPane(layout, sessionId)) {
+      if (split === null) {
+        // 只是「看它」——激活它所在的标签（绝不出现第二份）
+        this.setLayout(workspaceId, activateTab(layout, sessionId), show);
+        return;
+      }
+      // 「在右边/下边分屏显示」一个已经在格子里的会话 = 把它**从那一格拆出来**
+      // 单独成格（同格两个标签之间也想并排看时走这里）
+      const { layout: stripped } = removeTab(layout, sessionId);
+      const base = stripped ?? leafPane(sessionId);
+      const target = this.targetPaneIn(workspaceId, base);
+      const next =
+        stripped === null
+          ? base
+          : splitPane(base, target, split, sessionId, false);
+      this.setLayout(workspaceId, next, show);
+      return;
+    }
+
     const target = this.targetPaneIn(workspaceId, layout);
     // 分屏时新的一块永远在右边/下边 —— 界面上按钮写的就是「向右/向下分屏」
     const next =
       split === null
-        ? replacePane(layout, target, sessionId)
+        ? showInPane(layout, target, sessionId)
         : splitPane(layout, target, split, sessionId, false);
     this.setLayout(workspaceId, next, show);
   }
@@ -1294,7 +1338,8 @@ export class AgentsStore {
     await this.createSession(focused.workspaceId, focused.kind, { split: dir });
   }
 
-  /** 把一块从布局里摘掉。**会话不杀**，只是不在屏幕上了 */
+  /** 把**一整格**从布局里摘掉（格标题栏那个 ×）。**会话不杀**，这一格里
+   *  的全部标签一起回侧栏，点一下还能上屏 */
   closePaneFor(sessionId: string): void {
     const session = this.sessionById(sessionId);
     if (session === null) return;
@@ -1308,9 +1353,56 @@ export class AgentsStore {
     });
   }
 
+  /**
+   * 摘掉一个**标签**（标签上的 ×）。会话不杀、格子在（除非它是最后一个标签）。
+   *
+   * 焦点：被摘的就聚焦着的话，落到**同一格**的下一个标签（`removeTab` 里
+   * 把 active 换成 tabs[0]）—— 而不是跳到别的格子去，用户正盯着这一格看。
+   */
+  closeTabFor(sessionId: string): void {
+    const session = this.sessionById(sessionId);
+    if (session === null) return;
+
+    const current = this.layoutOf(session.workspaceId);
+    if (current === null) return;
+
+    const before = leafOf(current, sessionId);
+    const heir = before === null ? null : (before.tabs.find((t) => t !== sessionId) ?? null);
+    const { layout } = removeTab(current, sessionId);
+
+    const focusedId =
+      this.state.focusedId === sessionId
+        ? heir !== null && layout !== null && hasPane(layout, heir)
+          ? heir
+          : this.focusedAfterChange(sessionId, layout)
+        : this.state.focusedId;
+
+    this.setLayout(session.workspaceId, layout, { focusedId });
+  }
+
   focusSession(sessionId: string): void {
     if (this.sessionById(sessionId) === null) return;
     this.patch({ focusedId: sessionId, selectedId: sessionId });
+  }
+
+  /**
+   * 点标签栏里的一个标签：激活它（layout 的 active）+ 把这格设为聚焦。
+   *
+   * 和 [`focusSession`] 的差别：那个只管「焦点给谁」，这个还改布局的
+   * `active`（哪一张标签显示出来）。点标签的语义两个都要。
+   */
+  focusTab(sessionId: string): void {
+    const session = this.sessionById(sessionId);
+    if (session === null) return;
+    const layout = this.layoutOf(session.workspaceId);
+    if (layout === null) return;
+    const next = activateTab(layout, sessionId);
+    if (next !== layout) this.setLayout(session.workspaceId, next);
+    this.patch({
+      focusedId: sessionId,
+      selectedId: sessionId,
+      activeWorkspaceId: session.workspaceId,
+    });
   }
 
   selectSession(sessionId: string | null): void {
@@ -1362,8 +1454,12 @@ export class AgentsStore {
     if (!paneOf(this.layoutOf(session.workspaceId), sessionId)) {
       this.putOnScreen(sessionId, null);
     } else {
+      // ⚠️ 走 `focusTab` 不走 `focusSession`：一格多标签之后，「在屏幕上」可能
+      // 是**后台标签** —— 只设焦点不激活的话，画面上显示的仍是那一格的另一个
+      // 终端，而 store 的「焦点 = 所在格的激活标签」不变量就破了
+      //（e2e 抓的：Ctrl+Shift+U 跳回去之后焦点还在屏幕上原来那个会话上）
       this.setActiveWorkspace(session.workspaceId);
-      this.focusSession(sessionId);
+      this.focusTab(sessionId);
     }
     this.acknowledge(sessionId);
   }
@@ -1440,14 +1536,12 @@ const INTEGRATION_LABEL: Record<IntegrationState, string> = {
 function firstPane(layout: PaneLayout): string {
   let node = layout;
   while (node.kind === 'split') node = node.a;
-  return node.sessionId;
+  return node.active;
 }
 
-/** 这个会话在屏幕上吗 */
+/** 这个会话在屏幕上吗（在任意一格的标签栏里都算） */
 function paneOf(layout: PaneLayout | null, sessionId: string): boolean {
-  if (layout === null) return false;
-  if (layout.kind === 'leaf') return layout.sessionId === sessionId;
-  return paneOf(layout.a, sessionId) || paneOf(layout.b, sessionId);
+  return layout !== null && hasPane(layout, sessionId);
 }
 
 /**

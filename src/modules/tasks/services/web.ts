@@ -25,7 +25,7 @@
  * （真持久化不归这一层管，那是 Rust 集成测试的职责）。
  */
 
-import type { Attachment, Progress, Task, TaskPatch } from '../core/types';
+import type { Attachment, Progress, Task, TaskPatch, TodoItem } from '../core/types';
 import type { TasksClient } from './types';
 
 /** 模块级的一份数据：同一页面里的多次调用共用（和真库一样） */
@@ -91,6 +91,7 @@ export function createWebTasksClient(): TasksClient {
         doneAt: null,
         archived: false,
         attachments: [],
+        todos: [],
       };
       tasks = [...tasks, task];
       return task;
@@ -144,6 +145,67 @@ export function createWebTasksClient(): TasksClient {
       // 真库那边记一笔会顶起 updated_at（列表按它排），这边跟上
       touch(taskId, now);
       return entry;
+    },
+
+    // -------------------------------------------------------------- 待办项
+
+    async addTodo(taskId, text) {
+      const trimmed = text.trim();
+      if (trimmed === '') throw new Error('待办内容不能是空的');
+      const task = tasks.find((t) => t.id === taskId);
+      if (!task) throw new Error(`没有这条记录：${taskId}`);
+
+      const now = Date.now();
+      const item: TodoItem = {
+        id: newId('todo', now),
+        taskId,
+        text: trimmed,
+        done: false,
+        createdAt: now,
+        doneAt: null,
+      };
+      task.todos = [...task.todos, item];
+      touch(taskId, now);
+      return item;
+    },
+
+    async setTodoDone(id, done) {
+      for (const task of tasks) {
+        const item = task.todos.find((t) => t.id === id);
+        if (!item) continue;
+        const now = Date.now();
+        item.done = done;
+        // 取消勾选把 doneAt 清回去（和 Rust 侧一字不差）
+        item.doneAt = done ? now : null;
+        touch(task.id, now);
+        return { ...item };
+      }
+      throw new Error(`没有这条待办：${id}`);
+    },
+
+    async updateTodoText(id, text) {
+      const trimmed = text.trim();
+      if (trimmed === '') throw new Error('待办内容不能是空的');
+      for (const task of tasks) {
+        const item = task.todos.find((t) => t.id === id);
+        if (!item) continue;
+        item.text = trimmed;
+        touch(task.id, Date.now());
+        return { ...item };
+      }
+      throw new Error(`没有这条待办：${id}`);
+    },
+
+    async removeTodo(id) {
+      for (const task of tasks) {
+        const before = task.todos.length;
+        task.todos = task.todos.filter((t) => t.id !== id);
+        if (task.todos.length !== before) {
+          touch(task.id, Date.now());
+          return;
+        }
+      }
+      throw new Error(`没有这条待办：${id}`);
     },
 
     // -------------------------------------------------------------- 资料

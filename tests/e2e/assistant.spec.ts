@@ -12,13 +12,25 @@
  * 真钥匙串的读写要到 Windows / macOS 上手工过一次。
  */
 
-import { expect, test, type Page } from '@playwright/test';
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
+import { expect, test
+, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/');
   await expect(page.getByTestId('app-shell')).toBeVisible();
   await page.getByTestId('module-assistant').click();
+  await openInspector(page);
   await expect(page.getByTestId('assistant-inspector')).toBeVisible();
 });
 
@@ -377,6 +389,9 @@ test('⚠️ 升级：旧版那份配置会被搬过来，一个字段都不丢'
   });
   await page.reload();
   await page.getByTestId('module-assistant').click();
+  // ⚠️ reload 会**再跑一遍** beforeEach 里那条 addInitScript（它清 localStorage），
+  // 所以点击器状态也一并没了 —— 表单在检查器里，这里得重新点开
+  await openInspector(page);
 
   // 那份配置被采纳成第一条（固定 id、名字「默认配置」），字段原样
   await expect(page.getByTestId('assistant-kind')).toHaveValue('openai');

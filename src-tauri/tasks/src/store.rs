@@ -123,6 +123,30 @@ pub struct Task {
     /// 而筛选是对已加载的任务在内存里做的 —— 不同步带上的话，搜索就少一块。
     /// 数量是有界的（每条任务几条），不像进度是流水账，不值得单独一趟往返。
     pub attachments: Vec<Attachment>,
+    /// 这条任务下的**待办项**（小清单），按加入顺序。
+    ///
+    /// 和资料的分工：资料是「要留着的东西」（文档、链接、截图），待办项是
+    /// **「还差哪几步」** —— 一条条勾掉的施工清单。也随 `list()` 一次分组带回
+    /// （同样的理由：搜索要在待办文字里搜，前端筛选是内存里做的）。
+    pub todos: Vec<TodoItem>,
+}
+
+/// 一条**待办项**：任务里的小清单条目（「先改配置」「再跑回归」）。
+///
+/// 单独一张表（`task_todos`）：一对多、要保序、要能单独勾/删 —— 和进度
+/// 记录同一个形状的理由，区别是它**有可变状态**（done）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoItem {
+    pub id: String,
+    pub task_id: String,
+    pub text: String,
+    pub done: bool,
+    /// 毫秒时间戳（记下来的那一刻）
+    pub created_at: i64,
+    /// 勾掉的那一刻；取消勾选会**清回 null** —— 「什么时候干完的」只对
+    /// 真干完的有意义，留着一个过期的完成时间只会骗到回顾的人
+    pub done_at: Option<i64>,
 }
 
 /// 一条资料：一段文字，或者一个文件。
@@ -193,7 +217,20 @@ pub struct TaskStore {
 /// * v1：tasks 表
 /// * v2：归档标记 + 进度记录表
 /// * v3：资料条目表（老备注搬成第一条文字资料，`tasks.note` 列随之删掉）
-const SCHEMA_VERSION: i64 = 3;
+/// * v4：待办项表（任务里的小清单）
+const SCHEMA_VERSION: i64 = 4;
+
+/// 库文件名按**场景**分卷：默认场景是 `tasks.db`（老路径零迁移），
+/// 其余是 `tasks@<场景>.db`。**纯函数**（命令层算路径时用它，测试钉着）。
+///
+/// 场景名不允许含 `@`/路径字符（校验在命令层），所以这里拼不出逃逸路径。
+pub fn db_file_name(scenario: &str) -> String {
+    if scenario.is_empty() {
+        "tasks.db".to_string()
+    } else {
+        format!("tasks@{scenario}.db")
+    }
+}
 
 impl TaskStore {
     /// 开库（不存在就建），并把结构升到当前版本。
@@ -220,11 +257,19 @@ impl TaskStore {
         migrate(&conn)?;
 
         // 文件资料目录：跟着库文件走（见 `files_dir` 的注释）。
+        // ⚠️ 名字从库文件的**主名**推（`tasks.db` → `tasks_files/`；
+        // 场景分卷的 `tasks@团队A.db` → `tasks@团队A_files/`）—— 写死
+        // "tasks_files" 的话，各场景的附件会挤进同一个目录（还能用，但
+        // 「一个场景一个库 + 一个文件夹」这个叙事就破了）。
         // `parent()` 在极端输入（没有父的路径）下给 None，退到当前目录。
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("tasks");
         let files_dir = path
             .parent()
             .unwrap_or_else(|| Path::new("."))
-            .join("tasks_files");
+            .join(format!("{stem}_files"));
 
         Ok(TaskStore { conn, files_dir })
     }
@@ -246,11 +291,13 @@ impl TaskStore {
             out.push(row?);
         }
 
-        // 附件一条 SQL 全查出来再按任务分组，**不是每条任务查一次**（N+1）。
-        // 几百条任务也就几百行附件，一次读完最省事。
-        let mut by_task = self.attachments_by_task()?;
+        // 附件/待办各一条 SQL 全查出来再按任务分组，**不是每条任务查一次**（N+1）。
+        // 几百条任务也就几百行，一次读完最省事。
+        let mut attachments = self.attachments_by_task()?;
+        let mut todos = self.todos_by_task()?;
         for task in &mut out {
-            task.attachments = by_task.remove(&task.id).unwrap_or_default();
+            task.attachments = attachments.remove(&task.id).unwrap_or_default();
+            task.todos = todos.remove(&task.id).unwrap_or_default();
         }
         Ok(out)
     }
@@ -274,9 +321,10 @@ impl TaskStore {
             updated_at: now,
             done_at: None,
             archived: false,
-            // 新任务还没有资料 —— 这里给空，读回来的列表也把它算成空，
+            // 新任务还没有资料/待办 —— 这里给空，读回来的列表也把它算成空，
             // 「建完的对象和读回来的对象相等」这条测试才立得住
             attachments: Vec::new(),
+            todos: Vec::new(),
         };
 
         self.conn.execute(
@@ -679,6 +727,7 @@ impl TaskStore {
                 id: id.to_string(),
             })?;
         task.attachments = self.attachments_of(id)?;
+        task.todos = self.todos_of(id)?;
         Ok(task)
     }
 
@@ -749,6 +798,138 @@ impl TaskStore {
             map.entry(att.task_id.clone()).or_default().push(att);
         }
         Ok(map)
+    }
+
+    // ---------------------------------------------------------------- 待办项
+
+    /// 一条任务下的全部待办项，**按加入顺序**（created_at + rowid 决胜 ——
+    /// 和附件同一个口径：同毫秒连加两条时顺序也要稳定）。
+    pub fn todos_of(&self, task_id: &str) -> Result<Vec<TodoItem>, TaskError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, text, done, created_at, done_at
+             FROM task_todos WHERE task_id = ?1 ORDER BY created_at, rowid",
+        )?;
+        let rows = stmt.query_map(params![task_id], row_to_todo)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    fn todos_by_task(&self) -> Result<HashMap<String, Vec<TodoItem>>, TaskError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, text, done, created_at, done_at
+             FROM task_todos ORDER BY task_id, created_at, rowid",
+        )?;
+        let rows = stmt.query_map([], row_to_todo)?;
+
+        let mut map: HashMap<String, Vec<TodoItem>> = HashMap::new();
+        for row in rows {
+            let item = row?;
+            map.entry(item.task_id.clone()).or_default().push(item);
+        }
+        Ok(map)
+    }
+
+    /// 加一条待办。文字必须非空（空待办项是一行看不见的勾选框）。
+    pub fn add_todo(&self, task_id: &str, text: &str) -> Result<TodoItem, TaskError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(TaskError::BadInput {
+                reason: "待办内容不能是空的".to_string(),
+            });
+        }
+        // 任务得在（外键也会拦，但这里先给一句人话）
+        let _ = self.get_task_row_only(task_id)?;
+
+        let now = now_ms();
+        let item = TodoItem {
+            id: new_id("todo", now),
+            task_id: task_id.to_string(),
+            text: text.to_string(),
+            done: false,
+            created_at: now,
+            done_at: None,
+        };
+        self.conn.execute(
+            "INSERT INTO task_todos (id, task_id, text, done, created_at, done_at)
+             VALUES (?1, ?2, ?3, 0, ?4, NULL)",
+            params![item.id, item.task_id, item.text, item.created_at],
+        )?;
+        self.touch(task_id, now)?;
+        Ok(item)
+    }
+
+    /// 勾/取消勾。取消勾选把 `done_at` **清回 null**（见 `TodoItem` 的注释）。
+    pub fn set_todo_done(&self, id: &str, done: bool) -> Result<TodoItem, TaskError> {
+        let done_at = if done { Some(now_ms()) } else { None };
+        let changed = self.conn.execute(
+            "UPDATE task_todos SET done = ?2, done_at = ?3 WHERE id = ?1",
+            params![id, done as i64, done_at],
+        )?;
+        if changed == 0 {
+            return Err(TaskError::NotFound { id: id.to_string() });
+        }
+        let item = self.todo(id)?;
+        self.touch(&item.task_id, now_ms())?;
+        Ok(item)
+    }
+
+    /// 改文字。
+    pub fn update_todo_text(&self, id: &str, text: &str) -> Result<TodoItem, TaskError> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(TaskError::BadInput {
+                reason: "待办内容不能是空的".to_string(),
+            });
+        }
+        let changed = self
+            .conn
+            .execute("UPDATE task_todos SET text = ?2 WHERE id = ?1", params![id, text])?;
+        if changed == 0 {
+            return Err(TaskError::NotFound { id: id.to_string() });
+        }
+        let item = self.todo(id)?;
+        self.touch(&item.task_id, now_ms())?;
+        Ok(item)
+    }
+
+    /// 删一条待办。
+    pub fn delete_todo(&self, id: &str) -> Result<(), TaskError> {
+        let item = self.todo(id)?;
+        self.conn
+            .execute("DELETE FROM task_todos WHERE id = ?1", params![id])?;
+        self.touch(&item.task_id, now_ms())?;
+        Ok(())
+    }
+
+    fn todo(&self, id: &str) -> Result<TodoItem, TaskError> {
+        self.conn
+            .query_row(
+                "SELECT id, task_id, text, done, created_at, done_at FROM task_todos WHERE id = ?1",
+                params![id],
+                row_to_todo,
+            )
+            .optional()?
+            .ok_or_else(|| TaskError::NotFound {
+                id: id.to_string(),
+            })
+    }
+
+    /// 任务行本身（不带附件/待办）——给「存在性」检查用。
+    fn get_task_row_only(&self, id: &str) -> Result<Task, TaskError> {
+        self.conn
+            .query_row(
+                "SELECT id, title, body, status, created_at, updated_at, done_at, archived
+                 FROM tasks WHERE id = ?1",
+                params![id],
+                row_to_task,
+            )
+            .optional()?
+            .ok_or_else(|| TaskError::NotFound {
+                id: id.to_string(),
+            })
     }
 
     fn attachment_opt(&self, id: &str) -> Result<Option<Attachment>, TaskError> {
@@ -890,6 +1071,22 @@ fn migrate(conn: &Connection) -> Result<(), TaskError> {
         // 列没了才算搬完：从这儿起，「备注」这个概念由资料表接管
         tx.execute_batch("ALTER TABLE tasks DROP COLUMN note;")?;
     }
+
+    if current < 4 {
+        // v3 → v4：待办项表（任务里的小清单）。纯加表，没有要搬的数据。
+        // ⚠️ 外键 ON DELETE CASCADE：删任务时待办跟着走（外键在 open() 里开了）。
+        tx.execute_batch(
+            "CREATE TABLE task_todos (
+                 id         TEXT PRIMARY KEY,
+                 task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                 text       TEXT NOT NULL,
+                 done       INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL,
+                 done_at    INTEGER
+             );
+             CREATE INDEX task_todos_task ON task_todos(task_id, created_at);",
+        )?;
+    }
     tx.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     tx.commit()?;
     Ok(())
@@ -905,8 +1102,20 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         updated_at: row.get(5)?,
         done_at: row.get(6)?,
         archived: row.get::<_, i64>(7)? != 0,
-        // 附件由调用方补上（list 走分组、get 走单查）—— 行映射里不做额外查询
+        // 附件/待办由调用方补上（list 走分组、get 走单查）—— 行映射里不做额外查询
         attachments: Vec::new(),
+        todos: Vec::new(),
+    })
+}
+
+fn row_to_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<TodoItem> {
+    Ok(TodoItem {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        text: row.get(2)?,
+        done: row.get::<_, i64>(3)? != 0,
+        created_at: row.get(4)?,
+        done_at: row.get(5)?,
     })
 }
 

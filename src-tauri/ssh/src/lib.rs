@@ -20,6 +20,7 @@
 //!    也不能把「它以前长什么样」这件事一并勾销。见 [`hostkey::judge`] 的测试。
 
 pub mod error;
+pub mod exec;
 pub mod hostkey;
 pub mod registry;
 pub mod session;
@@ -27,6 +28,7 @@ pub mod session;
 use serde::Serialize;
 
 pub use error::SshError;
+pub use exec::{exec_capture, ExecOutcome, ExecOutput};
 pub use registry::{forward, SshRegistry};
 pub use session::{SshAuth, SshConfig, TerminalEvent};
 

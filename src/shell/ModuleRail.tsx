@@ -13,6 +13,7 @@ import { platform } from '../shared/platform';
 import { shortcutLabel } from '../shared/platform/detect';
 import { ContextMenu, type MenuItem } from '../shared/ui/ContextMenu';
 import { MODULES } from './registry';
+import { ScenarioControl } from './ScenarioControl';
 import { shellStore } from './shellInstance';
 import { resolveTheme, systemPrefersDark, THEME_OPTIONS } from './theme';
 
@@ -39,6 +40,8 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
 
   return (
     <div className="rd-module-rail" data-testid="module-rail">
+      {/* 场景：最左侧的最上方 —— 「今天在团队 1、明天在团队 2」的切换处 */}
+      <ScenarioControl compact />
       <div className="rd-rail-tabs" role="tablist" aria-label="模块">
         {MODULES.map((m, i) => {
           const active = m.id === shell.activeModule;

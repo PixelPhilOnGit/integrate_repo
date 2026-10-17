@@ -20,6 +20,7 @@ mod local_commands;
 mod open;
 mod redis_commands;
 mod request_commands;
+mod scenario_commands;
 mod secret_commands;
 mod sql_commands;
 mod ssh_commands;
@@ -169,6 +170,8 @@ pub fn run() {
             agent_commands::agent_integration_apply,
             agent_commands::agent_integration_revert,
             agent_commands::agent_probe,
+            // 远端目录浏览（添加远端工作目录的两步向导用）
+            agent_commands::agent_remote_list_dirs,
             local_commands::local_open,
             local_commands::local_write,
             local_commands::local_resize,
@@ -181,6 +184,11 @@ pub fn run() {
             task_commands::tasks_delete,
             task_commands::tasks_progress,
             task_commands::tasks_add_progress,
+            // 待办项（任务里的小清单，v4）
+            task_commands::tasks_todo_add,
+            task_commands::tasks_todo_set_done,
+            task_commands::tasks_todo_update_text,
+            task_commands::tasks_todo_delete,
             // 资料（备注的升级版：一条任务挂多条「文字 / 文件」）。
             // 挂文件的对话框在 Rust 侧开、读字节走 `ipc::Response` —— 理由都在
             // task_commands.rs 的头部
@@ -207,6 +215,9 @@ pub fn run() {
 
             // 多窗口：开一个新窗口（label 生成/模块白名单/级联偏移都在那边）
             window_commands::open_window,
+
+            // 场景（存储命名空间）：组合根在渲染前调一次；切换走整窗重载
+            scenario_commands::scenario_set,
 
             // 知识库（vault 文件是真相 + 派生索引 + CLI 生成）。
             // 参数表里只有 vault 名和相对路径 —— 绝对路径全在这层算

@@ -12,7 +12,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { Attachment, Progress, Task, TaskPatch } from '../core/types';
+import type { Attachment, Progress, Task, TaskPatch, TodoItem } from '../core/types';
 import type { TasksClient } from './types';
 
 export function createTauriTasksClient(): TasksClient {
@@ -39,6 +39,24 @@ export function createTauriTasksClient(): TasksClient {
 
     async addProgress(taskId, text) {
       return invoke<Progress>('tasks_add_progress', { taskId, text });
+    },
+
+    // -------------------------------------------------------------- 待办项
+
+    async addTodo(taskId, text) {
+      return invoke<TodoItem>('tasks_todo_add', { taskId, text });
+    },
+
+    async setTodoDone(id, done) {
+      return invoke<TodoItem>('tasks_todo_set_done', { id, done });
+    },
+
+    async updateTodoText(id, text) {
+      return invoke<TodoItem>('tasks_todo_update_text', { id, text });
+    },
+
+    async removeTodo(id) {
+      await invoke<void>('tasks_todo_delete', { id });
     },
 
     // -------------------------------------------------------------- 资料

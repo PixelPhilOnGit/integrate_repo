@@ -16,8 +16,9 @@ import * as cmd from '../core/commands';
 import { createNewDoc } from '../core/samples';
 import { parseDoc, serializeDoc, titleFromFileName } from '../core/schema';
 import { platform } from '../../../shared/platform';
+import { activeScenario } from '../../../shared/platform/scenario';
 import type { FileNode } from '../../../shared/platform/types';
-import { findTreeNode } from '../../../shared/platform/types';
+import { findTreeNode, workspacePrefsPatch, workspaceRecentsOf } from '../../../shared/platform/types';
 import type { ShellApi } from '../../../shell/types';
 import { basename, dirname, stripExt } from '../../../shared/platform/path';
 // 状态/视图模型的类型住在 ../types：视图组件不该为了拿一个类型就 import store，
@@ -54,7 +55,11 @@ export class AppStore {
    *
    * 刻意用注入而不是 import 外壳 —— 模块不该依赖外壳的具体实现。
    */
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
 
   /** 新建图 / 新建文件夹的重入闸：见 `newDiagram` 的注释 */
   private creating = false;
@@ -167,7 +172,8 @@ export class AppStore {
   private async doInit(): Promise<void> {
     try {
       const prefs = await platform.getPrefs();
-      const root = prefs.lastWorkspace;
+      // 上次的工作区按**场景**记（团队 1 和团队 2 的画图目录互不串）
+      const root = workspaceRecentsOf(prefs, activeScenario()).last;
       if (root) {
         await this.openWorkspace(root, { silent: true });
         // 直接打开树里的第一张图，省掉一步点击
@@ -198,8 +204,10 @@ export class AppStore {
     try {
       const tree = await platform.listTree(root);
       const prefs = await platform.getPrefs();
-      const recent = [root, ...prefs.recentWorkspaces.filter((r) => r !== root)].slice(0, 8);
-      await platform.setPrefs({ lastWorkspace: root, recentWorkspaces: recent });
+      const scenario = activeScenario();
+      const before = workspaceRecentsOf(prefs, scenario);
+      const recent = [root, ...before.recent.filter((r) => r !== root)].slice(0, 8);
+      await platform.setPrefs(workspacePrefsPatch(prefs, scenario, { recent, last: root }));
       this.set({ workspaceRoot: root, tree, busy: false });
       if (!opts.silent) this.setStatus(`已打开工作区 ${root}`);
     } catch (e) {

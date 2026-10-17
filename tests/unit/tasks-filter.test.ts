@@ -26,6 +26,7 @@ function task(id: string, patch: Partial<Task> = {}): Task {
     doneAt: null,
     archived: false,
     attachments: [],
+    todos: [],
     ...patch,
   };
 }

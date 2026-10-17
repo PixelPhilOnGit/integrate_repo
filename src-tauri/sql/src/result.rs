@@ -95,6 +95,16 @@ impl QueryResult {
 /// 并在结果里标出来 —— 用户知道被截断了，可以自己加 `LIMIT`。
 pub const MAX_ROWS: usize = 1000;
 
+/// 「再取更多」能加到的**硬顶**：界面上按 1000 一档加，加到这就是头
+/// （不是不想给——万行量级的结果在表格和 CSV 里都还可用，再大就该走
+/// 「在查询里自己写 WHERE/LIMIT」那条路了）。
+pub const HARD_MAX_ROWS: usize = 50_000;
+
+/// 把调用方要的上限夹进 [1, HARD_MAX_ROWS]；没给就用默认的 1000。
+pub fn clamp_max_rows(requested: Option<usize>) -> usize {
+    requested.unwrap_or(MAX_ROWS).clamp(1, HARD_MAX_ROWS)
+}
+
 /// 判断一条引擎错误是不是「连接坏了」而不是「这条 SQL 不对」。
 ///
 /// 两种驱动的错误分类完全不同，所以判定要各写各的 —— 但**形状**是一样的：
@@ -132,8 +142,8 @@ pub fn describe(reason: &str) -> String {
 }
 
 /// 把「行数超上限」的判断收在一处，方便测
-pub fn is_truncated(row_count: usize) -> bool {
-    row_count >= MAX_ROWS
+pub fn is_truncated(row_count: usize, limit: usize) -> bool {
+    row_count >= limit
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@
 
 import { useRef, useState, type ReactNode } from 'react';
 import type { PaneLayout, SplitDir, SplitPath } from '../core/layout';
+import type { AgentSession } from '../core/types';
 import type { AgentsState } from '../state/store';
 import type { AgentsStore } from '../state/store';
 import { PaneFrame } from './PaneFrame';
@@ -43,18 +44,25 @@ function renderNode(
   store: AgentsStore,
 ): ReactNode {
   if (node.kind === 'leaf') {
-    const session = state.sessions.find((s) => s.id === node.sessionId);
+    const active = state.sessions.find((s) => s.id === node.active);
     // 会话没了但布局里还留着它 —— 正常流程下状态机和布局是同步改的，
     // 这里只是兜底：宁可显示一句「这个会话不在了」，也不要整片主区白屏
-    if (session === undefined) return <MissingPane sessionId={node.sessionId} store={store} />;
+    if (active === undefined) return <MissingPane sessionId={node.active} store={store} />;
 
-    const workspace = state.workspaces.find((w) => w.id === session.workspaceId);
+    // 这一格里全部还活着的标签（被杀掉的会在 store 里同步摘走，这里只是兜底）
+    const tabs = node.tabs
+      .map((id) => state.sessions.find((s) => s.id === id))
+      .filter((s): s is AgentSession => s !== undefined);
+
+    const workspace = state.workspaces.find((w) => w.id === active.workspaceId);
     return (
       <PaneFrame
-        key={session.id}
-        session={session}
+        key={active.id}
+        leaf={node}
+        active={active}
+        tabs={tabs}
         workspaceName={workspace?.name ?? ''}
-        focused={session.id === state.focusedId}
+        focused={active.id === state.focusedId}
         store={store}
       />
     );

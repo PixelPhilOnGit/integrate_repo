@@ -63,7 +63,9 @@ export function filterTasks(tasks: readonly Task[], filter: TaskFilter): Task[] 
         (a) =>
           a.text.toLowerCase().includes(needle) ||
           a.fileName.toLowerCase().includes(needle),
-      )
+      ) ||
+      // 待办也搜：「那条要改配置的任务」问的就是待办里的词
+      task.todos.some((t) => t.text.toLowerCase().includes(needle))
     );
   });
 }

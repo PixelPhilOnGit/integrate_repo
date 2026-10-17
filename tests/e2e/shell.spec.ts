@@ -8,7 +8,18 @@
  * 真的成立。如果哪天有人把模块状态塞进外壳，这条会立刻挂。
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
@@ -131,10 +142,36 @@ test('外观切换：三档都能选，而且真的换了颜色', async ({ page 
   await expect(html).toHaveAttribute('data-theme', 'light'); // 这台机器是浅色系统
 });
 
+test('检查器默认折叠，把手能开关、按模块各记各的', async ({ page }) => {
+  // 用户点名要的：「最右侧的展示，最起码默认是折叠的」——新会话/新模块
+  // 一律收起；右边留一条把手（不然用户找不到「那块东西去哪了」）
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('inspector')).toHaveCount(0);
+
+  // 点开
+  await toggle.click();
+  await expect(page.getByTestId('inspector')).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+  // 按模块各记各的：切去别的模块，那边照样是折叠的
+  await page.getByTestId('module-devplaceholder').click();
+  await expect(page.getByTestId('inspector-toggle')).toHaveCount(0); // 占位模块没有检查器
+  await page.getByTestId('module-diagram').click();
+  await expect(page.getByTestId('inspector-toggle')).toHaveAttribute('aria-pressed', 'true');
+
+  // 再点一下收起
+  await page.getByTestId('inspector-toggle').click();
+  await expect(page.getByTestId('inspector')).toHaveCount(0);
+});
+
 test('切走再切回，模块自己的状态不丢（架构关键）', async ({ page }) => {
   // 在顺序图里画一条消息
   await page.getByTestId('btn-add-sync').click();
   await expect(page.locator('[data-message-id]')).toHaveCount(1);
+  // 消息的标签编辑框在检查器里（默认折叠，v0.16.0）
+  await openInspector(page);
   await page.locator('[data-message-id]').first().click();
   await page.getByTestId('message-label').fill('切模块前写的');
 
@@ -239,6 +276,7 @@ test('双击分隔条回到默认宽度', async ({ page }) => {
 });
 
 test('右侧检查器也能拖，方向是反的（往左拖变宽）', async ({ page }) => {
+  await openInspector(page);
   const slot = page.getByTestId('panel-slot-right');
   const handle = page.getByTestId('panel-handle-right');
   const before = (await slot.boundingBox())?.width ?? 0;

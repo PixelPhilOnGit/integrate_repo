@@ -7,6 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  locationCounts,
+  matchesLocation,
   matchesSessionFilter,
   sessionCounts,
   SESSION_FILTERS,
@@ -135,5 +137,35 @@ describe('withPin', () => {
     const next = withPin(ws('a', 'a', true), false);
     expect(next.pinned).toBeUndefined();
     expect(Object.hasOwn(next, 'pinned')).toBe(false);
+  });
+});
+
+describe('位置筛选（本地 / 远端分开）', () => {
+  const local: AgentWorkspace = { id: 'w1', path: '/proj', name: 'proj' };
+  const remote: AgentWorkspace = {
+    id: 'w2',
+    path: '/srv/app',
+    name: 'prod',
+    remoteHost: '10.0.0.9',
+    remotePort: 22,
+    remoteUsername: 'root',
+    remoteAuthKind: 'password',
+  };
+
+  it('all 全过；local/remote 各认各的', () => {
+    expect(matchesLocation(local, 'all')).toBe(true);
+    expect(matchesLocation(remote, 'all')).toBe(true);
+    expect(matchesLocation(local, 'local')).toBe(true);
+    expect(matchesLocation(local, 'remote')).toBe(false);
+    expect(matchesLocation(remote, 'remote')).toBe(true);
+    expect(matchesLocation(remote, 'local')).toBe(false);
+  });
+
+  it('计数按目录算', () => {
+    expect(locationCounts([local, remote, { ...local, id: 'w3' }])).toEqual({
+      all: 3,
+      local: 2,
+      remote: 1,
+    });
   });
 });

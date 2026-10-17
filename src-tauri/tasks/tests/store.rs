@@ -723,3 +723,125 @@ fn v2_的库升到最新_归档和进度都在_老备注搬进资料() {
     let blank = store.get("task_空备注").expect("还在");
     assert!(blank.attachments.is_empty());
 }
+
+// ------------------------------------------------------------------ 待办项（v4）
+
+#[test]
+fn 待办项_加勾取消删_来回都对() {
+    let (_dir, store) = open_temp();
+    let task = store.create("上线", "").expect("建");
+
+    let a = store.add_todo(&task.id, "先改配置").expect("加");
+    let b = store.add_todo(&task.id, "再跑回归").expect("加");
+    assert!(!a.done && a.done_at.is_none());
+
+    // 勾掉 → done_at 落上
+    let a2 = store.set_todo_done(&a.id, true).expect("勾");
+    assert!(a2.done);
+    assert!(a2.done_at.is_some(), "勾掉要记时间");
+
+    // 取消勾选 → done_at **清回去**（「什么时候干完的」只对真干完的有意义）
+    let a3 = store.set_todo_done(&a.id, false).expect("取消");
+    assert!(!a3.done);
+    assert!(a3.done_at.is_none(), "取消勾选要清 done_at，不能留过期时间");
+
+    // 顺序：加入顺序（b 在 a 后面）
+    let listed = store.get(&task.id).expect("读").todos;
+    assert_eq!(listed.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), vec!["先改配置", "再跑回归"]);
+
+    // 删掉一条
+    store.delete_todo(&b.id).expect("删");
+    assert_eq!(store.get(&task.id).expect("读").todos.len(), 1);
+
+    // 空文字不许加
+    assert!(store.add_todo(&task.id, "   ").is_err());
+}
+
+#[test]
+fn 待办项_随_list_分组带回_不留_N1() {
+    let (_dir, store) = open_temp();
+    let t1 = store.create("甲", "").expect("建");
+    let t2 = store.create("乙", "").expect("建");
+    store.add_todo(&t1.id, "甲的第一条").expect("加");
+    store.add_todo(&t2.id, "乙的第一条").expect("加");
+
+    let all = store.list().expect("列");
+    let by_id: std::collections::HashMap<_, _> = all.iter().map(|t| (t.id.clone(), t)).collect();
+    assert_eq!(by_id[&t1.id].todos.len(), 1);
+    assert_eq!(by_id[&t1.id].todos[0].text, "甲的第一条");
+    assert_eq!(by_id[&t2.id].todos.len(), 1);
+}
+
+#[test]
+fn 删任务_待办跟着走_外键级联() {
+    let (_dir, store) = open_temp();
+    let task = store.create("要删的", "").expect("建");
+    store.add_todo(&task.id, "一条").expect("加");
+    store.delete(&task.id).expect("删任务");
+    // 任务没了，待办行也不该在（外键 CASCADE）
+    assert!(store.todos_of(&task.id).expect("查").is_empty());
+}
+
+#[test]
+fn 同毫秒连加两条_顺序稳定() {
+    let (_dir, store) = open_temp();
+    let task = store.create("稳定性", "").expect("建");
+    // 同一毫秒里连加三条：决胜键是 rowid，读回来顺序必须稳定
+    for i in 0..3 {
+        store.add_todo(&task.id, &format!("第 {i} 条")).expect("加");
+    }
+    let first = store.get(&task.id).expect("读").todos;
+    let again = store.get(&task.id).expect("再读").todos;
+    assert_eq!(first, again);
+    assert_eq!(first.len(), 3);
+}
+
+#[test]
+fn v3_库升到_v4_老数据一条不丢_新表能用() {
+    // 手工造一个「v3 时代」的库（带资料表、user_version=3），再用新代码打开
+    let dir = tempfile::tempdir().expect("建临时目录");
+    let path = dir.path().join("tasks.db");
+    let conn = rusqlite::Connection::open(&path).expect("造库");
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE tasks (
+             id         TEXT PRIMARY KEY,
+             title      TEXT NOT NULL,
+             body       TEXT NOT NULL DEFAULT '',
+             status     TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             done_at    INTEGER,
+             archived   INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE TABLE task_progress (
+             id      TEXT PRIMARY KEY,
+             task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             at      INTEGER NOT NULL,
+             text    TEXT NOT NULL
+         );
+         CREATE TABLE task_attachments (
+             id         TEXT PRIMARY KEY,
+             task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+             kind       TEXT NOT NULL,
+             text       TEXT NOT NULL DEFAULT '',
+             file_name  TEXT NOT NULL DEFAULT '',
+             file_size  INTEGER NOT NULL DEFAULT 0,
+             created_at INTEGER NOT NULL
+         );
+         INSERT INTO tasks (id, title, body, status, created_at, updated_at, done_at, archived)
+         VALUES ('task_v3', 'v3 建的', '描述', 'doing', 1000, 2000, NULL, 0);
+         PRAGMA user_version = 3;",
+    )
+    .expect("造 v3 库");
+    drop(conn);
+
+    let store = TaskStore::open(&path).expect("升上来");
+    let task = store.get("task_v3").expect("老任务还在");
+    assert_eq!(task.title, "v3 建的");
+    assert!(task.todos.is_empty(), "老任务没有待办，是空的");
+
+    // 新表立刻能用
+    store.add_todo(&task.id, "升级之后加的").expect("加");
+    assert_eq!(store.get(&task.id).expect("读").todos.len(), 1);
+}

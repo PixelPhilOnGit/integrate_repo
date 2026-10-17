@@ -9,6 +9,17 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
+
 interface VNode {
   name: string;
   kind: 'file' | 'dir';
@@ -36,6 +47,7 @@ async function seedWorkspace(page: Page): Promise<void> {
 async function openFilesTab(page: Page): Promise<void> {
   await page.getByTestId('module-agents').click();
   await page.getByTestId('agent-add-workspace-empty').click();
+  await openInspector(page); // 标签在检查器里，折叠着够不到
   await page.getByTestId('agent-tab-files').click();
   await expect(page.getByTestId('agent-explorer')).toBeVisible();
 }
@@ -51,7 +63,9 @@ test('「文件」默认不展示，点了才出现（用户拍板的形态）',
   await page.getByTestId('module-agents').click();
   await page.getByTestId('agent-add-workspace-empty').click();
 
-  // 默认停在「会话」：文件面板**一点都看不到**
+  // 检查器本身默认折叠（v0.16.0）；点开之后默认停在「会话」：
+  // 文件面板**一点都看不到**
+  await openInspector(page);
   await expect(page.getByTestId('agent-tab-session')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('agent-explorer')).toHaveCount(0);
   // 会话详情还在（老样子）
@@ -119,6 +133,7 @@ test('点会话行（任何路径）把人带回「会话」标签', async ({ pa
   await page.getByTestId('agent-add-workspace-empty').click();
   // 开一个会话再切到文件标签
   await page.getByTestId('agent-new-session-empty').click();
+  await openInspector(page); // 标签在检查器里，折叠着够不到
   await page.getByTestId('agent-tab-files').click();
   await expect(page.getByTestId('agent-explorer')).toBeVisible();
 

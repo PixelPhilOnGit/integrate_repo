@@ -31,8 +31,8 @@ export function createTauriSqlClient(): SqlClient {
       await invoke<void>('sql_disconnect', { id });
     },
 
-    async query(id: string, sql: string): Promise<QueryResult> {
-      return invoke<QueryResult>('sql_query', { id, sql });
+    async query(id: string, sql: string, maxRows?: number): Promise<QueryResult> {
+      return invoke<QueryResult>('sql_query', { id, sql, maxRows });
     },
 
     async databases(id: string): Promise<string[]> {

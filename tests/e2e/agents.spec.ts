@@ -11,6 +11,16 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
 test.beforeEach(async ({ page }) => {
   // 每个用例从干净的工作目录列表开始，否则上一个用例加过的目录会漏过来
   await page.addInitScript(() => localStorage.clear());
@@ -33,6 +43,16 @@ async function focusedId(page: Page): Promise<string> {
 
 /** 在**某个会话的终端**里敲一条命令并回车 */
 async function typeIn(page: Page, sessionId: string, line: string): Promise<void> {
+  // ⚠️ 一格多标签之后（v0.16.0），**后台标签的终端不在 DOM 里**（只有当前
+  // 显示的那个挂上去）——先把它点成当前标签，再敲。真实用户也是这么做的。
+  const tab = page.getByTestId(`agent-tab-${sessionId}`);
+  if ((await tab.count()) > 0) {
+    const cls = (await tab.getAttribute('class')) ?? '';
+    if (!cls.includes('is-active')) {
+      await tab.locator('.rd-agent-tab-main').click();
+      await expect(tab).toHaveClass(/is-active/);
+    }
+  }
   const textarea = page.locator(`[data-testid="agents-term-host-${sessionId}"] textarea`);
   await textarea.focus();
   await page.keyboard.type(line);
@@ -187,6 +207,8 @@ test('⚠️提示里那句「等你确认」是从终端转义序列里读出�
   await typeIn(page, id, 'ask');
 
   await expect(page.getByTestId(`agent-line-${id}`)).toHaveText('等待你的确认');
+  // 「最近的状态变化」在检查器里（默认折叠，v0.16.0）
+  await openInspector(page);
   // 历史里 waiting 只有一条（去抖生效）
   const history = await page.getByTestId('agent-history').textContent();
   expect(history?.match(/需要你/g)?.length).toBe(1);
@@ -331,8 +353,13 @@ test('在别的模块里也能看见「有 agent 在等你」（图标角标）'
 
 test('集成向导：看得见要改哪个文件、能启用、能撤销', async ({ page }) => {
   await newSession(page);
+  // 集成那一栏在检查器里（默认折叠，v0.16.0）
+  await openInspector(page);
 
   await expect(page.getByTestId('agent-int-state-claude')).toHaveText('未启用');
+  // 检查器默认折叠（v0.16.0）——先点开
+  await openInspector(page);
+
   await page.getByTestId('agent-int-open-claude').click();
 
   const dialog = page.getByTestId('agent-integrate-dialog');
@@ -366,6 +393,9 @@ test('配置读不了的时候：说清原因，而且不给「启用」按钮',
   });
 
   await newSession(page);
+  // 检查器默认折叠（v0.16.0）——先点开
+  await openInspector(page);
+
   await page.getByTestId('agent-int-open-claude').click();
 
   await expect(page.getByTestId('agent-int-unusable')).toBeVisible();
@@ -630,6 +660,9 @@ test('环境自检：把应用自己看到的 claude / bash / PATH 列出来', a
   // 而环境是看不见的。这一格就是把它摊开（浏览器版给的是诚实的假报告）
   await newSession(page);
 
+  // 检查器默认折叠（v0.16.0）——先点开
+  await openInspector(page);
+
   await expect(page.getByTestId('agent-env')).toBeVisible();
   await expect(page.getByTestId('agent-env-detail')).toBeVisible();
   await expect(page.getByTestId('agent-env-claude')).toContainText('PATH 里找不到');
@@ -757,44 +790,81 @@ test('工作目录能置顶 —— 常驻的那几个项目排到上面', async 
 
 // ---------------------------------------------------- 远端工作目录
 
-test('加一个远端工作目录：表单填完能出现在侧栏里', async ({ page }) => {
-  // ⚠️ 浏览器版**连不了远端**（没有 SSH 能力），所以这条只验「配置这一路
-  // 走得通」—— 表单、去重、侧栏渲染。真正的连接归桌面版 + 真机（见 HANDOFF）。
+/**
+ * 走完「加远端工作目录」的两步向导：填参数 → 连上（首次要信任指纹）→
+ * 在列出来的目录里点选一个 → 添加。**和真实用户走的是同一条路**。
+ */
+async function addRemoteWorkspace(
+  page: Page,
+  host = '10.0.0.9',
+  pick = 'projects',
+): Promise<void> {
   await page.getByTestId('agent-add-remote').click();
   await expect(page.getByTestId('agent-remote-dialog')).toBeVisible();
 
-  // 什么都没填时「添加」是灰的（别让用户建出一个连不上的空目录）
-  await expect(page.getByTestId('remote-confirm')).toBeDisabled();
+  // 什么都没填时「连上看看」是灰的（别让用户去连一台没填的机器）
+  await expect(page.getByTestId('remote-connect')).toBeDisabled();
 
-  await page.getByTestId('remote-host').fill('10.0.0.9');
+  await page.getByTestId('remote-host').fill(host);
   await page.getByTestId('remote-username').fill('root');
   await page.getByTestId('remote-password').fill('pw');
-  await page.getByTestId('remote-path').fill('/home/me/project');
-  await expect(page.getByTestId('remote-confirm')).toBeEnabled();
-  await page.getByTestId('remote-confirm').click();
+  await expect(page.getByTestId('remote-connect')).toBeEnabled();
+  await page.getByTestId('remote-connect').click();
 
+  // 第一次连这台机器 → 停在「未知指纹」（和会话那套 TOFU 同一语义）
+  await expect(page.getByTestId('remote-trust')).toBeVisible();
+  await page.getByTestId('remote-trust-accept').click();
+
+  // 第二步：它报回来的目录列表（假实现从主目录起步）
+  await expect(page.getByTestId('remote-current-path')).toContainText('/home/tester');
+  await page.getByTestId(`remote-use-${pick}`).click();
+  await expect(page.getByTestId('remote-picked')).toContainText(`/home/tester/${pick}`);
+
+  await page.getByTestId('remote-apply').click();
   await expect(page.getByTestId('agent-remote-dialog')).toHaveCount(0);
+}
+
+test('加一个远端工作目录：两步向导（连上 → 信任 → 点选目录）', async ({ page }) => {
+  await addRemoteWorkspace(page);
 
   const head = page.locator('[data-testid^="agent-ws-head-"]');
   await expect(head).toHaveCount(1);
   // 显示名默认是「主机:目录名」—— 用户一眼看出这是哪台机器上的哪个目录
   await expect(head.first()).toContainText('10.0.0.9');
-  await expect(head.first()).toContainText('project');
+  await expect(head.first()).toContainText('projects');
+  // 「远端」角标在（和本地目录一眼分得开）
+  await expect(page.locator('[data-testid^="agent-ws-remote-"]')).toBeVisible();
 });
 
 test('同一个远端目录加两次只会有一条（不会堆出两个一样的）', async ({ page }) => {
-  const add = async (): Promise<void> => {
-    await page.getByTestId('agent-add-remote').click();
-    await page.getByTestId('remote-host').fill('10.0.0.9');
-    await page.getByTestId('remote-username').fill('root');
-    await page.getByTestId('remote-path').fill('/home/me/project');
-    await page.getByTestId('remote-confirm').click();
-  };
-
-  await add();
-  await add();
-
+  await addRemoteWorkspace(page);
+  await addRemoteWorkspace(page);
   await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
+});
+
+
+test('本地 / 远端分开看：位置档筛选 + 远端角标（用户提的）', async ({ page }) => {
+  // 一个本地（浏览器版 pickWorkspace 给 /工作区）+ 一个远端
+  await page.getByTestId('agent-add-workspace').click();
+  await addRemoteWorkspace(page);
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
+
+  // 位置档的计数：本地 1、远端 1
+  await expect(page.getByTestId('agents-location-all')).toContainText('2');
+  await expect(page.getByTestId('agents-location-remote')).toContainText('1');
+
+  // 只远端：本地那条收起来
+  await page.getByTestId('agents-location-remote').click();
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid^="agent-ws-remote-"]')).toBeVisible();
+
+  // 只本地：远端那条收起来
+  await page.getByTestId('agents-location-local').click();
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(1);
+  await expect(page.locator('[data-testid^="agent-ws-remote-"]')).toHaveCount(0);
+
+  await page.getByTestId('agents-location-all').click();
+  await expect(page.locator('[data-testid^="agent-ws-head-"]')).toHaveCount(2);
 });
 
 test('⚠️ 新建会话时能选工作目录 —— 选哪个就开在哪个里', async ({ page }) => {
@@ -840,4 +910,30 @@ test('⚠️ 新建会话时能选工作目录 —— 选哪个就开在哪个�
     'true',
   );
   await expect(page.locator('.rd-agent-pane')).toHaveCount(0);
+});
+
+test('一格多终端：新建加标签、点标签切换、× 收起不杀会话（用户拍板的模型）', async ({
+  page,
+}) => {
+  const first = await newSession(page);
+  const second = await newSession(page); // 同一格子的第二个标签（＋ 新建 = 加标签）
+
+  const tabs = page.locator('.rd-agent-tabs .rd-agent-tab');
+  await expect(tabs).toHaveCount(2);
+  await expect(page.getByTestId(`agent-tab-${second}`)).toHaveClass(/is-active/);
+
+  // 点第一个标签 → 切过去，终端跟着换（后台标签的终端这时才挂上来）
+  await page.getByTestId(`agent-tab-${first}`).locator('.rd-agent-tab-main').click();
+  await expect(page.getByTestId(`agent-tab-${first}`)).toHaveClass(/is-active/);
+  await expect(page.locator(`[data-testid="agents-term-host-${first}"]`)).toBeVisible();
+
+  // × 收起第二个：标签没了，但会话还在侧栏（进程没杀）——「关一格 ≠ 关会话」的标签版
+  await page.getByTestId(`agent-tab-close-${second}`).click();
+  await expect(tabs).toHaveCount(1);
+  await expandFirst(page);
+  await expect(page.locator(`[data-testid="agent-session-${second}"]`)).toBeVisible();
+
+  // 侧栏点它 → 又回来当标签
+  await page.locator(`[data-testid="agent-session-${second}"]`).click();
+  await expect(page.locator('.rd-agent-tabs .rd-agent-tab')).toHaveCount(2);
 });

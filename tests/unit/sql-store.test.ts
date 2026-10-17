@@ -101,6 +101,7 @@ function harness(
   const shell: ShellApi = {
     setStatus: (msg) => statuses.push(String(msg)),
     reportError: (e) => errors.push(String(e)),
+    openInspector: () => {},
   };
   store.attachShell(shell);
 
@@ -366,7 +367,7 @@ describe('SQL 执行', () => {
 
     await store.run();
 
-    expect(client.query).toHaveBeenCalledWith(id, 'SELECT * FROM 用户');
+    expect(client.query).toHaveBeenCalledWith(id, 'SELECT * FROM 用户', 1000);
   });
 
   /**
@@ -494,5 +495,58 @@ describe('SQL 初始化', () => {
 
     expect(store.getSnapshot().result).toEqual(result);
     expect(store.getSnapshot().profiles).toHaveLength(1);
+  });
+});
+
+describe('再取更多（展示全的那一半）', () => {
+  it('fetchMore：上限 +1000 重跑上一次的查询；不重复记历史；取满就不再动', async () => {
+    const { store, client, id } = await connected();
+    // 假客户端 honor maxRows：一共「有」2500 行，要几行给几行（不够就说不截断）
+    const TOTAL = 2500;
+    client.query.mockImplementation(
+      async (_id: string, _sql: string, maxRows?: number): Promise<QueryResult> => {
+        const cap = maxRows ?? 1000;
+        const n = Math.min(cap, TOTAL);
+        return {
+          columns: [{ name: 'n', typeName: 'int4' }],
+          rows: Array.from({ length: n }, (_, i) => [{ text: String(i + 1) }]),
+          affected: null,
+          truncated: n < TOTAL,
+          elapsedMs: 1,
+        };
+      },
+    );
+    store.setEditor('SELECT * FROM 大表');
+
+    await store.run();
+    expect(client.query).toHaveBeenLastCalledWith(id, 'SELECT * FROM 大表', 1000);
+    expect(store.getSnapshot().result?.rows.length).toBe(1000);
+    expect(store.getSnapshot().result?.truncated).toBe(true);
+
+    const historyAfterRun = store.getSnapshot().history.length;
+
+    store.fetchMore();
+    await vi.waitFor(() => expect(store.getSnapshot().running).toBe(false));
+    expect(client.query).toHaveBeenLastCalledWith(id, 'SELECT * FROM 大表', 2000);
+    expect(store.getSnapshot().result?.rows.length).toBe(2000);
+    // ⚠️ 重跑**不重复记历史**（用户没执行新东西）
+    expect(store.getSnapshot().history.length).toBe(historyAfterRun);
+
+    store.fetchMore();
+    await vi.waitFor(() => expect(store.getSnapshot().running).toBe(false));
+    expect(store.getSnapshot().result?.rows.length).toBe(TOTAL);
+    expect(store.getSnapshot().result?.truncated).toBe(false);
+
+    // 没截断了，再点也不发请求
+    client.query.mockClear();
+    store.fetchMore();
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
+  it('新的一次执行把上限重置回默认（上一轮的「再取」不带过来）', async () => {
+    const { store, client } = await connected();
+    store.setEditor('SELECT 1');
+    await store.run();
+    expect(client.query).toHaveBeenLastCalledWith(expect.anything(), 'SELECT 1', 1000);
   });
 });

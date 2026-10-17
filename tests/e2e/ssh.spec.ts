@@ -11,6 +11,16 @@
  */
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
+
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
 import {
   CHANGED_KEY_HOST,
   UNREACHABLE_HOST,
@@ -25,6 +35,8 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('app-shell')).toBeVisible();
   await page.getByTestId('module-ssh').click();
   await expect(page.getByTestId('ssh-main')).toBeVisible();
+  // 连接属性 / 格式化面板都在检查器里 —— 默认折叠之后先点开
+  await openInspector(page);
 });
 
 // ------------------------------------------------------------------ 工具
@@ -81,6 +93,8 @@ async function connectNew(
   page: Page,
   options: { username?: string; password?: string; host?: string } = {},
 ): Promise<void> {
+  // reload 之后偏好被清、检查器回到折叠 —— 统一在这里补开
+  await openInspector(page);
   await page.getByTestId('ssh-btn-new').click();
   // ⚠️ 弹框要点确认才真的建（先收集后建 —— 取消的话 store 一个字没动）。
   // 这里用默认值建出来，参数照旧在后面那些 `ssh-field-*` 里填 —— 那是**右侧
@@ -756,4 +770,26 @@ test('目录：拖到空白处 = 移出目录（回未分组）', async ({ page 
     page.locator('[data-testid="ssh-conn-list"] .rd-panel-body'),
   );
   await expect(dir).toHaveAttribute('data-group-count', '0');
+});
+
+test('新建弹框里直接选 shell：cmd / PowerShell 想建哪个建哪个（用户提的）', async ({ page }) => {
+  await page.getByTestId('ssh-btn-new').click();
+  await page.getByTestId('ssh-new-kind').selectOption('local');
+
+  // ⚠️ 此前这个选择**只在建完之后的属性面板里**（等于藏起来）——
+  // 用户原话「不能 cmd 终端和 PowerShell 都有吗」，找不到入口
+  await page.getByTestId('ssh-new-local-shell').selectOption('cmd');
+  await page.getByTestId('ssh-new-confirm').click();
+
+  // 侧栏那一行直接写明用的是 cmd
+  await expect(page.locator('[data-testid^="conn-"]').first()).toContainText('本地 · cmd');
+
+  // 连上去：shell 参数确实传到后端了（和属性面板那条路同一个断言口径）
+  await page.getByTestId('ssh-btn-connect').click();
+  await expect(page.getByTestId('ssh-status')).toContainText('已连接');
+  const requests = await page.evaluate(() => {
+    const w = window as unknown as { __sshLocalRequests?: Array<{ shell: string }> };
+    return w.__sshLocalRequests ?? [];
+  });
+  expect(requests.some((r) => r.shell === 'cmd')).toBe(true);
 });

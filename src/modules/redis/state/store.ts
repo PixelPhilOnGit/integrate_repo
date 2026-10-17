@@ -153,7 +153,11 @@ export class RedisStore {
   private initPromise: Promise<void> | null = null;
 
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
 
   constructor(private services: RedisServices) {
     this.state = {

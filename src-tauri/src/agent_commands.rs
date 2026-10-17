@@ -543,6 +543,110 @@ pub async fn agent_integration_revert(
 ///
 /// 用途见 `devtoolkit_agents::probe_environment` 的说明 —— 一句话：
 /// 「VS Code 里好好的、窗格里跑不起来」这类问题，差别只在环境，而环境是不可见的。
+/// 列远端一个目录（智能体会话的「远端目录浏览器」用）。
+///
+/// `path = None` → 列**主目录**（`cd` 都不发，登录之后就在那儿）。
+/// 走 ssh 内核的**一次性 exec**（不是 PTY）：拼一条 POSIX 命令
+/// （`cd -- <引号包住的路径> && pwd && LC_ALL=C ls -ap`），收干净输出。
+///
+/// ⚠️ 信任的两个拒绝态**原样带回**（`kind` 判别联合）—— 前端复用会话那套
+/// 指纹确认界面，确认之后把 `accept_new_host_key` 带上重发就是重试。
+/// 这两个态是 `Ok` 不是 `Err`：它们是「需要用户做决定」，不是「失败了」。
+///
+/// 远端目前按 **Unix 形态**假设（`quote_path` 的注释里写了不假装它通用）。
+#[tauri::command]
+pub async fn agent_remote_list_dirs(
+    spec: RemoteSpec,
+    path: Option<String>,
+) -> Result<RemoteListOutcome, String> {
+    let cfg = devtoolkit_agents::remote::to_ssh_config(&spec, 80, 24);
+    // 拼命令：路径过 POSIX 单引号转义（remote.rs 的 quote_path，有测试钉着）
+    let cd = match &path {
+        Some(p) => format!("cd -- {} && ", devtoolkit_agents::remote::quote_path(p)),
+        None => String::new(),
+    };
+    let command = format!("{cd}pwd && LC_ALL=C ls -ap");
+
+    let outcome = devtoolkit_ssh::exec_capture(&cfg, &command, std::time::Duration::from_secs(20))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match outcome {
+        devtoolkit_ssh::ExecOutcome::HostKeyUnknown(key) => {
+            Ok(RemoteListOutcome::HostKeyUnknown {
+                algorithm: key.algorithm,
+                fingerprint: key.fingerprint,
+            })
+        }
+        devtoolkit_ssh::ExecOutcome::HostKeyMismatch { expected, actual } => {
+            Ok(RemoteListOutcome::HostKeyMismatch {
+                expected,
+                algorithm: actual.algorithm,
+                actual: actual.fingerprint,
+            })
+        }
+        devtoolkit_ssh::ExecOutcome::Ready(out) => {
+            if out.exit_code != Some(0) {
+                let err = out.stderr_text();
+                let first = err.lines().next().unwrap_or("（没有更多说明）");
+                return Err(format!("打不开这个目录：{first}"));
+            }
+            let text = out.stdout_text();
+            let mut lines = text.lines();
+            let resolved = lines.next().unwrap_or("").trim().to_string();
+            if resolved.is_empty() {
+                return Err("远端没有报回路径（pwd 没有输出）".to_string());
+            }
+            let dirs: Vec<String> = lines
+                .map(|l| l.trim_end_matches('\r'))
+                .filter(|l| l.ends_with('/'))
+                .map(|l| l.trim_end_matches('/').to_string())
+                .filter(|l| l != "." && l != ".." && !l.is_empty())
+                .collect();
+            let parent = parent_of(&resolved);
+            Ok(RemoteListOutcome::Ready {
+                path: resolved,
+                parent,
+                dirs,
+            })
+        }
+    }
+}
+
+/// `/a/b/c` → `/a/b`；`/` 没有上一级；尾斜杠先去掉。
+fn parent_of(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None; // 根
+    }
+    match trimmed.rfind('/') {
+        Some(0) => Some("/".to_string()),
+        Some(i) => Some(trimmed[..i].to_string()),
+        None => None,
+    }
+}
+
+/// 列表的三种结局（判别联合，前端按 kind 分支）。
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RemoteListOutcome {
+    /// 列出来了。`parent` 是上一级（根是 None）
+    Ready {
+        path: String,
+        parent: Option<String>,
+        /// 子目录名（不带路径；`pwd` + 名字拼出绝对路径）
+        dirs: Vec<String>,
+    },
+    /// 主机密钥没见过：把指纹交给用户确认
+    HostKeyUnknown { algorithm: String, fingerprint: String },
+    /// 主机密钥和记录的不一样：**硬停**，把新旧都摆出来
+    HostKeyMismatch {
+        expected: String,
+        algorithm: String,
+        actual: String,
+    },
+}
+
 #[tauri::command]
 pub async fn agent_probe() -> Result<EnvironmentReport, String> {
     // 解析 PATH 要扫目录、Windows 上还要问一次注册表（`reg query`）——

@@ -45,6 +45,8 @@ pub struct Seen {
     pub input: Vec<u8>,
     /// shell 请求次数
     pub shells: usize,
+    /// 每一次 exec 请求的命令原文（新）
+    pub execs: Vec<String>,
     /// 收到过 EOF 的次数
     pub eofs: usize,
     /// 通道被关掉的次数
@@ -79,6 +81,9 @@ pub struct Options {
     /// 收到 PTY 请求时回 `Failure` 而不是 `Success` ——
     /// 用来测「服务端禁用了终端」这条分支
     pub reject_pty: bool,
+    /// 收到 exec 请求时回什么（stdout 原文；退出码固定 0）。
+    /// `None` = 回空输出（也回成功）
+    pub exec_reply: Option<String>,
 }
 
 impl Default for Options {
@@ -89,6 +94,7 @@ impl Default for Options {
             banner: "hello from the test server\r\n".to_string(),
             echo: true,
             reject_pty: false,
+            exec_reply: None,
         }
     }
 }
@@ -320,6 +326,25 @@ impl Handler for TestHandler {
         } else {
             session.channel_success(channel)?;
         }
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.record(|s| s.execs.push(String::from_utf8_lossy(data).into_owned()));
+
+        let reply = self.options.exec_reply.clone().unwrap_or_default();
+        session.channel_success(channel)?;
+        if !reply.is_empty() {
+            session.data(channel, CryptoVec::from_slice(reply.as_bytes()))?;
+        }
+        // 退出码 + 关通道：客户端那个读循环靠它收尾（和 `data` 里 exit 那条同款）
+        session.exit_status_request(channel, 0)?;
+        session.close(channel)?;
         Ok(())
     }
 

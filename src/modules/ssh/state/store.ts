@@ -185,7 +185,11 @@ export class SshStore {
   };
   private initPromise: Promise<void> | null = null;
   /** 外壳能力。默认空实现：store 可能在注入之前就被构造（单测里直接 new） */
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
 
   constructor(private services: SshServices) {
     // hub 的两个出口接在这里。做成可写字段而不是构造参数，是为了避开

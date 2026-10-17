@@ -31,16 +31,27 @@
 
 use std::sync::{Arc, Mutex};
 
-use devtoolkit_tasks::{Attachment, Progress, Task, TaskCounts, TaskPatch, TaskStore};
+use devtoolkit_tasks::{Attachment, Progress, Task, TaskCounts, TaskPatch, TaskStore, TodoItem};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 /// 惰性打开的库。整个应用一份。
-pub struct TasksState(Mutex<Option<TaskStore>>);
+///
+/// 存的是 `(场景, 库)` 一对：**场景进来了要跟着换库**（文件名带场景后缀，
+/// 见 `devtoolkit_tasks::db_file_name` 和 `scenario_commands.rs`）。
+pub struct TasksState(Mutex<Option<(String, TaskStore)>>);
 
 impl TasksState {
     pub fn new() -> Self {
         TasksState(Mutex::new(None))
+    }
+
+    /// 关掉缓存的那份（切场景时由 `scenario_set` 调）。
+    /// 下次用到时按新场景重新打开。
+    pub fn reset(&self) {
+        if let Ok(mut guard) = self.0.lock() {
+            *guard = None;
+        }
     }
 }
 
@@ -58,18 +69,26 @@ fn with_store<T>(
     state: &TasksState,
     f: impl FnOnce(&TaskStore) -> Result<T, devtoolkit_tasks::TaskError>,
 ) -> Result<T, String> {
+    let want = crate::scenario_commands::current();
     let mut guard = state.0.lock().map_err(|_| "任务库的锁坏了".to_string())?;
+
+    // 场景对不上就把缓存的那份丢掉（正常路径由 `scenario_set` 清过，
+    // 这里是纵深防御：漏清一次就是「在团队 B 里看到团队 A 的任务」）
+    if guard.as_ref().map(|(s, _)| s.as_str()) != Some(want.as_str()) {
+        *guard = None;
+    }
 
     if guard.is_none() {
         let dir = app
             .path()
             .app_data_dir()
             .map_err(|e| format!("拿不到应用数据目录：{e}"))?;
-        let store = TaskStore::open(&dir.join("tasks.db")).map_err(|e| e.to_string())?;
-        *guard = Some(store);
+        let file = devtoolkit_tasks::db_file_name(&want);
+        let store = TaskStore::open(&dir.join(file)).map_err(|e| e.to_string())?;
+        *guard = Some((want, store));
     }
 
-    let Some(store) = guard.as_ref() else {
+    let Some((_, store)) = guard.as_ref() else {
         return Err("任务库没打开".to_string());
     };
     f(store).map_err(|e| e.to_string())
@@ -157,6 +176,55 @@ pub async fn tasks_add_progress(
 ) -> Result<Progress, String> {
     let state = state.inner().clone();
     blocking(move || with_store(&app, &state, |store| store.add_progress(&task_id, &text))).await
+}
+
+// ------------------------------------------------------------------ 待办项
+
+/// 给任务加一条待办。
+#[tauri::command]
+pub async fn tasks_todo_add(
+    app: AppHandle,
+    state: State<'_, Arc<TasksState>>,
+    task_id: String,
+    text: String,
+) -> Result<TodoItem, String> {
+    let state = state.inner().clone();
+    blocking(move || with_store(&app, &state, |store| store.add_todo(&task_id, &text))).await
+}
+
+/// 勾/取消勾（取消会把 done_at 清回去，见 tasks 内核的注释）。
+#[tauri::command]
+pub async fn tasks_todo_set_done(
+    app: AppHandle,
+    state: State<'_, Arc<TasksState>>,
+    id: String,
+    done: bool,
+) -> Result<TodoItem, String> {
+    let state = state.inner().clone();
+    blocking(move || with_store(&app, &state, |store| store.set_todo_done(&id, done))).await
+}
+
+/// 改一条待办的文字。
+#[tauri::command]
+pub async fn tasks_todo_update_text(
+    app: AppHandle,
+    state: State<'_, Arc<TasksState>>,
+    id: String,
+    text: String,
+) -> Result<TodoItem, String> {
+    let state = state.inner().clone();
+    blocking(move || with_store(&app, &state, |store| store.update_todo_text(&id, &text))).await
+}
+
+/// 删一条待办。
+#[tauri::command]
+pub async fn tasks_todo_delete(
+    app: AppHandle,
+    state: State<'_, Arc<TasksState>>,
+    id: String,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    blocking(move || with_store(&app, &state, |store| store.delete_todo(&id))).await
 }
 
 // ------------------------------------------------------------------ 资料
@@ -294,7 +362,7 @@ pub fn open_url(url: String) -> Result<(), String> {
 #[cfg(test)]
 mod contract {
     use super::*;
-    use devtoolkit_tasks::{Attachment, AttachmentKind, TaskStatus};
+    use devtoolkit_tasks::{Attachment, AttachmentKind, TaskStatus, TodoItem};
     use serde_json::json;
 
     #[test]
@@ -359,11 +427,24 @@ mod contract {
                 file_size: 12_345,
                 created_at: 3,
             }],
+            todos: vec![TodoItem {
+                id: "todo_ff_1".into(),
+                task_id: "task_ff_0".into(),
+                text: "先改配置".into(),
+                done: true,
+                created_at: 4,
+                done_at: Some(5),
+            }],
         };
         let v = serde_json::to_value(&task).unwrap();
         assert_eq!(v["attachments"][0]["taskId"], json!("task_ff_0"));
         assert_eq!(v["attachments"][0]["fileName"], json!("截图.png"));
         assert_eq!(v["attachments"][0]["fileSize"], json!(12_345));
+        // 待办的内嵌字段同理（done_at → doneAt 这类漏 rename 的重灾区）
+        assert_eq!(v["todos"][0]["taskId"], json!("task_ff_0"));
+        assert_eq!(v["todos"][0]["text"], json!("先改配置"));
+        assert_eq!(v["todos"][0]["done"], json!(true));
+        assert_eq!(v["todos"][0]["doneAt"], json!(5));
         assert!(v.get("note").is_none(), "note 不该再出现在 IPC 上");
     }
 }

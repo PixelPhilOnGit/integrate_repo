@@ -21,7 +21,7 @@ import { useState, type ReactNode } from 'react';
 import { ConnectionDialog, dialogCanSubmit } from '../../../shared/connections/ConnectionDialog';
 import { withGroup, withoutGroup } from '../../../shared/connections/groups';
 import { applyNewDialogKindSwitch, newProfile, validateProfile } from '../core/profile';
-import { KIND_LABEL, type SshProfileKind } from '../core/types';
+import { KIND_LABEL, LOCAL_SHELLS, type SshProfileKind } from '../core/types';
 import type { SshState, SshStore } from '../state/store';
 
 interface Props {
@@ -74,6 +74,8 @@ export function NewConnectionDialog({ state, store, defaultGroupId, onClose }: P
       // （那里也是 `{profile.kind === 'ssh' && (...)}`）。主机/端口/用户名对本地
       // 终端毫无意义，画三个灰框只是噪音。
       showMachine={!isLocal}
+      // 建的时候就能选壳（2026-10-16 用户提的：此前只在属性面板里有，等于藏起来）
+      localShellOptions={isLocal ? LOCAL_SHELLS : undefined}
       groups={state.groups}
       groupId={draft.groupId ?? null}
       onGroupChange={(gid) =>

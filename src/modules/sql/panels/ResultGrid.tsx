@@ -8,10 +8,17 @@
  *   所以它长在结果区里，而不是弹到外壳顶上
  */
 
-import type { ReactNode } from 'react';
-import type { QueryResult } from '../core/types';
+import { useState, type ReactNode } from 'react';
+import { platform } from '../../../shared/platform';
+import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
+import { csvBytes, csvFileName, rowCsvBytes, rowToCsv } from '../core/csv';
+import { HARD_MAX_ROWS, MAX_ROWS_DEFAULT, type QueryResult } from '../core/types';
+import { sqlStore } from '../state/store';
 
 export function ResultGrid({ result }: { result: QueryResult | null }): ReactNode {
+  // ⚠️ hooks 在早返回之前（早返回有好几个）
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; rowIndex: number } | null>(null);
+
   if (result === null) {
     return (
       <div className="rd-empty" data-testid="sql-result">
@@ -44,11 +51,78 @@ export function ResultGrid({ result }: { result: QueryResult | null }): ReactNod
     );
   }
 
+  // —— result 到这里已经窄化过了，助手函数放这儿 ——
+
+  /** 当前连接名（导出文件名用） */
+  const connectionName =
+    ((): string => {
+      const snap = sqlStore.getSnapshot();
+      return snap.profiles.find((p) => p.id === snap.selectedId)?.name ?? 'result';
+    })();
+
+  const exportAll = (): void => {
+    void (async () => {
+      const name = csvFileName(connectionName, new Date());
+      const saved = await platform.exportFile(name, csvBytes(result), 'text/csv');
+      if (saved !== null) sqlStore.reportStatus(`已导出 ${result.rows.length} 行 → ${saved}`);
+    })().catch((e: unknown) => sqlStore.reportStatus(`导出失败：${String(e)}`));
+  };
+
+  const rowItems = (rowIndex: number): MenuItem[] => {
+    const row = result.rows[rowIndex];
+    if (row === undefined) return [];
+    return [
+      {
+        label: '复制此行',
+        onSelect: () => {
+          void navigator.clipboard
+            .writeText(rowToCsv(row))
+            .then(() => sqlStore.reportStatus('这一行已经复制（CSV 字段）'))
+            .catch(() => sqlStore.reportStatus('复制失败：剪贴板不可用'));
+        },
+      },
+      {
+        label: '导出此行为 CSV…',
+        onSelect: () => {
+          void (async () => {
+            const name = csvFileName(`${connectionName}_第${rowIndex + 1}行`, new Date());
+            const saved = await platform.exportFile(name, rowCsvBytes(row), 'text/csv');
+            if (saved !== null) sqlStore.reportStatus(`已导出这一行 → ${saved}`);
+          })();
+        },
+      },
+    ];
+  };
+
   return (
     <div className="rd-sql-result" data-testid="sql-result" data-kind="rows">
       <div className="rd-sql-result-meta">
         {result.rows.length} 行 · 耗时 {result.elapsedMs}ms
-        {result.truncated ? ' · 结果被截断，加个 LIMIT 看完整的' : ''}
+        {result.truncated && (
+          <>
+            {' · '}
+            <span data-testid="sql-truncated">结果被截断</span>
+            <button
+              type="button"
+              className="rd-btn"
+              data-testid="sql-fetch-more"
+              title={`一次加 ${MAX_ROWS_DEFAULT} 行，最多到 ${HARD_MAX_ROWS} 行`}
+              onClick={() => sqlStore.fetchMore()}
+            >
+              再取 {MAX_ROWS_DEFAULT} 行
+            </button>
+          </>
+        )}
+        <span className="rd-spacer" />
+        <button
+          type="button"
+          className="rd-btn"
+          data-testid="sql-export-csv"
+          title="把当前结果（含表头）导出为 CSV，Excel 直接能开"
+          onClick={exportAll}
+        >
+          导出 CSV…
+        </button>
       </div>
 
       <div className="rd-sql-table-wrap">
@@ -67,7 +141,13 @@ export function ResultGrid({ result }: { result: QueryResult | null }): ReactNod
           <tbody>
             {result.rows.map((row, rowIndex) => (
               // 行没有稳定 id（同一条 SQL 每次结果都可能不同），用下标即可
-              <tr key={rowIndex}>
+              <tr
+                key={rowIndex}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setRowMenu({ x: e.clientX, y: e.clientY, rowIndex });
+                }}
+              >
                 <td className="rd-sql-rownum">{rowIndex + 1}</td>
                 {row.map((cell, colIndex) => (
                   <td
@@ -84,6 +164,15 @@ export function ResultGrid({ result }: { result: QueryResult | null }): ReactNod
           </tbody>
         </table>
       </div>
+
+      {rowMenu !== null && (
+        <ContextMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          items={rowItems(rowMenu.rowIndex)}
+          onClose={() => setRowMenu(null)}
+        />
+      )}
     </div>
   );
 }

@@ -11,6 +11,16 @@
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/');
@@ -18,6 +28,9 @@ test.beforeEach(async ({ page }) => {
   await page.getByTestId('module-redis').click();
   // 主界面是「浏览」，不是命令台
   await expect(page.getByTestId('redis-main')).toBeVisible();
+  // 连接表单（名字/主机/端口/连接按钮）全在检查器里 —— 这一份用例几乎每条
+  // 都要碰它，所以在这里统一点开，等价于本批之前「检查器常开」的条件
+  await openInspector(page);
 });
 
 /**
@@ -196,6 +209,8 @@ test('连接档案会写进本地存储，重开页面还在', async ({ page }) 
   const fresh = await page.context().newPage();
   await fresh.goto('/');
   await fresh.getByTestId('module-redis').click();
+  // 新开这一张走的是另一套 page，beforeEach 里那次点开管不到它
+  await openInspector(fresh);
 
   await expect(fresh.getByTestId('conn-list')).toContainText('本地测试库');
   await fresh.getByTestId('conn-list').getByText('本地测试库').click();

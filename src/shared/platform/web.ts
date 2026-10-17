@@ -369,6 +369,11 @@ export function createWebPlatform(): Platform {
       void rel;
     },
 
+    async applyScenario(_name: string): Promise<void> {
+      // 浏览器版的一切存储都在 localStorage 里，靠 KV 键后缀分卷（`kv.ts`）——
+      // 没有 Rust 侧要告诉，空操作。
+    },
+
     async setWindowTitle(title: string): Promise<void> {
       // 浏览器版写 document.title 就行（Tauri 那边要过 API，见 tauri.ts）
       document.title = title;
@@ -392,6 +397,18 @@ export function createWebPlatform(): Platform {
           // 旧版本存的没有这个字段，给默认值就完事 —— 至于值认不认得出来，
           // 是 `parseThemeChoice` 的事
           theme: typeof parsed.theme === 'string' ? parsed.theme : EMPTY_PREFS.theme,
+          scenario: typeof parsed.scenario === 'string' ? parsed.scenario : '',
+          scenarios: Array.isArray(parsed.scenarios)
+            ? parsed.scenarios.filter((x): x is string => typeof x === 'string')
+            : [],
+          scenarioWorkspaces:
+            typeof parsed.scenarioWorkspaces === 'object' && parsed.scenarioWorkspaces !== null
+              ? parsed.scenarioWorkspaces
+              : {},
+          inspectorOpen:
+            typeof parsed.inspectorOpen === 'object' && parsed.inspectorOpen !== null
+              ? parsed.inspectorOpen
+              : {},
         };
       } catch {
         return fallback;

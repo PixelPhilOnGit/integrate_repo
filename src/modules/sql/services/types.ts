@@ -19,7 +19,7 @@ export interface SqlClient {
    * **引擎报错（表不存在、语法错）是 `resolve` 出来的一条带 `error` 的结果**，
    * 不是 reject —— 那是一次成功的往返，只是没成功执行。只有传输层失败才 reject。
    */
-  query(id: string, sql: string): Promise<QueryResult>;
+  query(id: string, sql: string, maxRows?: number): Promise<QueryResult>;
   /** 库列表 */
   databases(id: string): Promise<string[]>;
   /** 当前库里的表 */

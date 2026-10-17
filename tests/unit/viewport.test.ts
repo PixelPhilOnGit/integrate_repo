@@ -271,7 +271,7 @@ describe('新增消息跟随选中', () => {
     const s = mk();
     // 状态和错误现在归外壳显示，所以装一个假外壳来接
     const errors: unknown[] = [];
-    s.attachShell({ setStatus: () => {}, reportError: (e) => void errors.push(e) });
+    s.attachShell({ setStatus: () => {}, reportError: (e) => void errors.push(e), openInspector: () => {} });
 
     const doc = s.getSnapshot().doc;
     for (const p of doc.participants) {

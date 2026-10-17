@@ -1,6 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
@@ -10,6 +20,10 @@ test.beforeEach(async ({ page }) => {
   // 画布挂载 ≠ 文档加载完成（init 是异步的）。不等这一刻，后续测量到的
   // 可能是初始空文档的尺寸，产生难以复现的亚像素偏差。
   await expect(page.getByTestId('current-path')).toContainText('示例');
+  // 「属性面板」就是检查器（改消息收发方、激活条截断、样式面板都住在里面）。
+  // ⚠️ 它一变窄，画布的可用宽度也变了 —— 那些按像素拖拽的用例，量到的坐标
+  // 是**这个布局下**的；所以统一点开，等价于本批之前「检查器常开」的条件。
+  await openInspector(page);
 });
 
 /** 读出一个下载文件的内容 */

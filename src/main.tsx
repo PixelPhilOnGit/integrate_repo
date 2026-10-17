@@ -2,7 +2,8 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppShell } from './shell/AppShell';
 import { MODULES } from './shell/registry';
-import { configurePlatform } from './shared/platform';
+import { configurePlatform, platform } from './shared/platform';
+import { setActiveScenario } from './shared/platform/scenario';
 import './styles.css';
 
 /**
@@ -23,11 +24,37 @@ configurePlatform({
   seed: () => MODULES.flatMap((m) => m.platform.seed?.() ?? []),
 });
 
-const container = document.getElementById('root');
-if (!container) throw new Error('找不到 #root 挂载点');
+/**
+ * 启动前先把**场景**就位，再渲染。
+ *
+ * ⚠️ 顺序是硬要求：各模块的 KV 在模块被 import/激活时按场景后缀拼存储名，
+ * 场景晚一步设置的话，第一个激活的模块会读到**默认场景**的数据 ——
+ * 那种错法静悄悄的（界面有数据，只是不是这个场景的）。
+ *
+ * 代价是首帧要等一次偏好读取（毫秒级；桌面端首次可能带上一次搬迁）。
+ * 顺带把场景告诉 Rust 侧（任务库文件名、知识库根目录在那边拼）。
+ */
+void (async () => {
+  let scenario = '';
+  try {
+    const prefs = await platform.getPrefs();
+    scenario = prefs.scenario;
+  } catch {
+    // 偏好读不出来就用默认场景起步 —— 界面得能开，问题留给读取失败的那条路报
+  }
+  setActiveScenario(scenario);
+  try {
+    await platform.applyScenario(scenario);
+  } catch {
+    // 浏览器版是空操作；桌面端失败也只是场景没对齐，启动不该被它拦住
+  }
 
-createRoot(container).render(
-  <StrictMode>
-    <AppShell />
-  </StrictMode>,
-);
+  const container = document.getElementById('root');
+  if (!container) throw new Error('找不到 #root 挂载点');
+
+  createRoot(container).render(
+    <StrictMode>
+      <AppShell />
+    </StrictMode>,
+  );
+})();

@@ -8,6 +8,17 @@
  * 引擎协议层的正确性不在这里 —— 那是 Rust 侧打真 PostgreSQL / MySQL 的集成测试。
  */
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Page } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
@@ -16,6 +27,8 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByTestId('app-shell')).toBeVisible();
   await page.getByTestId('module-sql').click();
   await expect(page.getByTestId('sql-main')).toBeVisible();
+  // 工作台（连接属性 / 查询 / 结果）都在检查器里 —— 默认折叠之后先点开
+  await openInspector(page);
 });
 
 /** 新建一个连接（不连）。点「新建」弹一个对话框，引擎是里面第一格 */
@@ -156,6 +169,7 @@ test('PostgreSQL 不填库名时不让连', async ({ page }) => {
   await newConnection(page);
   await page.getByTestId('sql-database').fill('');
 
+  await openInspector(page);
   await expect(page.getByTestId('sql-inspector')).toContainText('必须指定库名');
   // 参数不合法时「连接」按钮是禁用的
   await expect(page.getByTestId('btn-sql-conn-toggle')).toBeDisabled();
@@ -569,4 +583,35 @@ test('结果表格列多时，滚的是表格自己，不是整个页面（回�
     client: document.documentElement.clientWidth,
   }));
   expect(doc.scroll).toBeLessThanOrEqual(doc.client);
+});
+
+test('导出 CSV：真的下载一个文件，BOM 和表头都在（用户提的「导出结果」）', async ({ page }) => {
+  await connectNew(page);
+  await run(page, 'SELECT * FROM 用户'); // 假 demo 库现成的表（现有用例同款）
+
+  await expect(page.getByTestId('sql-export-csv')).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('sql-export-csv').click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/\.csv$/);
+
+  const path = await download.path();
+  expect(path).not.toBeNull();
+  const bytes = await readFile(path as string);
+  // UTF-8 BOM：不加 Excel 中文乱码（导出给同事看最常见的翻车点）
+  expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]);
+  const text = bytes.subarray(3).toString('utf8');
+  // 表头 + 至少一行数据（假引擎的 demo 表有内容）
+  expect(text.split('\r\n')[0]).toContain('id'); // 表头是列名（demo 表第一列）
+  expect(text.split('\r\n').length).toBeGreaterThan(1);
+
+  // 行右键：复制此行 / 导出此行
+  await page.locator('[data-testid="sql-table"] tbody tr').first().click({ button: 'right' });
+  await expect(page.getByTestId('menu-导出此行为 CSV…')).toBeVisible();
+  const [rowDownload] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByTestId('menu-导出此行为 CSV…').click(),
+  ]);
+  expect(rowDownload.suggestedFilename()).toContain('第1行');
 });

@@ -22,6 +22,7 @@ function make(over: Partial<Task> = {}): Task {
     doneAt: null,
     archived: false,
     attachments: [],
+    todos: [],
     ...over,
   };
 }

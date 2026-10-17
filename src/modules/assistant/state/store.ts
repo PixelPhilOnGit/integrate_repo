@@ -128,7 +128,11 @@ export class AssistantStore {
   };
   private initPromise: Promise<void> | null = null;
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
-  private shell: ShellApi = { setStatus: () => {}, reportError: () => {} };
+  private shell: ShellApi = {
+    setStatus: () => {},
+    reportError: () => {},
+    openInspector: () => {},
+  };
 
   /**
    * 正在累积的那条助手消息的 id。
@@ -164,6 +168,9 @@ export class AssistantStore {
     kv: KeyValueStore = createKeyValue({
       tauriFile: 'assistant.json',
       webKey: 'devtoolkit.assistant.v1',
+      // ⚠️ **不跟场景分卷**：助手配置（模型/key 别名）是「软件本身的设置」，
+      // 跟着人走，不是跟着团队走的 —— 见 scenario.ts 的规则一句话
+      scoped: false,
     }),
   ) {
     this.client = client;

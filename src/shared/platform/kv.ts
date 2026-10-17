@@ -24,6 +24,7 @@
 
 import { isTauri } from './detect';
 import { invoke } from './invoke';
+import { scenarioSuffix } from './scenario';
 
 /**
  * 一个极小的键值存储。
@@ -48,13 +49,46 @@ export interface KeyValueLocation {
   tauriFile: string;
   /** 浏览器端：localStorage 的键，如 `devtoolkit.redis.v1` */
   webKey: string;
+  /**
+   * 要不要跟着**场景**分卷（默认要，见 `scenario.ts` 的规则）。
+   * 传 `false` 的只有「软件本身的设置」那类（助手的配置）——
+   * 那是跟着人走的，不是跟着团队走的。
+   */
+  scoped?: boolean;
 }
 
-/** 按运行环境挑一份实现。构造过程**不碰平台**（动态 import 只在真正读写时发生） */
+/**
+ * 按运行环境挑一份实现。构造过程**不碰平台**（动态 import 只在真正读写时发生）。
+ *
+ * ⚠️ **场景后缀推迟到第一次真正读写时才解析**（`resolve()` 里），不在构造时。
+ * 原因：模块是在 import 链上被急切求值的（registry 静态导入所有模块 →
+ * 各 services 的模块级 `createKeyValue(...)` 在**页面启动的最早一刻**就跑了），
+ * 而场景要等组合根异步读回偏好才知道 —— 构造时解析的话后缀永远是空串，
+ * 切了场景也照样读写默认那份（e2e 抓的：切到团队A 还看得见默认的连接）。
+ *
+ * 一次页面生命周期内场景是固定的（切换 = 整窗重载），所以「第一次读写」
+ * 那一刻解析出来的值就是对的。
+ */
 export function createKeyValue(location: KeyValueLocation): KeyValueStore {
-  return isTauri()
-    ? createSqliteKeyValue(moduleOf(location.tauriFile))
-    : createWebKeyValue(location.webKey);
+  let impl: KeyValueStore | null = null;
+  const resolve = (): KeyValueStore => {
+    if (impl !== null) return impl;
+    // 场景后缀：默认场景是空串（老数据零迁移）；'redis' → 'redis@团队1'
+    const suffix = location.scoped === false ? '' : scenarioSuffix();
+    impl = isTauri()
+      ? createSqliteKeyValue(moduleOf(location.tauriFile) + suffix)
+      : createWebKeyValue(location.webKey + suffix);
+    return impl;
+  };
+
+  return {
+    async get<T>(key: string): Promise<T | null> {
+      return resolve().get<T>(key);
+    },
+    async set(key: string, value: unknown): Promise<void> {
+      return resolve().set(key, value);
+    },
+  };
 }
 
 /** `redis.json` → `redis`（模块名就是老文件的文件名，搬迁靠它对上） */

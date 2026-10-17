@@ -63,6 +63,22 @@ export interface Prefs {
   sidePanelWidths: Record<string, number>;
   /** 右侧检查器的宽度，同样按模块 id 存。理由同上。 */
   inspectorPanelWidths: Record<string, number>;
+  /**
+   * 当前**场景**（`''` = 默认场景，见 `scenario.ts`）。
+   * 存的是名字本身 —— 和 theme 同一条理由：别存解析后的结果。
+   */
+  scenario: string;
+  /** 用户建过的场景（当前那个也在里面；默认场景不列，它是基线） */
+  scenarios: string[];
+  /**
+   * 按场景记的「最近工作区 / 上次工作区」。
+   * **默认场景不用这里**（走上面那对老字段）—— 老数据的迁移是零。
+   */
+  scenarioWorkspaces: Record<string, { recent: string[]; last: string | null }>;
+  /**
+   * 检查器**展开**状态，按模块 id 存。⚠️ **不在表里 = 折叠**（默认全折）。
+   */
+  inspectorOpen: Record<string, boolean>;
 }
 
 export const EMPTY_PREFS: Prefs = {
@@ -71,6 +87,10 @@ export const EMPTY_PREFS: Prefs = {
   theme: 'system',
   sidePanelWidths: {},
   inspectorPanelWidths: {},
+  scenario: '',
+  scenarios: [],
+  scenarioWorkspaces: {},
+  inspectorOpen: {},
 };
 
 export interface Platform {
@@ -139,6 +159,14 @@ export interface Platform {
   openPath(root: string, rel: string): Promise<void>;
 
   /**
+   * 把当前场景告诉 Rust 侧（任务库文件名、知识库根目录在那边拼，见
+   * `scenario_commands.rs`）。**启动时调一次**（渲染之前，组合根里），
+   * 切换场景走的是「写偏好 + 整窗重载」——重载后这条会带着新名字再跑一遍。
+   * 浏览器版是空操作（那边的一切都在 localStorage 里，靠 KV 后缀分卷）。
+   */
+  applyScenario(name: string): Promise<void>;
+
+  /**
    * 在新窗口里打开某个模块（多窗口）。
    *
    * 桌面端走 Rust 的 `open_window` 命令 —— 窗口构造必须和主窗口带**同一套
@@ -175,6 +203,38 @@ export function findTreeNode(nodes: readonly FileNode[], path: string): FileNode
     }
   }
   return null;
+}
+
+/**
+ * 取某个场景的「最近工作区 / 上次工作区」。
+ *
+ * 默认场景（`''`）走老的顶层字段（零迁移）；具名场景走 `scenarioWorkspaces`
+ * 那张表。**读和写必须配对使用**（[`workspacePrefsPatch`]）—— 一边读老字段
+ * 一边写新表的话，数据会看起来"丢了"。
+ */
+export function workspaceRecentsOf(
+  prefs: Prefs,
+  scenario: string
+): { recent: string[]; last: string | null } {
+  if (scenario === '') {
+    return { recent: prefs.recentWorkspaces, last: prefs.lastWorkspace };
+  }
+  const per = prefs.scenarioWorkspaces[scenario];
+  return { recent: per?.recent ?? [], last: per?.last ?? null };
+}
+
+/** 写回某个场景的工作区偏好（和 [`workspaceRecentsOf`] 配对） */
+export function workspacePrefsPatch(
+  prefs: Prefs,
+  scenario: string,
+  next: { recent: string[]; last: string | null }
+): Partial<Prefs> {
+  if (scenario === '') {
+    return { recentWorkspaces: next.recent, lastWorkspace: next.last };
+  }
+  return {
+    scenarioWorkspaces: { ...prefs.scenarioWorkspaces, [scenario]: next },
+  };
 }
 
 /** 把平台错误包装成对用户可读的中文提示 */

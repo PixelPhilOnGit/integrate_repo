@@ -58,15 +58,32 @@ impl KbState {
             open: Mutex::new(HashMap::new()),
         }
     }
+
+    /// 放掉全部打开的句柄（切场景时由 `scenario_set` 调）。
+    /// 句柄里的 vault 根目录是**带场景**的，不清的话切完会拿着旧场景的库用。
+    pub fn reset_open(&self) {
+        if let Ok(mut open) = self.open.lock() {
+            open.clear();
+        }
+    }
 }
 
 /// vault 根目录（惰性求；**路径的唯一来源**）。
+///
+/// 按**场景**分卷：默认场景是 `knowledge/`（老路径零迁移），具名场景是
+/// `knowledge/@<名字>/` —— `@` 前缀保证和 vault 名撞不上（vault 名校验禁 `@`）。
+/// 切换场景时 `KbState.open` 会被清空（`scenario_set` 里），句柄不会拿旧的用。
 fn vaults_root(app: &AppHandle) -> Result<PathBuf, String> {
     let data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("拿不到应用数据目录：{e}"))?;
-    Ok(data.join("knowledge"))
+    let suffix = crate::scenario_commands::suffix();
+    Ok(if suffix.is_empty() {
+        data.join("knowledge")
+    } else {
+        data.join("knowledge").join(suffix)
+    })
 }
 
 /// vault 名的白名单：中文/字母/数字/`-`/`_`/空格，1..=48 个字符，

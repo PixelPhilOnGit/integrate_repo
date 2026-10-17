@@ -42,7 +42,7 @@ import type {
   PtyOpenRequest,
 } from '../../src/modules/agents/services/types';
 import { AgentsStore } from '../../src/modules/agents/state/store';
-import { panesOf, rectsOf } from '../../src/modules/agents/core/layout';
+import { leafPane, panesOf, rectsOf } from '../../src/modules/agents/core/layout';
 import { MAX_SESSIONS_PER_KIND } from '../../src/modules/agents/core/types';
 import type { ShellApi } from '../../src/shell/types';
 import { __resetIdsForTest } from '../../src/shared/ids';
@@ -62,6 +62,10 @@ const stamp = (offsetMs: number): number => Date.now() + offsetMs;
 
 /** 记账用的假客户端：它不跑进程，但把每一次调用**如实记下来** */
 class FakeClient implements AgentsClient {
+  remoteListDirs(): Promise<never> {
+    return Promise.reject(new Error('store 测试里用不到远端列目录'));
+  }
+
   opened: PtyOpenRequest[] = [];
   written: Array<{ id: string; text: string }> = [];
   resized: Array<{ id: string; cols: number; rows: number }> = [];
@@ -164,10 +168,10 @@ interface Harness {
   store: AgentsStore;
   client: FakeClient;
   integration: FakeIntegration;
-  shell: ShellApi & { errors: unknown[]; status: string[] };
+  shell: ShellApi & { errors: unknown[]; status: string[]; openInspectorCalls: number };
 }
 
-function harness(): Harness {
+function harness({ attachShell = true } = {}): Harness {
   const client = new FakeClient();
   const integration = new FakeIntegration();
   const services: AgentsServices = {
@@ -186,14 +190,19 @@ function harness(): Harness {
   const shell = {
     errors,
     status,
+    /** 「请外壳把检查器露出来」被叫了几次（Ctrl+Shift+F 那条路） */
+    openInspectorCalls: 0,
     setStatus: (msg: string | null) => {
       if (msg !== null) status.push(msg);
     },
     reportError: (e: unknown) => {
       errors.push(e);
     },
+    openInspector: () => {
+      shell.openInspectorCalls += 1;
+    },
   };
-  store.attachShell(shell);
+  if (attachShell) store.attachShell(shell);
 
   return { store, client, integration, shell };
 }
@@ -382,19 +391,40 @@ describe('新建会话', () => {
     const ws = await withWorkspace(h);
     const id = await h.store.createSession(ws, 'claude');
     const s = h.store.getSnapshot();
-    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: id });
+    expect(h.store.activeLayout()).toEqual(leafPane(id!));
     expect(s.focusedId).toBe(id);
   });
 
-  it('已经有一块屏幕时，新会话**替换**它而不是又切一刀', async () => {
-    // 用户点了「新建会话」是想看见它，不是想把屏幕切成两半
+  it('已经有一格时，新会话是**加一个标签**而不是又切一刀（2026-10-16 起）', async () => {
+    // 用户拍板「叶子属于窗口、一个窗口可能多个终端」：＋ 新建 = 当前格子里
+    // 多一个标签，分屏是另一个动作（分屏按钮/右键）
     const h = make();
     const ws = await withWorkspace(h);
-    await h.store.createSession(ws, 'claude');
+    const first = await h.store.createSession(ws, 'claude');
     const second = await h.store.createSession(ws, 'claude');
+    const layout = h.store.activeLayout()!;
+    expect(layout.kind).toBe('leaf');
+    expect(layout).toEqual({ kind: 'leaf', tabs: [first, second], active: second });
+    expect(h.store.getSnapshot().focusedId).toBe(second);
+  });
+
+  it('点标签：激活它 + 焦点过去；× 收起标签：会话不杀、焦点落回同格', async () => {
+    const h = make();
+    const ws = await withWorkspace(h);
+    const a = await h.store.createSession(ws, 'claude');
+    const b = await h.store.createSession(ws, 'claude'); // 同格 [a, b]，active=b
+
+    h.store.focusTab(a!);
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', tabs: [a, b], active: a });
+    expect(h.store.getSnapshot().focusedId).toBe(a);
+
+    // × b：b 回侧栏（进程还在），焦点还在 a 身上
+    h.store.closeTabFor(b!);
     const s = h.store.getSnapshot();
-    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: second });
-    expect(s.sessions).toHaveLength(2);
+    expect(h.store.activeLayout()).toEqual(leafPane(a!));
+    expect(s.sessions.map((x) => x.id)).toContain(b);
+    expect(h.client.closed).toEqual([]);
+    expect(s.focusedId).toBe(a);
   });
 
   it('标题按类型编号', async () => {
@@ -436,8 +466,8 @@ describe('分屏', () => {
       kind: 'split',
       dir: 'row',
       ratio: 0.5,
-      a: { kind: 'leaf', sessionId: first },
-      b: { kind: 'leaf', sessionId: s.focusedId },
+      a: leafPane(first!),
+      b: leafPane(s.focusedId!),
     });
   });
 
@@ -452,10 +482,16 @@ describe('分屏', () => {
       kind: 'split',
       dir: 'row',
       ratio: 0.5,
-      a: { kind: 'leaf', sessionId: b },
-      b: { kind: 'leaf', sessionId: a },
+      a: leafPane(b!),
+      b: leafPane(a!),
     });
     expect(h.client.opened).toHaveLength(2); // 没有新起进程
+
+    // 同一格的两个标签之间「分屏显示」= 把某个标签拆出去单独成格
+    const layout = h.store.activeLayout()!;
+    expect(layout.kind).toBe('split');
+    const ids = panesOf(layout);
+    expect(new Set(ids)).toEqual(new Set([a, b]));
   });
 
   it('关掉一块：会话还在，只是不在屏幕上了', async () => {
@@ -466,7 +502,7 @@ describe('分屏', () => {
 
     h.store.closePaneFor(b);
     const s = h.store.getSnapshot();
-    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: a });
+    expect(h.store.activeLayout()).toEqual(leafPane(a!));
     expect(s.sessions.map((x) => x.id)).toContain(b); // 进程没被杀
     expect(h.client.closed).toEqual([]);
   });
@@ -480,7 +516,9 @@ describe('分屏', () => {
 
     h.store.closePaneFor(b); // 布局回到只剩 a，但 focusedId 还指着 b
     const c = await h.store.createSession(ws, 'codex');
-    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: c });
+    // 新语义：加到 a 那一格的标签栏（[a, c]，active=c）——重点是**摆上去了**，
+    // 而不是静默什么都不做
+    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', tabs: [a, c], active: c });
     expect(a).not.toBe(c);
   });
 
@@ -760,7 +798,7 @@ describe('关会话', () => {
     const b = (await h.store.splitWithNewSession('row').then(() => h.store.getSnapshot().focusedId!))!;
 
     await h.store.closeSession(b);
-    expect(h.store.activeLayout()).toEqual({ kind: 'leaf', sessionId: a });
+    expect(h.store.activeLayout()).toEqual(leafPane(a));
     expect(h.store.getSnapshot().focusedId).toBe(a);
   });
 });
@@ -1187,5 +1225,20 @@ describe('一次新建一批（createMany）', () => {
     for (const req of h.client.opened) {
       expect(req.command).toBe('claude --dangerously-skip-permissions');
     }
+  });
+});
+
+describe('请外壳把检查器露出来（Ctrl+Shift+F 那条路）', () => {
+  it('原样转发给外壳 —— 检查器开不开是外壳的状态，模块不自己改', () => {
+    const h = make();
+    h.store.revealInspector();
+    expect(h.shell.openInspectorCalls).toBe(1);
+  });
+
+  it('外壳还没注入时也不炸（store 可能先于 onActivate 被构造，快捷键却是早就能按的）', () => {
+    const h = harness({ attachShell: false });
+    expect(() => h.store.revealInspector()).not.toThrow();
+    expect(h.shell.openInspectorCalls).toBe(0); // 压根没送到这个假外壳手上
+    current = h; // 让 afterEach 收掉它（轮询定时器）
   });
 });

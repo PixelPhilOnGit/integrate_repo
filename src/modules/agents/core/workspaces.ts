@@ -14,7 +14,7 @@
  * 这里是**在当前树上按状态过滤**，两个都在，各管各的。
  */
 
-import { WAITING, type AgentSession, type AgentWorkspace, type SessionStatus } from './types';
+import { WAITING, remoteOf, type AgentSession, type AgentWorkspace, type SessionStatus } from './types';
 
 /**
  * 会话筛选的三个档。
@@ -82,4 +82,38 @@ export function sortWorkspaces(workspaces: readonly AgentWorkspace[]): AgentWork
   return [...workspaces].sort(
     (a, b) => Number(b.pinned === true) - Number(a.pinned === true),
   );
+}
+
+/**
+ * 「位置」筛选：本地 / 远端分开看（用户 2026-10-16 提的：「远程的要和本地的
+ * 区分开……可以加远端、本地的 filter」）。
+ *
+ * 和状态筛选**是「与」的关系**（同时生效，和任务那边一个口径）；
+ * 计数按**工作目录**算 —— 这个筛选切换的就是目录行的显隐。
+ */
+export type LocationFilter = 'all' | 'local' | 'remote';
+
+export const LOCATION_FILTERS: readonly LocationFilter[] = ['all', 'local', 'remote'];
+
+export const LOCATION_FILTER_LABEL: Record<LocationFilter, string> = {
+  all: '全部位置',
+  local: '本地',
+  remote: '远端',
+};
+
+export function matchesLocation(workspace: AgentWorkspace, location: LocationFilter): boolean {
+  if (location === 'all') return true;
+  const isRemote = remoteOf(workspace) !== null;
+  return location === 'remote' ? isRemote : !isRemote;
+}
+
+/** 位置档各自的目录数（chips 上的计数） */
+export function locationCounts(workspaces: readonly AgentWorkspace[]): Record<LocationFilter, number> {
+  let local = 0;
+  let remote = 0;
+  for (const w of workspaces) {
+    if (remoteOf(w) !== null) remote += 1;
+    else local += 1;
+  }
+  return { all: workspaces.length, local, remote };
 }

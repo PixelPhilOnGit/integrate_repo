@@ -31,18 +31,23 @@ import { NoMatch, SearchBox } from '../../../shared/ui/SearchBox';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { fuzzyBest } from '../../../shared/search';
 import {
+  LOCATION_FILTER_LABEL,
+  LOCATION_FILTERS,
+  locationCounts,
+  matchesLocation,
   matchesSessionFilter,
   sessionCounts,
   SESSION_FILTER_LABEL,
   SESSION_FILTERS,
   sortWorkspaces,
+  type LocationFilter,
   type SessionFilter,
 } from '../core/workspaces';
 import { elapsed } from '../core/elapsed';
 import { statusLine } from '../core/status';
 import { explorerStore } from '../state/explorer';
 import { AGENTS_SHORTCUTS } from '../shortcuts';
-import { STATUS_LABEL, type AgentSession, type AgentWorkspace, type SessionStatus } from '../core/types';
+import { remoteOf, STATUS_LABEL, type AgentSession, type AgentWorkspace, type SessionStatus } from '../core/types';
 import type { AgentsState, AgentsStore } from '../state/store';
 import { NewSessionDialog } from './NewSessionDialog';
 import { StatusDot } from './StatusDot';
@@ -78,8 +83,12 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   const searching = q !== '';
   /** 哪些状态的会话要显示。和搜索**同时生效**（不是各算各的），和任务那边一个口径 */
   const [filter, setFilter] = useState<SessionFilter>('all');
-  /** 搜索或者筛状态**有一件在生效** —— 生效时树要临时撑开、没有命中的目录不画 */
-  const filtering = searching || filter !== 'all';
+  /** 位置档：把远端和本地分开看（用户提的：「远程的要和本地的区分开」） */
+  const [location, setLocation] = useState<LocationFilter>('all');
+  /** 会话级筛选（搜索/状态）——它决定「哪些目录因会话命中而留下、树要不要临时撑开」。
+   *  位置档（`location`）是**目录级**的，只管显隐、不牵连会话和展开 —— 两种
+   *  筛选作用的层不一样，别揉回一个布尔（e2e 抓过：位置档会把没会话的目录滤没） */
+  const sessionFiltering = searching || filter !== 'all';
 
   /**
    * 一个会话在**当前条件**下要不要显示。
@@ -104,12 +113,16 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
   // 数组顺序永远是「用户添加的顺序」，置顶只是画的时候拎一下 ——
   // 写回去的话取消置顶就回不到原位了
   const visible = sortWorkspaces(state.workspaces).filter((workspace) => {
-    if (!filtering) return true;
+    // 位置档：目录级，先过
+    if (!matchesLocation(workspace, location)) return false;
+    // 会话级没开：看都留下（**没有会话的目录也要显示** —— 得能往里开新会话）
+    if (!sessionFiltering) return true;
     if (searching && fuzzyBest(q, [workspace.name, workspace.path]) !== null) return true;
     return state.sessions.some((s) => s.workspaceId === workspace.id && matches(s));
   });
 
   const counts = sessionCounts(state.sessions);
+  const locCounts = locationCounts(state.workspaces);
 
   return (
     <>
@@ -175,6 +188,22 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
           </div>
         )}
 
+        {/* 位置档：本地 / 远端分开（和上面状态档**与**的关系，同时生效） */}
+        {state.workspaces.length > 0 && (
+          <div className="rd-chips" data-testid="agents-location-filter">
+            {LOCATION_FILTERS.map((f) => (
+              <FilterChip
+                key={f}
+                label={LOCATION_FILTER_LABEL[f]}
+                count={locCounts[f]}
+                active={location === f}
+                testId={`agents-location-${f}`}
+                onClick={() => setLocation(f)}
+              />
+            ))}
+          </div>
+        )}
+
         <div className="rd-panel-body">
           {state.workspaces.length === 0 ? (
             <div className="rd-empty">还没有工作目录，点「添加」选一个项目文件夹</div>
@@ -190,9 +219,11 @@ export function WorkspaceTree({ state, store, now }: Props): ReactNode {
               // 过滤期间（搜索或筛状态）：只显示命中的会话，并**临时撑开**
               // （叠加在点击状态之上，`state.expanded` 一个字不动 ——
               // 否则清空条件之后树回不到用户自己摆的样子）
-              const sessions = filtering ? allSessions.filter(matches) : allSessions;
+              const sessions = sessionFiltering ? allSessions.filter(matches) : allSessions;
               const expanded =
-                filtering && sessions.length > 0 ? true : state.expanded[workspace.id] === true;
+                sessionFiltering && sessions.length > 0
+                  ? true
+                  : state.expanded[workspace.id] === true;
               const active = state.activeWorkspaceId === workspace.id;
 
               return (
@@ -357,13 +388,24 @@ function WorkspaceHead({
         {renaming ? (
           <RenameInput value={workspace.name} onDone={onFinishRename} />
         ) : (
-          <span
-            className="rd-agent-ws-name"
-            data-testid={`agent-ws-name-${workspace.id}`}
-            onDoubleClick={onStartRename}
-          >
-            {workspace.name}
-          </span>
+          <>
+            <span
+              className="rd-agent-ws-name"
+              data-testid={`agent-ws-name-${workspace.id}`}
+              onDoubleClick={onStartRename}
+            >
+              {workspace.name}
+            </span>
+            {remoteOf(workspace) !== null && (
+              <span
+                className="rd-agent-ws-badge"
+                data-testid={`agent-ws-remote-${workspace.id}`}
+                title="这是另一台机器上的目录"
+              >
+                远端
+              </span>
+            )}
+          </>
         )}
         <span className="rd-agent-ws-sub" data-testid={`agent-ws-sub-${workspace.id}`}>
           <span className="rd-agent-ws-path" title={workspace.path}>
@@ -498,7 +540,7 @@ function isOnScreen(state: AgentsState, session: AgentSession): boolean {
   const layout = state.layouts[session.workspaceId];
   if (layout === undefined) return false;
   const walk = (node: typeof layout): boolean =>
-    node.kind === 'leaf' ? node.sessionId === session.id : walk(node.a) || walk(node.b);
+    node.kind === 'leaf' ? node.tabs.includes(session.id) : walk(node.a) || walk(node.b);
   return walk(layout);
 }
 

@@ -13,6 +13,16 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
+/** 检查器现在**默认折叠**（v0.16.0）：要碰它里面的东西，先点开右边的把手 */
+async function openInspector(page: Page): Promise<void> {
+  const toggle = page.getByTestId('inspector-toggle');
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  }
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.clear());
   await page.goto('/');
@@ -71,6 +81,7 @@ test('连不上：一条红字 + 一句「该做什么」', async ({ page }) => 
 });
 
 test('证书：默认拒绝，打开那个开关就通（红字警告跟着出现）', async ({ page }) => {
+  await openInspector(page); // 「跳过证书校验」那一格在检查器里
   await send(page, 'https://self-signed.local/api');
   await expect(page.getByTestId('request-response-error')).toContainText('证书');
 
@@ -81,6 +92,7 @@ test('证书：默认拒绝，打开那个开关就通（红字警告跟着出�
 });
 
 test('跳转：默认不跟（302 原样看得到），开了之后跟过去而且能看跳转链', async ({ page }) => {
+  await openInspector(page); // 「跟随跳转」那一格在检查器里
   await send(page, 'https://demo.example/redirect');
   await expect(page.getByTestId('request-status')).toContainText('302');
   // 没跳转就没有那个页签
@@ -96,6 +108,8 @@ test('跳转：默认不跟（302 原样看得到），开了之后跟过去而�
 });
 
 test('打开跳转之后才出现「最多跟几跳」', async ({ page }) => {
+  // ⚠️ 先点开检查器：折叠着的话下面那句「数 0」是**假的通过**（整个面板都不在 DOM 里）
+  await openInspector(page);
   await expect(page.getByTestId('request-opt-max-redirects')).toHaveCount(0);
   await page.getByTestId('request-opt-follow').check();
   await expect(page.getByTestId('request-opt-max-redirects')).toBeVisible();
@@ -221,6 +235,7 @@ test('历史和保存：切模块回来还在（存的是键值库，不是组�
 });
 
 test('保存一个请求：起名字存下来 → 换个地址 → 点回来还在；同名覆盖不长两条', async ({ page }) => {
+  await openInspector(page); // 起名字那一格在检查器里
   await page.getByTestId('request-url').fill('https://demo.example/json');
   await page.getByTestId('request-save-name').fill('查用户');
   await page.getByTestId('request-save').click();
@@ -271,6 +286,7 @@ test('搜索：方法和地址都搜得到，搜不到有提示', async ({ page 
 });
 
 test('清空历史：先问一句，历史没了、保存的还在', async ({ page }) => {
+  await openInspector(page); // 存这一步要起名字，那一格在检查器里
   await page.getByTestId('request-url').fill('https://demo.example/json');
   await page.getByTestId('request-save-name').fill('查用户');
   await page.getByTestId('request-save').click();

@@ -116,7 +116,7 @@ pub struct SshConfig {
 }
 
 impl SshConfig {
-    fn address(&self) -> String {
+    pub(crate) fn address(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 }
@@ -244,11 +244,21 @@ impl std::fmt::Debug for Session {
 /// 建连、认证、开 PTY、起读循环。
 ///
 /// `generation` 由注册表分配，`events` 是输出流。
-pub async fn open(
-    cfg: &SshConfig,
-    generation: u64,
-    events: tokio::sync::mpsc::Sender<TerminalEvent>,
-) -> Result<OpenResult, SshError> {
+/// 建连 + 主机密钥判定 + 认证 —— **PTY 会话和一次性 exec 共用这一份**。
+///
+/// ⚠️ 信任策略（TOFU / 错配硬停）只许有这一个实现：抄第二份的日子就是
+/// 两份开始漂移的日子，而这是安全边界上最不能漂的地方。
+pub(crate) enum Connected {
+    Ready {
+        handle: client::Handle<TofuHandler>,
+        fingerprint: String,
+        algorithm: String,
+    },
+    HostKeyUnknown(SeenHostKey),
+    HostKeyMismatch { expected: String, actual: SeenHostKey },
+}
+
+pub(crate) async fn connect_authenticated(cfg: &SshConfig) -> Result<Connected, SshError> {
     validate(cfg)?;
     let address = cfg.address();
 
@@ -292,9 +302,9 @@ pub async fn open(
         // 「用户需要确认的新密钥」报上去，用户一点信任，攻击者的密钥就被钉死了。
         Ok(Err(russh::Error::UnknownKey)) => {
             return match verdict_from(&seen, cfg.expected_fingerprint.as_deref()) {
-                Some(HostKeyVerdict::Unknown(key)) => Ok(OpenResult::HostKeyUnknown(key)),
+                Some(HostKeyVerdict::Unknown(key)) => Ok(Connected::HostKeyUnknown(key)),
                 Some(HostKeyVerdict::Mismatch { expected, actual }) => {
-                    Ok(OpenResult::HostKeyMismatch { expected, actual })
+                    Ok(Connected::HostKeyMismatch { expected, actual })
                 }
                 // 判定是「一致」却收到 UnknownKey，只可能是并发下的极端时序。
                 // 不猜，如实报成连接失败 —— 安全路径上宁可多失败一次。
@@ -319,6 +329,34 @@ pub async fn open(
     };
 
     authenticate(&mut handle, cfg, &address, private_key).await?;
+
+    let seen_key = take_seen(&seen).unwrap_or(SeenHostKey {
+        algorithm: String::new(),
+        fingerprint: String::new(),
+    });
+    Ok(Connected::Ready {
+        handle,
+        fingerprint: seen_key.fingerprint,
+        algorithm: seen_key.algorithm,
+    })
+}
+
+/// 建连、认证、开 PTY、起读循环。
+///
+/// `generation` 由注册表分配，`events` 是输出流。
+pub async fn open(
+    cfg: &SshConfig,
+    generation: u64,
+    events: tokio::sync::mpsc::Sender<TerminalEvent>,
+) -> Result<OpenResult, SshError> {
+    let address = cfg.address();
+    let (handle, fingerprint, algorithm) = match connect_authenticated(cfg).await? {
+        Connected::Ready { handle, fingerprint, algorithm } => (handle, fingerprint, algorithm),
+        Connected::HostKeyUnknown(key) => return Ok(OpenResult::HostKeyUnknown(key)),
+        Connected::HostKeyMismatch { expected, actual } => {
+            return Ok(OpenResult::HostKeyMismatch { expected, actual })
+        }
+    };
 
     // ---------------------------------------------------------------- 开通道
     let channel = handle.channel_open_session().await.map_err(|e| SshError::Connect {
@@ -379,23 +417,13 @@ pub async fn open(
     // ---------------------------------------------------------------- 读循环
     let reader = tokio::spawn(read_loop(read_half, pending, events));
 
-    // 走到这里握手已经成功了，格子里的密钥就是这次实际用的那把。
-    //
-    // 取不到是理论上不该发生的事（check_server_key 一定在握手时被调过），
-    // 但真到那一步也不该 panic —— 会话是好的，只是指纹显示不出来，
-    // 那比整个会话开不起来好。空指纹在前端会显示成「未记录」，不会假装成已信任。
-    let seen_key = take_seen(&seen).unwrap_or(SeenHostKey {
-        algorithm: String::new(),
-        fingerprint: String::new(),
-    });
-
     Ok(OpenResult::Ready(Box::new(Session {
         write,
         handle,
         reader,
         generation,
-        fingerprint: seen_key.fingerprint,
-        algorithm: seen_key.algorithm,
+        fingerprint,
+        algorithm,
         address,
         username: cfg.username.clone(),
     })))

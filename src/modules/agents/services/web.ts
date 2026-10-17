@@ -48,6 +48,50 @@ export function createWebAgentsClient(): AgentsClient {
   };
 
   return {
+    async remoteListDirs(payload, path) {
+      // 假远端（e2e 用）：第一次连**停在「未知主机密钥」**——和真实现的
+      // TOFU 同一条链路，这样「信任之后重试」那段界面在 e2e 里走得到
+      if (!payload.acceptNewHostKey && payload.expectedFingerprint === null) {
+        return {
+          kind: 'hostKeyUnknown',
+          algorithm: 'ssh-ed25519',
+          fingerprint: 'SHA256:fake-remote-fp',
+        };
+      }
+      if (
+        payload.expectedFingerprint !== null &&
+        payload.expectedFingerprint !== 'SHA256:fake-remote-fp'
+      ) {
+        return {
+          kind: 'hostKeyMismatch',
+          expected: payload.expectedFingerprint,
+          algorithm: 'ssh-ed25519',
+          actual: 'SHA256:fake-remote-fp',
+        };
+      }
+
+      const tree: Record<string, string[]> = {
+        '/home/tester': ['projects', 'notes'],
+        '/home/tester/projects': ['alpha', 'beta'],
+        '/home/tester/projects/alpha': ['src', 'tests'],
+      };
+      const parentOf = (p: string): string | null => {
+        const t = p.replace(/\/+$/, '');
+        if (t === '') return null;
+        const i = t.lastIndexOf('/');
+        return i <= 0 ? '/' : t.slice(0, i);
+      };
+      if (path === null) {
+        return { kind: 'ready', path: '/home/tester', parent: null, dirs: tree['/home/tester'] ?? [] };
+      }
+      const key = path.replace(/\/+$/, '');
+      const dirs = tree[key];
+      if (dirs === undefined) {
+        throw new Error(`打不开这个目录：No such file or directory: ${path}`);
+      }
+      return { kind: 'ready', path: key, parent: parentOf(key), dirs };
+    },
+
     async open(request: PtyOpenRequest): Promise<AgentOpenOutcome> {
       // ⚠️ 浏览器里**连不了远端**：没有 SSH、没有钥匙串、也起不了别的机器上的进程。
       // 明确失败而不是假装成功 —— 假装的话用户会以为「连上了但没输出」，

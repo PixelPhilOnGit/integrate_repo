@@ -4519,3 +4519,300 @@ body.rd-resizing * {
   gap: 16px;
   margin: 8px 0;
 }
+
+/* -------------------------------------- 场景切换 + 检查器折叠（v0.16.0） */
+
+/* 图标栏顶部那枚（只出图标）—— 和下面对齐：整列图标同一节奏 */
+.rd-scenario-btn.is-compact {
+  margin-bottom: 4px;
+}
+
+.rd-scenario-btn.is-compact::after {
+  /* 图标栏空间紧、它是常驻控件不是悬停件，命中区靠自身 24px 高就够；
+     这里不扩，免得和下面的模块图标叠上 */
+  content: none;
+}
+
+/* 状态栏里那枚：图标 + 名字，一眼看得见自己在哪个场景 */
+.rd-scenario-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 10px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.rd-scenario-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rd-scenario-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 检查器折叠把手：主区最右缘一条窄条，永远在（不然用户找不到
+ * 「那块东西去哪了」）。展开时箭头翻个方向。
+ */
+.rd-inspector-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.rd-inspector-toggle:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.rd-inspector-toggle svg {
+  display: block;
+  transition: transform 0.12s ease;
+}
+
+.rd-inspector-toggle.is-open svg {
+  transform: rotate(180deg);
+}
+
+/* ---- 任务待办项（v0.16.0） ---- */
+
+.rd-task-todo-count {
+  font-weight: 400;
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.rd-task-todos {
+  list-style: none;
+  margin: 4px 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rd-task-todo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.rd-task-todo-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.rd-task-todo-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* 勾掉的：变暗 + 划掉 —— 一眼看出还差哪几条 */
+.rd-task-todo.is-done .rd-task-todo-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.rd-task-todo-time {
+  font-size: 11px;
+  flex: none;
+}
+
+.rd-task-todo-del {
+  flex: none;
+  padding: 0 7px;
+}
+
+.rd-task-todo-add {
+  display: flex;
+  gap: 6px;
+}
+
+.rd-task-todo-input {
+  flex: 1;
+}
+
+/* ---- 智能体会话：格子里的标签条（v0.16.0 一格多终端） ---- */
+
+.rd-agent-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* 横向自滚：标签开多了不许把右边的分屏/关闭按钮挤出去 */
+  overflow-x: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+  scrollbar-width: thin;
+}
+
+.rd-agent-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  max-width: 180px;
+  border: 1px solid transparent;
+  border-radius: 6px 6px 0 0;
+  padding: 0 2px 0 0;
+}
+
+.rd-agent-tab:hover {
+  background: var(--accent-soft);
+}
+
+/* 当前显示的那一个：底色 + 下缘强调线，一眼看出在看谁 */
+.rd-agent-tab.is-active {
+  background: var(--panel);
+  border-color: var(--border);
+  border-bottom-color: var(--panel);
+}
+
+.rd-agent-tab-main {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 3px 2px 3px 7px;
+  cursor: pointer;
+}
+
+.rd-agent-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* 标签上的「×」= 把这个终端从格子里收起来（会话不杀） */
+.rd-agent-tab-close {
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 5px;
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+/* 扩命中区（技法同 .rd-tree-more）：18×16 → 26×22 */
+.rd-agent-tab-close::after {
+  content: '';
+  position: absolute;
+  inset: -3px -4px;
+}
+
+.rd-agent-tab-close:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---- 远端目录向导（v0.16.0） ---- */
+
+.rd-remote-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  min-width: 0;
+}
+
+.rd-remote-path code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-remote-dirs {
+  list-style: none;
+  margin: 6px 0;
+  padding: 4px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.rd-remote-dirs li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+
+.rd-remote-dir {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.rd-remote-dir:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-remote-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* 远端工作目录的角标：一眼区分本地/远端 */
+.rd-agent-ws-badge {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  line-height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+/* 结果的元信息行：加上「再取 / 导出」之后要成排（spacer 生效） */
+.rd-sql-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}

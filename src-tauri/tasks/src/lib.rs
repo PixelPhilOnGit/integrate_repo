@@ -23,5 +23,6 @@ pub mod store;
 
 pub use error::TaskError;
 pub use store::{
-    Attachment, AttachmentKind, Progress, Task, TaskCounts, TaskPatch, TaskStatus, TaskStore,
+    db_file_name, Attachment, AttachmentKind, Progress, Task, TaskCounts, TaskPatch, TaskStatus,
+    TaskStore, TodoItem,
 };

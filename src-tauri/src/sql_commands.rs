@@ -40,8 +40,15 @@ pub async fn sql_query(
     registry: State<'_, ConnectionRegistry>,
     id: String,
     sql: String,
+    // 行数上限（「再取 1000 行」按钮会一次比一次大）。不传 = 默认 1000；
+    // 一律过 `clamp_max_rows` 夹到 [1, 50000] —— 前端说什么不算数。
+    max_rows: Option<u32>,
 ) -> Result<QueryResult, String> {
-    registry.query(&id, &sql).await.map_err(|e| e.to_string())
+    let cap = devtoolkit_sql::clamp_max_rows(max_rows.map(|v| v as usize));
+    registry
+        .query_with_cap(&id, &sql, cap)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// 库列表。PostgreSQL 查 `pg_database`，MySQL 用 `SHOW DATABASES`。

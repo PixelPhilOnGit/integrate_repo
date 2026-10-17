@@ -45,7 +45,8 @@ use crate::result::{Cell, ColumnInfo, QueryResult, MAX_ROWS};
 /// 不填 `limit` 时取多少条。
 ///
 /// 50 是「够看一屏」和「别把界面卡住」之间的折中 —— Mongo 的文档可以很大，
-/// 默认拉一千条（`MAX_ROWS`）会让人等。想多看点就在查询里写 `.limit(500)`。
+/// 默认行数由调用方给上限（命令层默认 1000，界面上的「再取更多」会调大）；
+/// 想精确控制就在查询里写 `.limit(N)` —— 它会原样生效（到硬顶为止）。
 const DEFAULT_LIMIT: u32 = 50;
 
 /// 单元格那一列的类型名。
@@ -59,6 +60,7 @@ pub async fn query(
     client: &Client,
     text: &str,
     default_database: Option<&str>,
+    max_rows: usize,
 ) -> Result<QueryResult, Failure> {
     let command = parse_command(text, default_database).map_err(Failure::Sql)?;
 
@@ -94,9 +96,14 @@ pub async fn query(
             limit,
             skip,
         } => {
-            let want = limit
-                .map(|l| l.clamp(1, MAX_ROWS as i64) as u32)
-                .unwrap_or(DEFAULT_LIMIT);
+            // 显式 `.limit()`：用户写的数字**照给**（到硬顶为止）—— 以前它也被
+            // 夹在默认值上，写 `.limit(5000)` 只拿一千，这是「展示不全」的来源之一。
+            // 没写：跟着调用方给的上限走（命令层的「再取 1000 行」就是把它调大）。
+            let want: u32 = match limit {
+                Some(l) => l.clamp(1, crate::result::HARD_MAX_ROWS as i64) as u32,
+                None => max_rows.clamp(1, crate::result::HARD_MAX_ROWS) as u32,
+            };
+            let _ = DEFAULT_LIMIT; // 旧默认值退役（上限现在由调用方带）
             let mut find = collection.find(filter);
             if let Some(projection) = projection {
                 find = find.projection(projection);
