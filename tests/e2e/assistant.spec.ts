@@ -276,6 +276,14 @@ test('要改文件时先弹审批，允许之后才动手', async ({ page }) => 
   await page.getByTestId('assistant-approval-allow').click();
   await expect(sheet).toHaveCount(0);
   await expect(page.getByTestId('assistant-running')).toHaveCount(0);
+
+  // ⚠️ 回归：允许之后**必须留下那一行执行记录**（用户点了允许，得看得见
+  // 「写入 out.txt」真的发生了）。假实现曾经只发 approvalNeeded、没发
+  // toolRequested，于是这一行根本不建 —— 允许了却像什么都没做。
+  const writeRow = page.getByTestId('assistant-tool').filter({ hasText: '写入 out.txt' });
+  await expect(writeRow).toHaveCount(1);
+  await expect(writeRow).toContainText('✓');
+  await expect(writeRow).not.toHaveClass(/is-error/);
 });
 
 test('拒绝：这一步不做了，但对话继续跑完', async ({ page }) => {
@@ -287,6 +295,12 @@ test('拒绝：这一步不做了，但对话继续跑完', async ({ page }) => 
   await expect(page.getByTestId('assistant-approval')).toHaveCount(0);
   // ⚠️ 拒绝 ≠ 停止。停了的话模型连「那我换个法子」的机会都没有。
   await expect(page.getByTestId('assistant-running')).toHaveCount(0);
+
+  // 拒绝也要留痕：那一行在，而且标成失败 —— 用户得知道自己刚才拒了哪一步
+  const writeRow = page.getByTestId('assistant-tool').filter({ hasText: '写入 out.txt' });
+  await expect(writeRow).toHaveCount(1);
+  await expect(writeRow).toContainText('✗');
+  await expect(writeRow).toHaveClass(/is-error/);
 });
 
 test('⚠️ 弹层里必须能「整个停掉」—— 它盖住了外面那个停止按钮', async ({ page }) => {

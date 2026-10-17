@@ -244,6 +244,12 @@ async function drive(run: number, request: SendRequest): Promise<void> {
     const call = `call_${run}_1`;
     if (state.cancelled) return;
 
+    // ⚠️ **先发 `toolRequested`，再发 `approvalNeeded`** —— 和真实现
+    // （`session.rs` 的 run_tools）一字不差：前端靠 toolRequested 建工具行、
+    // 靠 toolFinished 给它收尾。漏了前一半，「允许」之后界面上就没有
+    // 「写入 out.txt」那一行 —— 用户点了允许也看不到执行记录。
+    // 这条顺序在 Rust 侧有契约测试钉着（session.rs 的「审批类工具先发…」）。
+    emit({ kind: 'toolRequested', name: 'write_file', display: '写入 out.txt（12 B）' });
     emit({
       kind: 'approvalNeeded',
       key: { run, call },

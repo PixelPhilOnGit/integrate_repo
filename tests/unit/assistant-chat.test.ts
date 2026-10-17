@@ -131,6 +131,54 @@ describe('审批', () => {
     expect(answered.pending).toBeNull();
   });
 
+  it('⚠️ 批准之后工具行要留下 ✓（真实事件顺序：toolRequested 先到）', () => {
+    // 真实现（`session.rs` 的 run_tools）的顺序是：
+    //   toolRequested → approvalNeeded → approvalDecided → toolFinished
+    // 前端靠 toolRequested **建行**、toolFinished 给它收尾。
+    // 浏览器假实现曾经只发 approvalNeeded、漏了第一条，症状是
+    // 「点了允许，界面上却看不到执行记录」（2026-10-17 修）。
+    const s = feed([
+      { kind: 'iteration', n: 1 },
+      { kind: 'toolRequested', name: 'read_file', display: '读 a.txt' },
+      { kind: 'toolFinished', name: 'read_file', isError: false, content: 'hello' },
+      { kind: 'toolRequested', name: 'write_file', display: '写入 out.txt（12 B）' },
+      {
+        kind: 'approvalNeeded',
+        key: { run: 1, call: 'c1' },
+        tool: 'write_file',
+        display: '写入 out.txt（12 B）',
+        canRemember: true,
+      },
+      { kind: 'approvalDecided', key: { run: 1, call: 'c1' }, decision: 'allowed' },
+      { kind: 'toolFinished', name: 'write_file', isError: false, content: '已写入' },
+    ]);
+
+    const tools = s.messages[0]?.tools ?? [];
+    expect(tools.map((t) => t.display)).toEqual(['读 a.txt', '写入 out.txt（12 B）']);
+    expect(tools[0]?.isError).toBe(false);
+    expect(tools[1]?.isError).toBe(false);
+  });
+
+  it('⚠️ 拒绝之后那一行也要在，而且标成失败 —— 用户得知道自己拒了哪一步', () => {
+    const s = feed([
+      { kind: 'iteration', n: 1 },
+      { kind: 'toolRequested', name: 'write_file', display: '写入 out.txt' },
+      {
+        kind: 'approvalNeeded',
+        key: { run: 1, call: 'c1' },
+        tool: 'write_file',
+        display: '写入 out.txt',
+        canRemember: true,
+      },
+      { kind: 'approvalDecided', key: { run: 1, call: 'c1' }, decision: 'denied' },
+      { kind: 'toolFinished', name: 'write_file', isError: true, content: '用户拒绝了这次操作。' },
+    ]);
+
+    const tools = s.messages[0]?.tools ?? [];
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.isError).toBe(true);
+  });
+
   it('⚠️ 不能记住的操作照样要弹 —— `canRemember` 是给界面看的，不是开关', () => {
     // 跑 shell 解释器的时候 Rust 那边给 false（记住 `bash` 等于免审一切）。
     // 它只是让「记住」那个按钮不出现，**该问还是要问**。

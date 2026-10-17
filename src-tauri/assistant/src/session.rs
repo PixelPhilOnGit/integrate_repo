@@ -1312,6 +1312,75 @@ mod tests {
     // 所以这里**手写前端会读到的字段名**，不要照着结构体拼 ——
     // 照着拼只是把 Rust 的定义抄了一遍，改错了照样绿。
 
+    // ------------------------------------------------- 工具事件的**顺序**契约
+
+    /// 审批类工具：**先 `toolRequested`（前端建行）、再 `approvalNeeded`（弹层）**。
+    ///
+    /// 前端靠 `toolRequested` 建工具行、靠 `toolFinished` 给那一行收尾。
+    /// 少了前一半，「允许」之后界面上就没有「写入 xxx」那一行 —— 用户点了
+    /// 允许、也真的写了，却看不到任何执行记录（浏览器假实现曾漏发，
+    /// 2026-10-17 补了这条契约，别的实现照着它来）。
+    #[tokio::test]
+    async fn 审批类工具先发_tool_requested_再发_approval_needed() {
+        // 只跑 `run_tools` 这一段：不经过 provider，事件顺序看得最清楚
+        let tools = FakeTools::default();
+        let (_sw, cancel) = crate::approval::cancel_pair();
+        let (sink, mut rx) = EventSink::new(64);
+        let calls = vec![mk_call("c1", "write_file", r#"{"path":"out.txt"}"#)];
+
+        // 真实现里 `ApprovalNeeded` 由审批口子在**登记之后**发 —— 这里照那个形状
+        struct EmittingApprover;
+        impl ApproveGate for EmittingApprover {
+            async fn approve(
+                &self,
+                request: ApprovalRequest,
+                _cancel: &Cancel,
+                events: &EventSink,
+            ) -> ApprovalOutcome {
+                events.send(RunEvent::ApprovalNeeded {
+                    key: request.key,
+                    tool: request.tool,
+                    display: request.display,
+                    can_remember: request.grant.is_some(),
+                });
+                ApprovalOutcome::Allowed
+            }
+        }
+
+        let out = run_tools(
+            &tools,
+            &EmittingApprover,
+            &cancel,
+            &spec(),
+            &sink,
+            &calls,
+            &ToolMode::Execute,
+        )
+        .await;
+        assert!(!out.is_cancelled);
+
+        let mut kinds = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            kinds.push(match e {
+                RunEvent::ToolRequested { .. } => "toolRequested",
+                RunEvent::ApprovalNeeded { .. } => "approvalNeeded",
+                RunEvent::ApprovalDecided { .. } => "approvalDecided",
+                RunEvent::ToolFinished { .. } => "toolFinished",
+                _ => "other",
+            });
+        }
+        assert_eq!(
+            kinds,
+            [
+                "toolRequested",
+                "approvalNeeded",
+                "approvalDecided",
+                "toolFinished"
+            ],
+            "审批类工具的事件顺序变了：前端靠 toolRequested 建行，少了它就没执行记录"
+        );
+    }
+
     #[test]
     fn contract_approval_needed_uses_the_names_the_frontend_reads() {
         let e = RunEvent::ApprovalNeeded {
