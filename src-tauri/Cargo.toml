@@ -14,7 +14,7 @@ edition = "2021"
 rust-version = "1.89"
 license = "MIT"
 # 前端工程和 Tauri 工程在同一个仓库根目录下，src/ 属于前端，不要打进 crate 里。
-exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "store/**", "tasks/**", "request/**", "knowledge/**", "target/**"]
+exclude = ["core/**", "redis/**", "sql/**", "ssh/**", "agents/**", "assistant/**", "store/**", "tasks/**", "request/**", "knowledge/**", "group/**", "target/**"]
 
 [lib]
 # Tauri 约定：库名带 _lib 后缀，避免和 bin 目标重名（Windows 上会撞）。
@@ -101,13 +101,19 @@ devtoolkit-assistant = { path = "assistant" }
 # **两边的 TLS 配置从此只有一份**（`request/src/tls.rs`）。
 devtoolkit-request = { path = "request" }
 
+# 群组协作内核（把本机多个 CLI 当群成员，无头调用 + 流式事件 + 进程树回收）。
+# 和 agents / assistant 都不同：
+#   * agents 是交互式 PTY（TUI），群成员是**无头一次性进程**（JSONL）；
+#   * assistant 跑我们自己的循环，群组驱动的是**别人的 CLI**。
+devtoolkit-group = { path = "group" }
+
 # workspace 根就是 src-tauri 自己，纯逻辑抽成独立 crate 单独编译。
 [workspace]
-members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request", "knowledge"]
+members = ["core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request", "knowledge", "group"]
 # 不写 default-members 的话，在 src-tauri 下直接敲 `cargo test`
 # 只会跑 app crate，**核心那 50 个测试一个都不会跑**，很容易误以为过了。
 # 加新 crate 时**必须同步加到这里**，否则它的测试会静默不跑。
-default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request", "knowledge"]
+default-members = [".", "core", "redis", "sql", "ssh", "agents", "assistant", "tasks", "store", "request", "knowledge", "group"]
 resolver = "2"
 
 # ⚠️ **Rust 侧的版本号只有这一处。** 各个 crate 一律写 `version.workspace = true`。

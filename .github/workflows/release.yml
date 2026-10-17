@@ -161,6 +161,13 @@ jobs:
         working-directory: src-tauri
         run: cargo test --package devtoolkit-agents --locked --lib
 
+      # 群组协作内核：**一起跑进程**，但桩程序是临时 `.sh`，不需要任何服务端。
+      # 顺序接力 / 并行 / 取消杀树 / 超时 / JSONL 端到端都在这里。
+      # ⚠️ 加新 crate 必须同步加到这里，否则它的测试**静默不跑**。
+      - name: 跑测试（群组协作内核）
+        working-directory: src-tauri
+        run: cargo test --package devtoolkit-group --locked
+
   # 智能体会话那个内核单独一个 job，跑在 **Windows** 上。
   #
   # 为什么非要 Windows：这一套里有几件事**在 Linux 上验不了**，而它们恰恰是
@@ -209,6 +216,13 @@ jobs:
         run: >-
           cargo test --package devtoolkit-agents --locked --no-fail-fast
           --lib --test events --test integration --test pty --test registry
+
+      # 群组协作的进程层：Windows 专属的两条路只有这里跑得到 ——
+      # Job Object（KILL_ON_JOB_CLOSE）和 npm 装的 `.cmd`（cmd.exe /C 启动器）。
+      # 单独一步，不和上面那串 `--test` 过滤混在一起（怕过滤器和包对不上）。
+      - name: 跑测试（群组协作：进程树 + .cmd 启动）
+        working-directory: src-tauri
+        run: cargo test --package devtoolkit-group --locked --no-fail-fast
 
   publish-tauri:
     name: 打包 ${{ matrix.label }}

@@ -12,6 +12,7 @@ import { agentsModule } from '../modules/agents';
 import { assistantModule } from '../modules/assistant';
 import { diagramModule } from '../modules/diagram';
 import { devPlaceholderModule } from '../modules/devplaceholder';
+import { groupModule } from '../modules/group';
 import { knowledgeModule } from '../modules/knowledge';
 import { redisModule } from '../modules/redis';
 import { requestModule } from '../modules/request';
@@ -34,6 +35,7 @@ export const MODULES: readonly Module[] = [
   // （多窗口那一轮顺手修了 rail 的提示：第 10 个起不再显示不存在的 Ctrl+10）
   requestModule,
   knowledgeModule,
+  groupModule,
   devPlaceholderModule,
 ];
 

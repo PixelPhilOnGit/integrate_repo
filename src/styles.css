@@ -4816,3 +4816,424 @@ body.rd-resizing * {
   gap: 6px;
   flex-wrap: wrap;
 }
+
+/* --- 群组协作（第 10 个模块） --------------------------------------------- */
+
+/*
+ * 群聊复用 assistant 的聊天骨架（消息流 / 工具行 / 输入框），这里只加
+ * 「多成员」特有的部分：成员色条、状态、@ 候选面板、成员编辑卡。
+ *
+ * 状态色沿用全局 token：执行中 = accent，失败 = danger，完成用 accent 的弱化
+ * —— 这里不引入第四种颜色，一屏里颜色太多反而看不出哪条重要。
+ */
+
+.rd-group-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rd-group-side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 4px;
+  flex: 0 0 auto;
+}
+
+.rd-group-side-head .rd-panel-title {
+  flex: 1 1 auto;
+}
+
+/* 小图标按钮：视觉小，命中区不小于 24px（体验评审钉过 22px 的下限） */
+.rd-group-icon-btn {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.rd-group-icon-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.rd-group-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rd-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 0 6px;
+  min-height: 0;
+}
+
+.rd-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.rd-group-row:hover {
+  background: var(--accent-soft);
+}
+
+.rd-group-row.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-group-row-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-group-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+
+.rd-group-member-rail {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.rd-group-member-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.rd-group-member-line.is-disabled {
+  opacity: 0.5;
+}
+
+.rd-group-member-line-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-group-member-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.rd-group-member-status {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rd-group-member-status.is-thinking,
+.rd-group-member-status.is-tool {
+  color: var(--accent);
+}
+
+.rd-group-member-status.is-failed {
+  color: var(--danger);
+}
+
+.rd-group-member-status.is-done {
+  color: var(--accent);
+  opacity: 0.75;
+}
+
+.rd-group-empty {
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+/* 主区 */
+
+.rd-group-chat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  min-height: 0;
+}
+
+.rd-group-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.rd-group-title {
+  font-weight: 600;
+}
+
+.rd-group-mode {
+  max-width: 130px;
+}
+
+.rd-group-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.rd-group-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 92%;
+}
+
+.rd-group-msg.is-user {
+  align-self: flex-end;
+}
+
+.rd-group-msg.is-member {
+  align-self: flex-start;
+}
+
+.rd-group-msg.is-system {
+  align-self: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-group-bubble {
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  line-height: 1.55;
+}
+
+.rd-group-msg.is-user .rd-group-bubble {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.rd-group-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.rd-group-member-name {
+  font-weight: 600;
+}
+
+.rd-group-error {
+  color: var(--danger);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.rd-group-running {
+  color: var(--muted);
+  font-size: 12px;
+  align-self: center;
+}
+
+.rd-group-empty-main {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.rd-group-empty-chat {
+  margin: auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 输入区 + @ 候选 */
+
+.rd-group-composer {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rd-group-composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.rd-group-composer-row .rd-assistant-input {
+  flex: 1 1 auto;
+}
+
+.rd-group-mention-panel {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  margin-bottom: 6px;
+  min-width: 160px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 20;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.rd-group-mention-item {
+  min-height: 26px;
+  padding: 4px 8px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: inherit;
+}
+
+.rd-group-mention-item.is-active,
+.rd-group-mention-item:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-group-unknown {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* 检查器 */
+
+.rd-group-inspector {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.rd-group-inspector-body {
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.rd-group-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.rd-group-field > span {
+  color: var(--muted);
+}
+
+.rd-group-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rd-group-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.rd-group-num {
+  width: 80px;
+}
+
+.rd-group-select {
+  min-height: 28px;
+}
+
+.rd-group-textarea {
+  resize: vertical;
+  min-height: 44px;
+}
+
+.rd-group-member-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rd-group-member-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rd-group-member-card-head .rd-rename-input {
+  flex: 1 1 auto;
+}
+
+.rd-group-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rd-group-inspector-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

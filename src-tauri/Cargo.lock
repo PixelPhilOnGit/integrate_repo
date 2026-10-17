@@ -1407,6 +1407,7 @@ dependencies = [
  "devtoolkit-agents",
  "devtoolkit-assistant",
  "devtoolkit-core",
+ "devtoolkit-group",
  "devtoolkit-knowledge",
  "devtoolkit-redis",
  "devtoolkit-request",
@@ -1457,6 +1458,19 @@ version = "0.16.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "devtoolkit-group"
+version = "0.16.0"
+dependencies = [
+ "libc",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -11,9 +11,9 @@
 
 ## 一句话状态
 
-**九个模块（顺序图 / Redis / 数据库 / SSH 终端 / 智能体会话 / 任务 / 助手 / 接口调试 / 知识库）。**
+**十个模块（顺序图 / Redis / 数据库 / SSH 终端 / 智能体会话 / 任务 / 助手 / 接口调试 / 知识库 / 群组协作）。**
 
-**九个都能用了。** 助手在 2026-09-22 那一轮接上了**工具**和**对话界面**：
+**十个都能用了。** 助手在 2026-09-22 那一轮接上了**工具**和**对话界面**：
 能真的读文件、改文件、跑命令，要动东西之前会先弹审批。见下面「助手」两节。
 
 **接口调试（第八个，2026-09-23 那一轮）**：填地址发请求、看状态码/响应头/
@@ -32,6 +32,12 @@
 **一格多终端（标签页）**、**远端两步向导**（连上之后列目录让用户点选 +
 本地/远端筛选与角标）、**数据库结果「再取 1000 行」与导出 CSV（单行/全部）**。
 都在各自小节和「设计决定」里。
+
+**2026-10-17 那一轮（v0.17.0）：群组协作（第十个模块）。** 用户：「我本地有
+codex、claude、csc 等多个工具……把它们组成一个群，我能在群里面发号施令」。
+落地：无头 CLI 当成员（claude / csc / codex / 自定义）、不 @ 全员、@ 谁谁答、
+默认顺序接力（后来者能看到前面成员的回答）、共享工作目录且可写、进程树回收、
+事件流时间线、SQLite 持久化、场景分卷。见「群组协作」那一节。
 
 - SSH 是第一个**流式**模块，也是第一个带安全决策（TOFU）的模块
 - 智能体会话是第一个**起用户本机进程**的模块，也是第一个**改工作区之外的文件**的模块
@@ -824,6 +830,144 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
   助手直接查知识库（v1 靠「文件是真相」让会话自己能读）、`![[图片]]` 的字节
   显示（v1 只画角标）、卡片的手动编辑正文（只有状态/归档/删除）。
 
+### 群组协作（第十个模块，v0.17.0）
+
+用户原话：「我本地有 codex、claude、csc 等多个工具……把它们组成一个群，
+我能在群里面发号施令」。拍板后的形态：**无头 CLI 当群成员，一条聊天时间线**。
+
+⚠️ **先分清三个模块**（名字太像，后来人一定会混）：
+
+| | 跑的是什么 | 进程形态 | 输出 |
+|---|---|---|---|
+| 智能体会话（agents） | 别人的 CLI | **交互式 PTY**，活得久 | 终端字节（xterm） |
+| 助手（assistant） | 我们自己的循环 | 网络请求 + 工具子进程 | 事件流 |
+| **群组（group）** | 别人的 CLI | **无头一次性进程**，一轮一个 | JSONL → 聊天时间线 |
+
+#### 成员与命令
+
+* `claude`：`-p --output-format stream-json --verbose --include-partial-messages`
+* `csc`（深信服 CoStrict）：**与 Claude 同构**，共用一份 adapter（真机待验）
+* `codex`：`exec --json --skip-git-repo-check`（⚠️ 群的工作目录不一定是 git
+  仓库，少了 `--skip-git-repo-check` 直接起不来）
+* `custom`：任何能读 stdin、写 stdout 的程序；**命令必填**
+
+prompt **一律走 stdin**（不进 argv）。权限三档映射：
+
+| | claude / csc | codex |
+|---|---|---|
+| 只读 | `--allowedTools Read,Glob,Grep` | `-s read-only` |
+| 可写目录（默认） | `--allowedTools Read,Glob,Grep,Edit,Write`（**不含 Bash**） | `-s workspace-write` |
+| 完全权限 | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
+
+⚠️ **权限不是我们的安全边界**：codex 的 workspace-write 是真沙箱（系统级），
+claude/csc 只是它们自己的权限系统，custom 的档位**没有强制力**（只通过
+`DEVTOOLKIT_PERMISSION` 环境变量告知）。UI 里三档的说明都是按这个写的；
+full 档有红色警告。
+
+#### 一轮的语义（用户拍板）
+
+* **不 @ = 所有启用成员都回答；@ 谁 = 只有谁回答。**
+* **未知 @ 直接阻止发送**（`群里没有这些成员：@张三`）——静默退化成全员会让
+  用户以为只是没点名，这个错误很难自己发现。前端解析 + 后端再校验一遍。
+* **默认顺序接力**：按成员顺序逐个跑，第 N 个的提示词里带本轮前 N-1 个的
+  **完整最终回答**（失败的也带，后来的成员知道别重复它的路）。这是「让他们
+  看到彼此」最直接的实现。
+* **并行**（群设置可切）：同时跑，同一份历史快照，本轮互相看不到；下一轮
+  历史里能看到。UI 上写明了这个差别。
+* **同一群同一时间只允许一轮**（原子登记在 `GroupRuntime`）；不同群可以并行。
+* v1 **不做 CLI session resume**：每个成员每次都是「角色提示词 + 最近 N 轮
+  群聊重放」。理由是 resume 救不了「看到彼此」——其他成员的话本来就不在
+  任何一个 CLI 自己的会话里。解析出的 session id 先记着，留给 v2。
+
+#### 进程树（这一步错了就是「停了还在改文件」）
+
+* **Unix**：spawn 前 `process_group(0)`；取消/超时 `killpg(pid, SIGKILL)`；
+  再加 `PR_SET_PDEATHSIG`（应用崩了直接子进程跟着死）。
+* **Windows**：Job Object + `KILL_ON_JOB_CLOSE`（照抄 `agents/src/job.rs`）；
+  应用自己崩掉时句柄一关，整棵树一起走。
+* `group_stop` **不依赖跑这一轮的任务还活着**：杀树开关登记在
+  `GroupRuntime` 里，命令线程直接调。
+* **Windows 的 `.cmd`**：npm 装的 `claude.cmd` / `csc.cmd` 不能直接
+  CreateProcess —— `resolve_program` 按 PATHEXT 找，`.cmd/.bat` 换成
+  `%SystemRoot%\System32\cmd.exe /D /S /C <脚本>`，所有 spawn 加
+  `CREATE_NO_WINDOW`。Windows CI 有专门的测试。
+
+#### 事件协议与前端
+
+`GroupEvent`（`group/src/event.rs` ↔ `services/types.ts`）：
+
+```
+turnStarted → memberQueued… → memberStarted → memberText… → memberActivity…
+            → memberTool… → memberFinished → … → turnFinished（一定是最后一条）
+```
+
+* `seq` **每一轮从 1 重新开始**（EventSink 每轮一个），而且**在同一把锁里
+  分配 + 入队**（顺序 == 投递顺序）。⚠️ 前端 reducer 必须让 `turnStarted`
+  绕过 seq 水位检查，否则第二轮一个事件都收不到（这条写反过，单测钉着）。
+* `turnStarted` 时前端按 `memberIds` **先插入所有成员的占位气泡** —— 并行
+  模式下成员按完成先后落库，等事件来了再追加会让气泡跳位。
+* 终态兜底：`turnFinished` 用 Drop 守卫发，任何提前返回都至少发一次。
+* `memberFinished.text` 是**权威终稿**（claude 的 `result.result` 覆盖流式
+  拼接，codex 的多段 `agent_message` 是拼接）—— 前端用终稿覆盖，不追加。
+* 结束之后用 `history()` 从 DB 对账，把占位 key 换成 `db:<id>`。
+* 用户切走群时后台事件**只记「还在跑」**，不写进当前群的时间线；切回来靠
+  历史补（⚠️ 切回来时看不到那一轮已经发生的流式部分，这是已知局限）。
+
+#### 存储（SQLite，场景分卷）
+
+`app_data_dir/groups.db` / `groups@<场景>.db`（和任务库同一个规则）。四张表：
+`groups` / `group_members` / `group_turns` / `group_messages`。
+
+* `group_messages.member_id` **不建外键**，`speaker_name` 存**快照** ——
+  成员删了/改名了，历史仍然读得懂。
+* 历史排序是 `(轮次开始时间, 成员位置, 消息 id)`，**不是插入顺序**（并行
+  落库顺序 ≠ 发言顺序）。
+* 启动时 `recover_running_turns()` 把上一世遗留的 `running` 收成 failed 并
+  补一条系统消息（只在 `open()` 时做 —— 那是「不会有活着的轮次」的时刻）。
+* 切场景：先 `GroupRuntime::stop_all()` 再 `GroupState::reset()`。漏掉任何
+  一步就是「旧场景的成员继续改文件」或「在团队 B 看到团队 A 的群」。
+
+#### 测试
+
+* **Rust 单测**：adapter argv 逐字面量（含「prompt 不出现在 argv」）、
+  JSONL 解析（claude/csc 共用一份、codex 一份、custom 一份）、prompt 预算与
+  截断（按字符不按字节）、store 的 CRUD/级联/排序/崩溃恢复、选成员与 @ 校验。
+* **Rust 桩程序集成**（`group/tests/run_stub.rs`）：顺序接力能看到前一位的
+  回答、并行看不到、@ 只启动被点名者、取消后**孙进程也没了**、超时、一个
+  成员起不来后面的照常跑、claude JSONL 端到端（增量显示 + 终稿不重复）。
+* **IPC contract**：`group_commands.rs` 里手写前端 JSON 钉字段名。
+* **TS 单测**：mention 解析/候选/替换（邮箱、中文、空格名、前缀、未知）、
+  reducer（并行交错、迟到事件、seq 重置、终态边界）、配置校验、store 接线
+  （@ 路由、切群不串线、对账）。
+* **e2e**（`group.spec.ts`）：建群加成员、广播/并行/@、未知 @ 禁发、候选面板
+  键盘与点击、状态流转、停止、单个失败、切模块、删群。
+* CI：群组 crate 加进了 Ubuntu test job 和 **Windows job**（Job Object +
+  `.cmd` 启动器只有 Windows 验得到）。
+
+#### 已知局限（v1 明确不做）
+
+session resume、远端/SSH 成员、成员之间自动接力 @、消息编辑/重生成、附件、
+交互式审批（无头 CLI 没有）、跨窗口实时广播（别的窗口看不到这一轮的流式
+事件；切回模块靠历史对账）、并行写同一文件没有锁、历史最多读最近 200 条、
+成本面板（usage 存了但只轻量展示）。
+
+⚠️ **关掉其中一个窗口不会停掉那一轮**：群 runtime 是**应用级**的（不按窗口
+归属），只有最后一个窗口关闭（应用退出）才会 `stop_all`。多窗口下如果你在
+窗口 A 发了一轮然后关掉 A，进程会继续跑完。要立刻停就回任意一个窗口点停止。
+
+#### 真机清单（v0.17.0 合入前）
+
+- [ ] `claude --version` / `codex --version` / `csc --version`，UI 里逐个「探测」
+- [ ] **csc 的无头 JSONL 形状**：`csc -p "只回一个字：好" --output-format
+      stream-json --verbose --include-partial-messages`，确认 `result` 和
+      session id；若它不接受某个权限 flag，只改 `CscAdapter::plan`
+- [ ] 临时 git 仓库当共享目录，三个成员各配一个角色提示词
+- [ ] 顺序模式：「列出当前目录，并复述前一位成员说了什么」
+- [ ] 三档权限各验一次（让只读成员写文件应该被拒；可写成员建的文件真的出现）
+- [ ] 停止/超时后，用任务管理器确认**整棵进程树**消失
+- [ ] Windows：npm 装的 `.cmd` 能起来（CLI 启动器那条路）
+- [ ] 切场景：旧轮次被停止、群列表换卷、没有跨场景数据
+
 ### 多窗口（v0.16.0）
 
 用户要的是「比较简单的多窗口创建」——**多开各干各的**：每个窗口是一份完整
@@ -902,9 +1046,9 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 
 ```bash
 npm run typecheck    # 类型检查
-npm test             # 1398 个纯逻辑单测（秒级）
-npm run test:e2e     # 285 个端到端测试（真实 Chromium，这台机器上跑约 10 分半）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 692 条 / 56 个测试目标（十个内核 + app crate）
+npm test             # 1443 个纯逻辑单测（秒级）
+npm run test:e2e     # 296 个端到端测试（真实 Chromium，这台机器上跑约 11 分半）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 761 条 / 59 个测试目标（十一个内核 + app crate）
 ```
 
 ### ⚠️ 跑测试/编译之前必读
@@ -958,6 +1102,10 @@ src/
     ├── ssh/       SSH 终端
     ├── agents/    智能体会话（一屏多个 agent）
     ├── tasks/     任务（SQLite）
+    ├── assistant/ 助手（自研 agent 循环）
+    ├── request/   接口调试
+    ├── knowledge/ 知识库
+    ├── group/     群组协作（本机多个 CLI 当群成员）
     └── devplaceholder/  占位（验证「加模块 = 一个目录 + 一行」）
 ```
 
@@ -970,10 +1118,15 @@ src-tauri/
 ├── sql/         devtoolkit-sql：MySQL / PostgreSQL 连接与查询
 ├── ssh/         devtoolkit-ssh：连接、认证、主机密钥、PTY 会话
 ├── agents/      devtoolkit-agents：本机进程、状态事件目录、集成配置读写
-└── tasks/       devtoolkit-tasks：任务库（SQLite，rusqlite bundled）
+├── assistant/   devtoolkit-assistant：自研 agent 循环 / 两家 provider / 工具面
+├── tasks/       devtoolkit-tasks：任务库（SQLite，rusqlite bundled）
+├── store/       devtoolkit-store：键值库（SQLite）
+├── request/     devtoolkit-request：HTTP/HTTPS 传输层
+├── knowledge/   devtoolkit-knowledge：vault / 派生索引 / 文档提取 / CLI 生成
+└── group/       devtoolkit-group：CLI 适配器 / 一轮调度 / 进程树回收 / SQLite
 ```
 
-六个 crate 都**不依赖 tauri**，所以能脱离 WebKit/GTK 跑测试（含打真服务端的集成测试）。
+十一个 crate 都**不依赖 tauri**，所以能脱离 WebKit/GTK 跑测试（含打真服务端的集成测试）。
 
 ### 加一个模块要做什么
 
@@ -1897,7 +2050,7 @@ verify_server_name(&cert, server_name)?;                // ② 名：是不是�
 - **`.claude/agents/ux-expert.md`** —— 体验专家的角色定义（评审纪律、探针配方、
   「别报清单」、用户口味标尺）。⚠️ agent 定义是**会话启动时**注册的，新加的
   agent 类型本会话不能用 —— workflow 里让 agent 直接读这份文件当角色，等价。
-- **`scripts/ux-tour.mjs`** —— 九个模块各一笔「扫」，清空 localStorage → 驱动到
+- **`scripts/ux-tour.mjs`** —— 十个模块各一笔「扫」，清空 localStorage → 驱动到
   有数据状态 → 逐步截图 + manifest（浅色全量，`--dark` 只拍终态）。改界面
   前后各跑一遍，`compare -metric AE a.png b.png null:` 找差异。
 - **`tests/e2e/ui-regressions.spec.ts`** —— 这一轮钉下的几何/可达性护栏
@@ -2450,11 +2603,15 @@ playwright 跑的是**浏览器版**：各模块的 `services/web.ts` 内存假�
 **接着做（第二批之后）**：
 
 1. **上一轮评审推迟的几条**（顺序图深色 / 键盘右键通路 / ⚠️ emoji 统一 /
-   行高 token / 助手审批工具行 / 「文档名进标题」那半）——
-   其中检查器折叠与本地壳入口本轮已清。
-2. **场景的后续**：删除场景（现在故意没做）、跨窗口场景通知、
+   行高 token / 「文档名进标题」那半）——
+   检查器折叠、本地壳入口、**助手审批工具行**都已清。
+2. **群组协作的后续**（v0.17.0 明确没做）：CLI session resume（按成员记住
+   session id，只注入「上次之后的新消息」）、成员之间的**自动接力 @**（深度
+   上限）、远端/SSH 成员、跨窗口实时广播、并行写文件的锁/worktree、历史
+   分页、成本/用量面板。用户提了再做。
+3. **场景的后续**：删除场景（现在故意没做）、跨窗口场景通知、
    更粗粒度的「场景打包导出」等用户提了再说。
-3. 更早还躺着的：WebSocket（可整块砍）、Ctrl+± 字体缩放、画布元素 Ctrl+C。
+4. 更早还躺着的：WebSocket（可整块砍）、Ctrl+± 字体缩放、画布元素 Ctrl+C。
 
 **发版**：`v0.10.0` 之后又推了 `v0.11.0` → **`v0.14.0`**（连接目录树 /
 Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，2026-10-16 这一轮

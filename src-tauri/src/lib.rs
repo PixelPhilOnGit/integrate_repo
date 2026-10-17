@@ -13,6 +13,7 @@
 mod agent_commands;
 mod assistant_commands;
 mod commands;
+mod group_commands;
 mod health;
 mod kb_commands;
 mod kv_commands;
@@ -66,6 +67,10 @@ pub fn run() {
         // 助手：审批闸门 + 正在跑的 run + 会话记录库。包一层 Arc 是因为
         // 跑一次对话要活到 run 结束（转发任务得把 run 从表里摘掉）。
         .manage(std::sync::Arc::new(assistant_commands::AssistantRuntime::new()))
+        // 群组协作：惰性打开的库（按场景缓存）+ 正在跑的轮次（杀树开关）。
+        // 包 Arc：一轮要活到跑完，命令层和退出收尸都要拿到同一份。
+        .manage(std::sync::Arc::new(group_commands::GroupState::new()))
+        .manage(std::sync::Arc::new(group_commands::GroupRuntime::new()))
         // ⚠️ **为什么要建一个（在 Linux 上还看不见的）菜单**
         //
         // 用户报过「输入的时候 Ctrl+V 不会被识别为粘贴，例如终端那个页面」。
@@ -253,6 +258,19 @@ pub fn run() {
             assistant_commands::assistant_clear_session,
             // 配置通不通，一次往返问清楚（**不走 Channel** —— 理由见那个函数）
             assistant_commands::assistant_test_connection,
+
+            // 群组协作：群 / 成员 / 历史 + 跑一轮（事件走 Channel）+ 停止 + 探测。
+            // 「起不来」只表示这一轮没起来；单个成员失败在事件里
+            group_commands::group_list,
+            group_commands::group_create,
+            group_commands::group_get,
+            group_commands::group_save,
+            group_commands::group_delete,
+            group_commands::group_history,
+            group_commands::group_clear_history,
+            group_commands::group_send,
+            group_commands::group_stop,
+            group_commands::group_probe,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
@@ -326,6 +344,13 @@ pub fn run() {
                     .0
                     .clone();
 
+                // 群组：每个成员都是独立进程，还在改文件 —— 一起收。
+                // `stop_all` 只杀树、不等（和 agents 的收尾同一个理由）。
+                let groups = handle
+                    .state::<std::sync::Arc<group_commands::GroupRuntime>>()
+                    .inner()
+                    .clone();
+
                 // 远端会话（连别的机器那几个）：收拾它是**锦上添花**而不是保险 ——
                 // 它是 SSH 连接，进程一退 socket 就断，远端那个 shell 自己会结束。
                 // 所以这里丢给异步运行时就行，不占上面那个线程（`close_all` 是 async）
@@ -342,6 +367,7 @@ pub fn run() {
                     .spawn(move || {
                         registry.close_all();
                         locals.close_all();
+                        groups.stop_all();
                     })
                     .ok();
             }

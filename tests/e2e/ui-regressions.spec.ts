@@ -214,6 +214,32 @@ test('弹框的焦点圈与回车语义（回归：Tab 曾走出弹框、一次�
  * 刷新按钮的命中区、分界线的拖拽目标宽度、标签按钮的高度。
  * 空态下这些控件都不在 DOM 里，所以要先把「文件」标签点出来。
  */
+test('群组：@ 候选行高与「＋成员」命中区', async ({ page }) => {
+  await page.getByTestId('module-group').click();
+  await expect(page.getByTestId('group-main')).toBeVisible();
+  await page.getByTestId('group-new-empty').click();
+  await page.getByTestId('group-new-name').fill('口径群');
+  await page.getByTestId('group-new-confirm').click();
+  await openInspector(page);
+
+  await page.getByTestId('group-member-add').click();
+  const card = page.getByTestId('group-member-card').last();
+  const nameInput = card.getByTestId('group-member-name');
+  await nameInput.fill('甲');
+  await nameInput.blur();
+
+  // ＋ 是小图标按钮：视觉小，命中区不能小（体验评审的 22px 下限）
+  const add = await box(page, '[data-testid="group-member-add"]');
+  expect(add.width).toBeGreaterThanOrEqual(22);
+  expect(add.height).toBeGreaterThanOrEqual(22);
+
+  // @ 候选行：键盘/鼠标都要点得中
+  await page.getByTestId('group-input').fill('@');
+  await expect(page.getByTestId('group-mention-panel')).toBeVisible();
+  const item = await box(page, '[data-testid="group-mention-item"]');
+  expect(item.height).toBeGreaterThanOrEqual(22);
+});
+
 test('文件浏览器：刷新按钮命中区、分界线够宽、标签不矮', async ({ page }) => {
   await page.getByTestId('module-agents').click();
   await page.getByTestId('agent-empty').waitFor();

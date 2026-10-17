@@ -1,0 +1,42 @@
+[package]
+name = "devtoolkit-group"
+version.workspace = true
+edition = "2021"
+rust-version = "1.89"
+description = "Devtoolkit 的群组协作内核：把本机多个 CLI（claude / csc / codex）当群成员，无头调用 + 流式事件 + 进程树回收（不依赖 Tauri）"
+license = "MIT"
+
+[dependencies]
+# 事件协议和配置的序列化（TS 类型照着这里的字段名写）。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 起子进程 + 逐行读 + 超时/取消。特征面刻意窄：
+# process = 起 CLI；io-util = BufReader::lines；time = 超时；sync = 取消信号；
+# macros = select!；rt = 内部 spawn（测试另加 rt-multi-thread）。
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt", "macros"] }
+
+# 群 / 成员 / 轮次 / 消息。⚠️ **必须和 tasks / store / knowledge / assistant
+# 钉在同一行**（0.32 + bundled）：libsqlite3-sys 带 `links = "sqlite3"`，
+# 依赖图里只允许一个版本，挑新版会让整个 workspace resolve 失败。
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[target.'cfg(unix)'.dependencies]
+# 杀整个进程组要 killpg / 设置 PDEATHSIG。只在 proc.rs 里用（唯一 unsafe 区）。
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Job Object（KILL_ON_JOB_CLOSE）：Windows 上唯一能保证「停一轮/关应用不留孤儿」
+# 的机制，应用自己崩掉时也成立（进程一死句柄就关，整个作业一起没）。
+# 0.59 和 agents 钉同一版，不新增包版本。
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+# 集成测试要 #[tokio::test]（一轮的调度是 async 的）。
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"

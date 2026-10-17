@@ -65,6 +65,7 @@ const ENTRY = {
   tasks: 'task-sidebar',
   assistant: 'assistant-inspector',
   request: 'request-main',
+  group: 'group-main',
 };
 
 async function goModule(page, id) {
@@ -354,6 +355,44 @@ const sweeps = [
       await vis(page, 'assistant-approval', 15_000);
       await page.waitForTimeout(300);
       await shot('assistant-approval', '改文件之前的审批弹条');
+    },
+  },
+  {
+    module: 'group',
+    async run(page, shot) {
+      await vis(page, 'group-main');
+      await shot('group-empty', '还没有群：空态');
+
+      await page.getByTestId('group-new-empty').click();
+      await page.getByTestId('group-new-name').fill('评审群');
+      await page.getByTestId('group-new-confirm').click();
+      await page.getByTestId('group-title').waitFor({ timeout: 10_000 });
+
+      // 建群会请出检查器：加两个成员、选工作目录
+      for (const name of ['甲', '乙']) {
+        const cards = page.getByTestId('group-member-card');
+        const before = await cards.count();
+        await page.getByTestId('group-member-add').click();
+        const input = cards.nth(before).getByTestId('group-member-name');
+        await input.fill(name);
+        await input.blur();
+      }
+      await page.getByTestId('group-workspace-pick').click();
+      await page.waitForTimeout(400);
+      await shot('group-config', '群设置 + 成员编辑（检查器）');
+
+      await page.getByTestId('group-input').fill('@');
+      await page.getByTestId('group-mention-panel').waitFor({ timeout: 10_000 });
+      await shot('group-mention', '@ 候选面板');
+
+      await page.getByTestId('group-input').fill('@甲 先说说你的方案');
+      await page.getByTestId('group-send').click();
+      await page
+        .locator('[data-testid="group-msg-member"]')
+        .last()
+        .waitFor({ timeout: 20_000 });
+      await page.waitForTimeout(600);
+      await shot('group-chat', '一轮群聊：成员回答 + 工具行');
     },
   },
   {

@@ -17,7 +17,7 @@
 
 use std::sync::Mutex;
 
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::kb_commands::KbState;
 use crate::task_commands::TasksState;
@@ -54,24 +54,31 @@ pub fn valid_name(name: &str) -> bool {
 
 /// 切场景（前端在重载之后、渲染之前调一次）。
 ///
-/// 顺带把两处**按场景缓存的东西**清掉：
+/// 顺带把三处**按场景缓存的东西**清掉：
 ///
 /// * 任务库（`TasksState` 里缓存着打开的那份）；
 /// * 知识库句柄表（`KbState.open`，键是 vault 名而根目录带场景 —— 不清的话
-///   切完场景会拿着旧场景的库继续用）。
+///   切完场景会拿着旧场景的库继续用）；
+/// * 群组库（`GroupState`）—— 而且必须**先停掉正在跑的群轮次**：那些成员
+///   进程还在旧场景的工作目录里改文件，不收掉就是跨场景的孤儿进程。
 #[tauri::command]
 pub async fn scenario_set(
     app: tauri::AppHandle,
     tasks: State<'_, std::sync::Arc<TasksState>>,
     kb: State<'_, std::sync::Arc<KbState>>,
+    groups: State<'_, std::sync::Arc<crate::group_commands::GroupState>>,
+    group_runtime: State<'_, std::sync::Arc<crate::group_commands::GroupRuntime>>,
     name: String,
 ) -> Result<(), String> {
     if !name.is_empty() && !valid_name(&name) {
         return Err(format!("场景名不合法：{name}"));
     }
+    // 先停进程（同步杀树），再换命名空间。
+    group_runtime.stop_all();
     *CURRENT.lock().map_err(|_| "场景锁坏了".to_string())? = name.clone();
     tasks.reset();
     kb.reset_open();
+    groups.reset();
     crate::health::line(
         "SCENARIO",
         &format!("切到场景：{}", if name.is_empty() { "（默认）" } else { &name }),

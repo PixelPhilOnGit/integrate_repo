@@ -35,7 +35,7 @@ test('图标栏列出所有注册的模块', async ({ page }) => {
 
   // 有几个模块就有几个图标（加模块时**这里就该红** —— 那是故意的：
   // 它逼你想一遍新模块在图标栏里的位置和 Ctrl+数字的顺序）
-  await expect(rail.getByRole('tab')).toHaveCount(10);
+  await expect(rail.getByRole('tab')).toHaveCount(11);
   await expect(page.getByTestId('module-diagram')).toBeVisible();
   await expect(page.getByTestId('module-redis')).toBeVisible();
   await expect(page.getByTestId('module-sql')).toBeVisible();
@@ -45,6 +45,7 @@ test('图标栏列出所有注册的模块', async ({ page }) => {
   // 占位模块是「加模块只要一个目录 + 一行」的活样本，永远该排最后
   await expect(page.getByTestId('module-request')).toBeVisible();
   await expect(page.getByTestId('module-knowledge')).toBeVisible();
+  await expect(page.getByTestId('module-group')).toBeVisible();
   await expect(page.getByTestId('module-devplaceholder')).toBeVisible();
 });
 

@@ -23,7 +23,7 @@ use clickhouse::{Client, Compression};
 
 use crate::conn::{ConnectionConfig, Failure, ServerInfo};
 use crate::error::SqlError;
-use crate::result::{Cell, ColumnInfo, QueryResult, MAX_ROWS};
+use crate::result::{Cell, ColumnInfo, QueryResult};
 
 /// 建一个客户端。**换库也是重建客户端**（库名是客户端上的一个设置）
 pub fn build(config: &ConnectionConfig) -> Client {
