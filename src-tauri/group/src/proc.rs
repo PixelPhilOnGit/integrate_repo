@@ -11,8 +11,8 @@
 //! 用户点了「停止」之后那些孙子还在后台改文件 —— 这是本模块最不能接受的失败方式。
 //!
 //! * **Unix**：spawn 前 `process_group(0)` 建一个新进程组，取消/超时时
-//!   `killpg(pid, SIGKILL)`；再用 `PR_SET_PDEATHSIG` 保证 Devtoolkit 自己崩掉时
-//!   直接子进程跟着死。
+//!   `killpg(pid, SIGKILL)`。Linux 上再加 `PR_SET_PDEATHSIG`，保证 Devtoolkit
+//!   自己崩掉时直接子进程跟着死；⚠️ macOS **没有** prctl，那边只有 killpg。
 //! * **Windows**：Job Object + `KILL_ON_JOB_CLOSE`（照抄 `agents/src/job.rs` 的
 //!   做法，那套在真机上磨过）。作业句柄一关，整个作业里的进程一起死 ——
 //!   包括应用自己崩溃的情形。
@@ -269,7 +269,14 @@ pub async fn spawn(plan: &CommandPlan) -> Result<Spawned, GroupError> {
 
     #[cfg(unix)]
     {
+        // 所有 Unix 都建新进程组：取消/超时时 killpg 才有东西可杀。
         cmd.process_group(0);
+
+        // ⚠️ `PR_SET_PDEATHSIG` 是 **Linux 专属**（macOS 没有 prctl —— 用在这里
+        // 会让 macOS 打包直接编译不过，2026-10-17 的 v0.17.0 就这么红过一次）。
+        // macOS 上只能靠 process_group + killpg 收树；应用自己崩掉时没有
+        // 「父死子随」的兜底，这是平台差异，不是漏写。
+        #[cfg(target_os = "linux")]
         unsafe {
             use std::os::unix::process::CommandExt;
             cmd.as_std_mut().pre_exec(|| {
