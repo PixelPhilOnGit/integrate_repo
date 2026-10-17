@@ -280,8 +280,6 @@ fn 启动清理_只清过期的事件形文件() {
 
     // 过期、名字认得出的 → 清
     write_event(dir.path(), "waiting.pane_old", old_ms);
-    // 过期、残名（用户自己开 claude 被全局钩子写了 `waiting.` 那种）→ 也清（宽松匹配）
-    write_event(dir.path(), "waiting.", old_ms);
     // 新鲜、认得出的 → 留（可能还有活着的会话在等它）
     write_event(dir.path(), "done.pane_new", fresh_ms);
     // 过期但根本不像事件文件的杂物 → 不动（白名单之外的都不碰）
@@ -289,10 +287,26 @@ fn 启动清理_只清过期的事件形文件() {
     write_event(dir.path(), "working", old_ms);
 
     let removed = prune_stale(dir.path(), std::time::Duration::from_secs(72 * 3600));
-    assert_eq!(removed, 2, "应该恰好清掉那两个过期的：{removed}");
+    assert_eq!(removed, 1, "应该恰好清掉那一个过期的：{removed}");
     assert!(!dir.path().join("waiting.pane_old").exists());
-    assert!(!dir.path().join("waiting.").exists());
     assert!(dir.path().join("done.pane_new").exists(), "新鲜的不能被清掉");
     assert!(dir.path().join("README.txt").exists(), "杂物不归我们管");
     assert!(dir.path().join("working").exists(), "没有点的不算事件文件名");
+}
+
+/// 残名（`waiting.`）也要清 —— 宽松匹配的意义就在这里。
+///
+/// ⚠️ **只能在非 Windows 上验**：Win32 会把文件名**末尾的点归一化掉**
+/// （写 `waiting.` 实际落成 `waiting`），于是这种残名在 Windows 上
+/// 根本**造不出来** —— 不是那边不清理，是那边不产生这种积水。
+#[cfg(not(windows))]
+#[test]
+fn 启动清理_残名也清() {
+    let dir = TempDir::new("events-prune-residual");
+    let old_ms = 1_700_000_000_000; // 2023-11 的时间戳，远老于任何 TTL
+    write_event(dir.path(), "waiting.", old_ms);
+
+    let removed = prune_stale(dir.path(), std::time::Duration::from_secs(72 * 3600));
+    assert_eq!(removed, 1, "残名也算我们的事件文件（按第一个点之前判）");
+    assert!(!dir.path().join("waiting.").exists());
 }
