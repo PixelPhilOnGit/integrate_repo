@@ -40,7 +40,7 @@ export function Toolbar({ state, store, layout }: ToolbarProps): ReactNode {
       */}
       <div className="rd-toolbar-scroll">
       <div className="rd-group">
-        <span className="rd-brand">超级个体</span>
+        <span className="rd-brand">SuperIndividual</span>
       </div>
 
       <div className="rd-group">

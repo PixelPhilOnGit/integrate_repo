@@ -127,7 +127,7 @@ test('从零开始：加一个工作目录、开一个会话、终端里跑起�
   const id = await focusedId(page);
 
   // 假 agent 会画一个横幅出来
-  await expect.poll(() => termText(page, id)).toContain('超级个体 假 agent');
+  await expect.poll(() => termText(page, id)).toContain('SuperIndividual 假 agent');
   // 侧栏里也出现了这个会话（它那个窗口已经在列表里，展开就能看见）
   await expandFirst(page);
   await expect(page.locator(`[data-testid="agent-session-${id}"]`)).toBeVisible();

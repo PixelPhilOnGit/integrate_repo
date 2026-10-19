@@ -1,8 +1,9 @@
 
-# 超级个体 交接文档
+# SuperIndividual 交接文档
 
-> 显示名是「超级个体」；内部 crate / 仓库仍叫 `devtoolkit-*`，`identifier` 仍是
-> `com.devtoolkit.desktop`（改它会搬应用数据目录 —— 用户的数据不能因为改名丢）。
+> 显示名是 **SuperIndividual**（中文「超级个体」）；内部 crate / 仓库仍叫
+> `devtoolkit-*`，`identifier` 仍是 `com.devtoolkit.desktop`（改它会搬应用数据
+> 目录 —— 用户的数据不能因为改名丢）。
 
 > 起初写于 2026-09-17，2026-09-18 加入 SSH 模块后重写，同日加入智能体会话模块后又补了一轮。
 > 2026-09-21 加入助手模块（自研 agent 内核）后再补一轮。
@@ -2690,11 +2691,11 @@ Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，20
 **`v0.17.2`**：csc 起来之后的下一层 —— 它要 Git Bash（`COSTRICT_GIT_BASH_PATH`）。
 复用智能体会话里配好的路径，自动探测兜底。
 **`v0.18.0`**：知识库多文件 + 图片；共享层收编（`shared/diagram`、
-`shared/media`）。索引 schema v2（来源图片清单 + run 多来源）。同时**改名
-「超级个体」**（显示名；内部 crate / identifier 不动）。
-⚠️ 改名后 **Linux 只出 AppImage，不再出 deb**：Debian 的包名字段必须是 ASCII，
-中文 `productName` 会让 deb 装不上（tauri#14366）。`identifier` 仍是
-`com.devtoolkit.desktop` —— 改它等于搬应用数据目录。
+`shared/media`）。索引 schema v2（来源图片清单 + run 多来源）。同时改名为
+**SuperIndividual**（中文「超级个体」；内部 crate / identifier 不动）。
+⚠️ 名字**必须是 ASCII**：Debian 的包名字段不允许中文（tauri#14366，中文
+`productName` 会让 deb 装不上）。`identifier` 仍是 `com.devtoolkit.desktop`
+—— 改它等于搬应用数据目录。
 
 **再往后（用户 2026-10-19 提的）**：群成员要能**读/操作 Devtoolkit 自己的
 数据**（原话：「@codex -- 秘书 帮我看下我现在有什么待办事项……群成员要有

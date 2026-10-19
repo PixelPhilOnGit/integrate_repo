@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # ⚠️ **标签和版本号必须一致** —— 不一致的后果不是报错，而是「东西全对不上」：
-      # 包名（`超级个体_<版本>_x64-setup.exe`）和 Release 名都取配置里的版本，
+      # 包名（`SuperIndividual_<版本>_x64-setup.exe`）和 Release 名都取配置里的版本，
       # 于是出现「标签叫 v0.4.0、包叫 0.3.0、assets 找不到」（2026-09-19 真发生过：
       # 推了 v0.4.0，但 9 处版本号一个都没跟着改）。
       #
@@ -252,7 +252,7 @@ jobs:
             platform: macos-latest
             args: '--target x86_64-apple-darwin'
             rust-targets: 'x86_64-apple-darwin'
-          - label: Linux (AppImage)
+          - label: Linux (deb + AppImage)
             platform: ubuntu-22.04
             args: ''
             rust-targets: ''

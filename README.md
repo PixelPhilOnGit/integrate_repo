@@ -1,6 +1,6 @@
-# 超级个体（SuperIndividual）
+# SuperIndividual
 
-> 显示名是「超级个体」；内部 crate / 仓库仍叫 `devtoolkit-*`（改名会牵动数据目录，不做）。
+> 中文名「超级个体」；内部 crate / 仓库仍叫 `devtoolkit-*`（改名会牵动数据目录，不做）。
 
 一个**开发者工作台**：把平时要开好几个软件才干完的事收进一个桌面应用。
 

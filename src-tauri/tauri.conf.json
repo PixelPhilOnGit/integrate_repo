@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "超级个体",
+  "productName": "SuperIndividual",
   "version": "0.18.0",
   "identifier": "com.devtoolkit.desktop",
   "build": {
@@ -20,15 +20,16 @@
   "bundle": {
     "active": true,
     "targets": [
+      "deb",
       "appimage",
       "msi",
       "nsis",
       "dmg"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "超级个体：一个开发者工作台",
-    "longDescription": "超级个体把平时要开好几个软件才干完的事收进一个桌面应用。模块化架构，每个模块自包含：顺序图、数据库、SSH 终端、智能体会话、任务、助手、接口调试、知识库、群组协作。",
-    "copyright": "© 超级个体 contributors",
+    "shortDescription": "SuperIndividual：一个开发者工作台",
+    "longDescription": "SuperIndividual 把平时要开好几个软件才干完的事收进一个桌面应用。模块化架构，每个模块自包含：顺序图、数据库、SSH 终端、智能体会话、任务、助手、接口调试、知识库、群组协作。",
+    "copyright": "© SuperIndividual contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -32,7 +32,7 @@ const PROMPT = '\x1b[36m❯\x1b[0m ';
 
 const BANNER = [
   '',
-  '\x1b[1m超级个体 假 agent\x1b[0m \x1b[2m（浏览器模式：真进程是起不来的）\x1b[0m',
+  '\x1b[1mSuperIndividual 假 agent\x1b[0m \x1b[2m（浏览器模式：真进程是起不来的）\x1b[0m',
   '\x1b[2m输入 help 看能干什么\x1b[0m',
   '',
 ].join('\r\n');

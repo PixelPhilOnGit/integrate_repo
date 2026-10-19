@@ -64,7 +64,7 @@ export function IntegrateDialog({ target, state, store, now, onClose }: Props): 
         aria-labelledby="agent-int-title"
       >
         <h2 className="rd-modal-title" id="agent-int-title">
-          让 超级个体 知道 {label} 的状态
+          让 SuperIndividual 知道 {label} 的状态
         </h2>
 
         <p className="rd-hint">

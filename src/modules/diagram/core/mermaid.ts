@@ -115,7 +115,7 @@ export function toMermaid(doc: Doc, opts: { comment?: boolean } = {}): string {
 
   const lines: string[] = ['sequenceDiagram'];
   if (withComment) {
-    lines.push('    %% 由 超级个体 导出：版面坐标与配色不会保留');
+    lines.push('    %% 由 SuperIndividual 导出：版面坐标与配色不会保留');
     lines.push('    %% 如需继续编辑，请使用 .seq.json 源文件');
   }
 
