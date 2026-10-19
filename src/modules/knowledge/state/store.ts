@@ -372,6 +372,28 @@ export class KnowledgeStore {
     }
   }
 
+  /**
+   * 重新提取一份资料的图片（v0.18.0 之前上传的来源没有抽过图）。
+   * 结果用外壳状态栏说清楚 —— 抽到几张、或者为什么一张都没有。
+   */
+  async reextractSource(rel: string): Promise<void> {
+    const name = this.state.activeVault;
+    if (name === null) return;
+    try {
+      const row = await knowledgeServices.client.sourceReextract(name, rel);
+      const sources = await knowledgeServices.client.sources(name);
+      this.set({ sources });
+      const count = row.images.length;
+      this.shell?.setStatus(
+        count > 0
+          ? `重新提取完成：${count} 张图`
+          : row.imageNote || '没有找到可提取的图片',
+      );
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
   async generate(sourceRels: string[], cli: string, note: string): Promise<void> {
     const name = this.state.activeVault;
     if (name === null) return;

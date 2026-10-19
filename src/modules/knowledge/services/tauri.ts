@@ -29,6 +29,7 @@ export function createTauriKnowledgeClient(): KnowledgeClient {
     sourceAdd: (name) => invoke('kb_source_add', { name }),
     sourceDelete: (name, rel, deleteGenerated) =>
       invoke('kb_source_delete', { name, rel, deleteGenerated }),
+    sourceReextract: (name, rel) => invoke('kb_source_reextract', { name, rel }),
 
     async generate(name, sourceRels, cli, note, onEvent: GenListener) {
       // ⚠️ 一次通信一个新通道（见 createChannel 的头注释：复用会把回调打死）

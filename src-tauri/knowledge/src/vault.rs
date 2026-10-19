@@ -169,7 +169,7 @@ impl Vault {
     /// 读一张图片的字节。闸门：`_files/` 单段 + 非符号链接 + canonicalize
     /// 后仍在库里 + 普通文件 + 大小上限。
     pub fn read_image(&self, rel: &str, max_bytes: u64) -> Result<Vec<u8>, KbError> {
-        let rel = safe_file_rel(rel)?;
+        let rel = safe_asset_rel(rel)?;
         let bad = |reason: &'static str| KbError::BadRel {
             rel: rel.clone(),
             reason,
@@ -228,7 +228,39 @@ impl Vault {
             }
         }
         match hits.len() {
-            1 => Ok(format!("{FILES_DIR}/{}", hits[0])),
+            1 => return Ok(format!("{FILES_DIR}/{}", hits[0])),
+            0 => {}
+            _ => {
+                return Err(KbError::BadRel {
+                    rel: target.to_string(),
+                    reason: "有多张同名图片，请写完整路径",
+                })
+            }
+        }
+
+        // 旧卡片兼容：v0.18.0 之前上传的图片资料只在 `_sources/<时间戳>_名字`。
+        // 原文件名去掉时间戳前缀之后与 target 完全相等才算（唯一命中）。
+        let mut legacy: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(self.root.join(SOURCES_DIR)) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let original = name
+                    .split_once('_')
+                    .map(|(prefix, rest)| {
+                        if prefix.chars().all(|c| c.is_ascii_digit()) {
+                            rest
+                        } else {
+                            name.as_str()
+                        }
+                    })
+                    .unwrap_or(name.as_str());
+                if original == target {
+                    legacy.push(name);
+                }
+            }
+        }
+        match legacy.len() {
+            1 => Ok(format!("{SOURCES_DIR}/{}", legacy[0])),
             0 => Err(KbError::NotFound {
                 rel: target.to_string(),
             }),
@@ -386,6 +418,36 @@ pub fn safe_file_rel(rel: &str) -> Result<String, KbError> {
     let name = parts.next().unwrap_or("");
     if dir != FILES_DIR || name.is_empty() || parts.next().is_some() {
         return Err(bad("只允许 _files/<文件名>"));
+    }
+    if name.starts_with('.') {
+        return Err(bad("不许隐藏文件"));
+    }
+    let ext = Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !crate::images::IMAGE_EXTS.contains(&ext.as_str()) {
+        return Err(bad("不是图片扩展名"));
+    }
+    Ok(rel)
+}
+
+/// 读取图片用的闸门：`_files/<文件名>` 或 `_sources/<文件名>`，单段、图片扩展名。
+///
+/// `_sources/` 是**旧卡片兼容**用的：v0.18.0 之前上传的图片资料只有原件
+/// （`_sources/<时间戳>_名字.png`），老卡片里的 `![[名字.png]]` 要靠这里兜底。
+/// 扩展名白名单保证它读不出 PDF/文档，只是把用户自己传进来的图片读回去。
+pub fn safe_asset_rel(rel: &str) -> Result<String, KbError> {
+    let rel = safe_rel(rel)?;
+    let bad = |reason: &'static str| KbError::BadRel {
+        rel: rel.clone(),
+        reason,
+    };
+    let mut parts = rel.split('/');
+    let dir = parts.next().unwrap_or("");
+    let name = parts.next().unwrap_or("");
+    if (dir != FILES_DIR && dir != SOURCES_DIR) || name.is_empty() || parts.next().is_some() {
+        return Err(bad("只允许 _files/ 或 _sources/ 下的单段文件名"));
     }
     if name.starts_with('.') {
         return Err(bad("不许隐藏文件"));
@@ -628,6 +690,24 @@ mod tests {
             assert!(v.read_image("_files/link.png", 1024).is_err(), "软链必须拒绝");
             let _ = fs::remove_file(&outside);
         }
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 旧图片_从_sources_按原名兜底_但_files_优先() {
+        let v = tmp_vault("files-legacy");
+        // v0.18 之前：原件只在 _sources（带时间戳前缀），_files 里没有
+        fs::write(v.source_path("1729_架构图.png"), [1, 2, 3]).unwrap();
+        let rel = v.resolve_image_target("架构图.png").unwrap();
+        assert_eq!(rel, "_sources/1729_架构图.png");
+        assert_eq!(v.read_image(&rel, 1024).unwrap(), vec![1, 2, 3]);
+
+        // 新路径有同名时优先 _files
+        v.write_file("_files/架构图.png", &[9]).unwrap();
+        assert_eq!(
+            v.resolve_image_target("架构图.png").unwrap(),
+            "_files/架构图.png"
+        );
         let _ = fs::remove_dir_all(v.root());
     }
 

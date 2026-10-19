@@ -46,7 +46,9 @@ export function ImageEmbed({
   fallback,
 }: ImageEmbedProps): ReactNode {
   const [state, setState] = useState<
-    { phase: 'loading' } | { phase: 'ready'; url: string } | { phase: 'error' }
+    | { phase: 'loading' }
+    | { phase: 'ready'; url: string }
+    | { phase: 'error'; message: string }
   >({ phase: 'loading' });
   const [open, setOpen] = useState(false);
   const loadRef = useRef(load);
@@ -67,8 +69,13 @@ export function ImageEmbed({
           type === '' ? new Blob([bytes]) : new Blob([bytes], { type }),
         );
         setState({ phase: 'ready', url });
-      } catch {
-        if (alive) setState({ phase: 'error' });
+      } catch (e) {
+        if (alive) {
+          setState({
+            phase: 'error',
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
       }
     })();
 
@@ -84,7 +91,7 @@ export function ImageEmbed({
         className="rd-image-embed-fallback"
         data-testid={testId}
         data-state="error"
-        title={`图片加载失败：${target}`}
+        title={`图片加载失败：${target}${state.message === '' ? '' : `（${state.message}）`}`}
       >
         {fallback ?? `[图片] ${target}`}
       </span>

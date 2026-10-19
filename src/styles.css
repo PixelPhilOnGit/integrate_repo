@@ -5331,15 +5331,33 @@ body.rd-resizing * {
   background: var(--panel);
 }
 
-.rd-image-lightbox-close {
+.rd-image-lightbox-tools {
   position: absolute;
   top: 14px;
   right: 16px;
-  min-width: 28px;
-  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rd-image-lightbox-tools button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 8px;
   border: 0;
   border-radius: 6px;
   background: var(--panel);
   cursor: pointer;
-  font-size: 16px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.rd-image-lightbox-tools button:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-image-lightbox-img {
+  touch-action: none;
+  user-select: none;
 }

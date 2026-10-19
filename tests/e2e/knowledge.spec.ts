@@ -155,11 +155,25 @@ test('卡片图片：内嵌显示、点击放大、Esc 关闭、断链回落角�
   await expect(image).toHaveAttribute('data-state', 'ready');
   await expect(image).toHaveAttribute('src', /^blob:/);
 
-  // 点击放大 → 灯箱；Esc 关闭
+  // 点击放大 → 灯箱
   await image.click();
-  await expect(page.getByTestId('kb-image-lightbox')).toBeVisible();
+  const lightbox = page.getByTestId('kb-image-lightbox');
+  await expect(lightbox).toBeVisible();
+
+  // 放大 / 缩小 / 复位（用户要求「也要能放大缩小」）
+  const big = page.getByTestId('kb-image-lightbox-img');
+  await expect(big).toHaveAttribute('data-scale', '1');
+  await page.getByTestId('kb-image-lightbox-zoom-in').click();
+  await expect(big).toHaveAttribute('data-scale', '1.25');
+  await page.getByTestId('kb-image-lightbox-zoom-out').click();
+  await expect(big).toHaveAttribute('data-scale', '1');
+  await page.getByTestId('kb-image-lightbox-zoom-in').click();
+  await page.getByTestId('kb-image-lightbox-reset').click();
+  await expect(big).toHaveAttribute('data-scale', '1');
+
+  // Esc 关闭
   await page.keyboard.press('Escape');
-  await expect(page.getByTestId('kb-image-lightbox')).toHaveCount(0);
+  await expect(lightbox).toHaveCount(0);
 
   // 找不到的图片：回落成文字角标（data-state=error），阅读器不炸
   const missing = page.getByTestId('kb-image-缺失图.png');
@@ -195,4 +209,16 @@ test('多选资料：默认勾当前、全选后综合生成、阅读器显示�
   const sources = page.getByTestId('kb-reader-sources');
   await expect(sources).toContainText('示例资料1.md');
   await expect(sources).toContainText('示例资料2.md');
+});
+
+test('来源菜单：重新提取图片（旧资料升级路径）并给出结果', async ({ page }) => {
+  await enterKnowledge(page);
+  await page.getByTestId('kb-source-add').click();
+  await expect(page.getByTestId('kb-source-_sources/示例资料1.md')).toBeVisible();
+
+  await page.getByTestId('kb-source-menu-_sources/示例资料1.md').click();
+  await page.getByTestId('menu-重新提取图片').click();
+
+  // 假实现里每份来源都有一张图 → 状态栏说清结果
+  await expect(page.getByTestId('status-text')).toContainText('重新提取完成');
 });

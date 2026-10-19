@@ -238,6 +238,13 @@ function SourceLine({
 function sourceMenuItems(rel: string, close: () => void): MenuItem[] {
   return [
     {
+      label: '重新提取图片',
+      onSelect: () => {
+        close();
+        void knowledgeStore.reextractSource(rel);
+      },
+    },
+    {
       label: '删除这份资料（保留卡片）',
       danger: true,
       onSelect: () => {

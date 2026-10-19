@@ -692,6 +692,88 @@ pub async fn kb_source_delete(
     .await
 }
 
+/// 重新提取一份资料的图片（旧资料升级用；文本不动）。
+///
+/// v0.18.0 之前上传的来源没有抽过图（`images=[]`），生成出来的卡片自然没有
+/// 图片。这个命令把原件重新解析一遍、把图写进 `_files/`，并更新索引。
+/// 已抽过的图先删掉（重抽后编号可能变化，避免孤儿）。
+#[tauri::command]
+pub async fn kb_source_reextract(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+) -> Result<SourceRow, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let idx = index_of(&h);
+        let source = idx
+            .source(&rel)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("这份资料不在库里：{rel}"))?;
+
+        let abs = h.vault.abs(&rel).map_err(|e| e.to_string())?;
+        let ext = abs
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+
+        // 先清旧图（尽力；文件不在不算错）
+        for image in &source.images {
+            let _ = h.vault.delete_file(&image.rel);
+        }
+
+        let set = images::extract_images(&abs, &ext).map_err(|e| e.to_string())?;
+        let stored = rel.rsplit('/').next().unwrap_or(&rel);
+        let stem = images::source_stem(stored);
+        let mut saved = Vec::new();
+        for (index, image) in set.images.iter().enumerate() {
+            let file_rel = images::image_rel(&stem, index + 1, &image.ext);
+            h.vault
+                .write_file(&file_rel, &image.bytes)
+                .map_err(|e| format!("图片存不进库（{e}）"))?;
+            saved.push(SourceImage {
+                rel: file_rel,
+                original_name: image.original_name.clone(),
+                page: image.page,
+            });
+        }
+        let mut note = set.note;
+        if saved.is_empty() && note.trim().is_empty() {
+            note = "没有找到可提取的图片（可能是矢量图/纯文本）".to_string();
+        }
+
+        let extracted = idx
+            .source_extracted(&rel)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let created = source.created.clone();
+        idx.upsert_source(&SourceRecord {
+            rel: &source.rel,
+            name: &source.name,
+            byte_size: source.byte_size,
+            extract_status: &source.extract_status,
+            extracted: &extracted,
+            images: &saved,
+            image_note: &note,
+            created: &created,
+        })
+        .map_err(|e| e.to_string())?;
+
+        Ok(SourceRow {
+            rel: source.rel,
+            name: source.name,
+            byte_size: source.byte_size,
+            extract_status: source.extract_status,
+            created,
+            images: saved,
+            image_note: note,
+        })
+    })
+    .await
+}
+
 // ------------------------------------------------------------------ 生成
 
 #[derive(Serialize, Clone)]
@@ -1105,14 +1187,16 @@ pub async fn kb_file_read(
     let state = Arc::clone(state.inner());
     crate::commands::blocking(move || {
         let h = handle_of(&state, &app, &name)?;
-        let rel = h
-            .vault
-            .resolve_image_target(&target)
-            .map_err(|e| e.to_string())?;
-        let bytes = h
-            .vault
-            .read_image(&rel, MAX_IMAGE_READ)
-            .map_err(|e| e.to_string())?;
+        // 失败写健康日志：真机上「图片不显示」只能靠这个定位（是找不到、
+        // 读不了、还是前端没渲染）。
+        let rel = h.vault.resolve_image_target(&target).map_err(|e| {
+            crate::health::line("KB_IMAGE", &format!("找不到图片 {target}：{e}"));
+            e.to_string()
+        })?;
+        let bytes = h.vault.read_image(&rel, MAX_IMAGE_READ).map_err(|e| {
+            crate::health::line("KB_IMAGE", &format!("读图片失败 {rel}：{e}"));
+            e.to_string()
+        })?;
         Ok(tauri::ipc::Response::new(bytes))
     })
     .await

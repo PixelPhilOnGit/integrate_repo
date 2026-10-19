@@ -148,6 +148,8 @@ export interface KnowledgeClient {
   sourceAdd(name: string): Promise<SourceAddOutcome | null>;
   /** 删原件；`deleteGenerated` = 连它生成的卡片一起删。返回连带删掉的卡片数 */
   sourceDelete(name: string, rel: string, deleteGenerated: boolean): Promise<number>;
+  /** 重新提取一份资料的图片（旧资料升级用；文本不动）。返回更新后的来源行 */
+  sourceReextract(name: string, rel: string): Promise<SourceRow>;
 
   /**
    * 跑一次生成（可多份资料）；进度走 `onEvent`（**第一条事件带 runId**）。

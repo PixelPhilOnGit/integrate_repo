@@ -240,6 +240,8 @@ pub fn run() {
             kb_commands::kb_sources,
             kb_commands::kb_source_add,
             kb_commands::kb_source_delete,
+            // 旧资料补图：重新解析原件、把图片写进 _files/（文本不动）
+            kb_commands::kb_source_reextract,
             kb_commands::kb_generate,
             kb_commands::kb_generate_cancel,
             kb_commands::kb_runs,

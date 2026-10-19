@@ -247,6 +247,23 @@ export function createWebKnowledgeClient(): KnowledgeClient {
       return { added: [{ ...source }], errors: [] };
     },
 
+    async sourceReextract(name: string, rel: string): Promise<SourceRow> {
+      const v = vaultOf(name);
+      const source = v.sources.find((s) => s.rel === rel);
+      if (!source) throw new Error(`这份资料不在库里：${rel}`);
+      if (source.images.length === 0) {
+        // 假实现：旧来源补一张假图（真实现在 Rust 里重新解析原件）
+        const stem = (rel.split('/').pop() ?? '资料').replace(/\.[^.]+$/, '');
+        const imageRel = `_files/${stem}-img-1.png`;
+        v.files.set(imageRel, PNG_1X1);
+        source.images = [
+          { rel: imageRel, originalName: '重新提取.png', page: null },
+        ];
+        source.imageNote = '';
+      }
+      return { ...source };
+    },
+
     async sourceDelete(name: string, rel: string, deleteGenerated: boolean): Promise<number> {
       const v = vaultOf(name);
       v.sources = v.sources.filter((s) => s.rel !== rel);

@@ -866,14 +866,24 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
   过滤、加密 PDF、inline image 一律**跳过并计数**，提示词里告诉模型不可引用。
 - **Word/PPT**：`word/media/*`、`ppt/media/*`（现有 zip）；`.emf/.wmf` 计入
   跳过。**PPT 文本提取**也顺手补上了（否则 PPT 资料生成永远 failed）。
-- **阅读器**：`![[…]]` 内嵌显示（`shared/media/ImageEmbed`）+ 点击灯箱（Esc/
-  背板关闭）；加载失败回落成原来的文字角标。CSP 的 `img-src` 本来就有 `blob:`。
+- **阅读器**：`![[…]]` 内嵌显示（`shared/media/ImageEmbed`）+ 点击灯箱
+  （Esc/背板关闭；**灯箱支持放大/缩小/复位** —— 按钮 + 滚轮，放大后可拖动
+  平移）；加载失败回落成原来的文字角标（title 里带失败原因）。CSP 的
+  `img-src` 本来就有 `blob:`。
 - **读取命令** `kb_file_read(name, target)`：只允许 `_files/` 单段文件名、
   symlink 拒绝、canonicalize 归属、32 MiB 上限。参数表里没有路径（老规矩）。
 - **删除语义**：删来源「保留卡片」→ 图片**保留**（卡片还在引用）；「连卡片
   一起删」→ 按来源的图片清单一并删（尽力，文件不在不算错）。
-- ⚠️ **旧资料不会自动补图**：升级后旧的 `sources` 行 `images=[]`。要图就重新
-  上传（或以后加「重新提取」，本轮不做）。
+- **旧资料补图**（v0.18.1）：来源行右键有「**重新提取图片**」
+  （`kb_source_reextract`）—— 重新解析原件、把图写进 `_files/`、更新索引；
+  抽不到时状态栏会说「没有找到可提取的图片（可能是矢量图/纯文本）」。
+  补完图要**重新生成**卡片才会带上 image 块（旧卡片不会自动改）。
+- ⚠️ **旧卡片的裸文件名兜底**（v0.18.1）：v0.18.0 之前上传的图片资料只在
+  `_sources/<时间戳>_名字`，`kb_file_read` 在 `_files/` 找不到时会按
+  **去掉时间戳前缀的原名**去 `_sources/` 找（唯一命中才认）。读取闸门相应
+  扩到 `_files/` 或 `_sources/` 的**单段图片名**。
+- ⚠️ **`kb_file_read` 的失败写健康日志**（`KB_IMAGE`）：真机上「图片不显示」
+  只能靠它区分「找不到 / 读不了 / 前端没渲染」。
 
 - **明确不做**（都记着）：watcher、扫描版 PDF/OCR、加密 PDF、PDF inline
   image / 嵌套 Form、JPX/JBIG2/CCITT/LZW、xlsx 图片、旧 `.doc/.ppt`、
@@ -2693,6 +2703,9 @@ Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，20
 **`v0.18.0`**：知识库多文件 + 图片；共享层收编（`shared/diagram`、
 `shared/media`）。索引 schema v2（来源图片清单 + run 多来源）。同时改名为
 **SuperIndividual**（中文「超级个体」；内部 crate / identifier 不动）。
+**`v0.18.1`**：真机反馈「知识库还是没看到图片」—— 补上旧资料「重新提取图片」
+入口、旧卡片裸文件名到 `_sources/` 的兜底、灯箱放大/缩小/拖动，以及
+`kb_file_read` 失败的健康日志。
 ⚠️ 名字**必须是 ASCII**：Debian 的包名字段不允许中文（tauri#14366，中文
 `productName` 会让 deb 装不上）。`identifier` 仍是 `com.devtoolkit.desktop`
 —— 改它等于搬应用数据目录。
