@@ -167,7 +167,22 @@ jobs:
       # ⚠️ 这个 crate 之前**没进 CI**（既有欠账），这轮补上。
       - name: 跑测试（知识库：提取 / 索引 / 图片 / 生成管线）
         working-directory: src-tauri
-        run: cargo test --package devtoolkit-knowledge --locked
+        shell: bash
+        run: |
+          # ⚠️ 串行跑：知识库里有起进程的测试（取消/超时），并行下在慢 runner
+          # 上出现过偶发红。串行只多几秒。
+          set -o pipefail
+          cargo test --package devtoolkit-knowledge --locked -- --test-threads=1 2>&1 \
+            | tee /tmp/kb-test.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # 公开 API 拿不到 job 日志 —— 把失败现场转成 annotation 才看得到。
+            grep -E "panicked|FAILED|^error(\[|:)|test result: FAILED" /tmp/kb-test.log \
+              | head -30 | while IFS= read -r line; do
+                echo "::error::$line"
+              done
+            exit "$status"
+          fi
 
       # 群组协作内核：**一起跑进程**，但桩程序是临时 `.sh`，不需要任何服务端。
       # 顺序接力 / 并行 / 取消杀树 / 超时 / JSONL 端到端都在这里。
