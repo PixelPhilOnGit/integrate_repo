@@ -806,6 +806,10 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
   （rusqlite bundled 没开 fts5，加它牵动全 workspace 的 libsqlite3-sys，
   单独论证；迁移链是现成的，量大了再上）。
 - **生成管线**（用户原话「用宿主机的 codex/claude 帮忙读文件」）：
+  ⚠️ **codex 必须带 `--skip-git-repo-check`**（真机 2026-10-19 报的）：vault
+  目录不是 git 仓库，codex 默认拒绝在非 git 目录里跑，报「Not inside a trusted
+  directory and --skip-git-repo-check was not specified」——生成直接失败。
+  群组模块的 codex adapter 也带了这个 flag。
   上传时 Rust 提取文本（md/txt 直读；pdf 用 `pdf-extract`、docx 用
   `zip`+`quick-xml`、xlsx 用 `calamine` —— 全纯 Rust，2 核机试装过才定的；
   **图片不提文本，走 CLI 直读**：claude `--allowedTools Read`+`--add-dir` /
@@ -891,6 +895,14 @@ full 档有红色警告。
   CreateProcess —— `resolve_program` 按 PATHEXT 找，`.cmd/.bat` 换成
   `%SystemRoot%\System32\cmd.exe /D /S /C <脚本>`，所有 spawn 加
   `CREATE_NO_WINDOW`。Windows CI 有专门的测试。
+* ⚠️ **740（ERROR_ELEVATION_REQUIRED）与 npm shim**（真机 2026-10-19 报的）：
+  用户那台机器上 **`CreateProcess(cmd.exe)` 本身就返回 740** —— 和当年
+  「任务附件 cmd /C start」是同一个环境（见 `open.rs` 的三层退让）。
+  csc 是 npm 装的 `.cmd`，原本走 cmd 启动器，于是「起不来 csc：需要提升」。
+  现在 `resolve_program` 会**认出 npm shim**（从脚本里找出 `%dp0%\…\cli.js`），
+  并把「直接 `node <js>`」作为备选启动方式；**只在 740 时退让**，两条都失败
+  才报错（两次的错误一起带上）。这样也顺手让 claude/codex 的 npm shim 在
+  这类机器上能用。
 
 #### 事件协议与前端
 
@@ -2621,9 +2633,11 @@ Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，20
 每次都是：四处版本号 + 重新生成的锁文件，CI 出四平台包（**草稿 Release**）。
 ⚠️ 真机验证的欠账还是那几份清单（凭据存储 / 远端会话 / 剪贴板按键 /
 **多窗口** / **知识库真 CLI** / **群组三 CLI**），都在对应小节末尾。
-`v0.17.0` 是用户明确说「先推、先出包，我后面去验」之后发的 —— 真机清单
-（尤其 csc 的 JSONL 形状与权限 flag）如果发现问题，按补丁版本处理，不要
-悄悄改 `v0.17.0` 的标签。
+`v0.17.0` 是用户明确说「先推、先出包，我后面去验」之后发的。
+**`v0.17.1`**：真机验证报上来的两个问题 —— ①知识库生成时 codex 在非 git
+的 vault 目录里拒绝启动（补 `--skip-git-repo-check`）；②Windows 上 npm 装的
+`csc` 起不来（740；改成识别 npm shim、必要时直连 node）。按补丁版本发，
+`v0.17.0` 的标签不动。
 
 **接着做（按顺序）**：
 

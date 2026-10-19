@@ -5,7 +5,7 @@
 //! * `claude -p --output-format stream-json --verbose`：stdout 是 JSONL；
 //!   ⚠️ **stderr 有噪音**（网关告警等），解析只看 stdout；result 事件里
 //!   有正文 + `usage` + `total_cost_usd`。
-//! * `codex exec -s read-only --json`：JSONL；`item.completed`（agent_message）
+//! * `codex exec -s read-only --json --skip-git-repo-check`：JSONL；`item.completed`（agent_message）
 //!   是正文、`turn.completed.usage` 有用量。**prompt 走 stdin**（不带参数）。
 //!
 //! # 工程骨架抄谁
@@ -138,6 +138,11 @@ pub fn build_argv(cli: Cli, program: &str, read_files: &[String]) -> Vec<String>
                 "-s".to_string(),
                 "read-only".to_string(),
                 "--json".to_string(),
+                // ⚠️ 知识库的 vault 不一定是 git 仓库，而 codex 默认**拒绝**
+                // 在非 git 目录里跑 —— 用户真机报过：生成卡片直接失败，
+                // stderr 是「Not inside a trusted directory and
+                // --skip-git-repo-check was not specified」。
+                "--skip-git-repo-check".to_string(),
             ]);
             for file in read_files {
                 argv.push("-i".to_string());
@@ -362,7 +367,13 @@ mod tests {
         let codex = build_argv(Cli::Codex, "codex", &[]);
         assert_eq!(codex[1..3], ["exec".to_string(), "-s".to_string()]);
         assert!(codex.contains(&"--json".to_string()));
-        assert!(!codex.contains(&"exec".to_string()) || true);
+        // 回归（真机 2026-10-19）：vault 不是 git 仓库时 codex 直接拒绝启动，
+        // 报「Not inside a trusted directory and --skip-git-repo-check was
+        // not specified」。少了这个 flag，知识库生成在真机上全军覆没。
+        assert!(
+            codex.contains(&"--skip-git-repo-check".to_string()),
+            "codex 必须跳过 git 仓库检查：{codex:?}"
+        );
         let codex_img = build_argv(Cli::Codex, "codex", &["/x/a.png".to_string()]);
         assert!(codex_img.windows(2).any(|w| w == ["-i", "/x/a.png"]));
     }

@@ -41,10 +41,18 @@ use crate::error::GroupError;
 pub const MAX_LINE_BYTES: usize = 8 * 1024 * 1024;
 
 /// 解析后的程序：真正要执行的程序 + 启动器前缀。
+///
+/// `alt` 是**同一个程序的另一种启动方式**（目前只有 Windows 的 npm `.cmd`
+/// 有两条路：`cmd.exe /C` 和「直接调 node 跑它背后的 JS」）。
+/// 用途：有些机器上 `CreateProcess(cmd.exe)` 会直接返回 **740
+/// （ERROR_ELEVATION_REQUIRED）** —— 用户真机 2026-10-19 报过 csc 起不来就是
+/// 这个形状（同一台机器此前「任务附件 cmd /C start」也是 740）。主路失败时
+/// 换 alt 重试一次，两条都失败才报错。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProgram {
     pub program: String,
     pub prefix_args: Vec<String>,
+    pub alt: Option<Box<ResolvedProgram>>,
 }
 
 /// 解析用户填的 program 到「真正能 spawn 的东西」。
@@ -82,17 +90,14 @@ pub fn resolve_program(raw: &str) -> Result<ResolvedProgram, GroupError> {
             .unwrap_or("")
             .to_ascii_lowercase();
         if ext == "cmd" || ext == "bat" {
-            let root = std::env::var("SystemRoot")
-                .unwrap_or_else(|_| "C:\\Windows".to_string());
-            return Ok(ResolvedProgram {
-                // 绝对路径，不靠 PATH —— 走这个分支时环境本来就不一定正常。
-                program: format!("{root}\\System32\\cmd.exe"),
-                prefix_args: vec![
-                    "/D".to_string(),
-                    "/S".to_string(),
-                    "/C".to_string(),
-                    path.display().to_string(),
-                ],
+            let cmd_plan = cmd_launcher(&path);
+            return Ok(match npm_node_launcher(&path) {
+                // 主路仍是 cmd（正常机器最稳）；node 直连是 740 的退路。
+                Some(node) => ResolvedProgram {
+                    alt: Some(Box::new(node)),
+                    ..cmd_plan
+                },
+                None => cmd_plan,
             });
         }
     }
@@ -100,7 +105,85 @@ pub fn resolve_program(raw: &str) -> Result<ResolvedProgram, GroupError> {
     Ok(ResolvedProgram {
         program: path.display().to_string(),
         prefix_args: Vec::new(),
+        alt: None,
     })
+}
+
+/// `cmd.exe /D /S /C <脚本>`（绝对路径，不靠 PATH）。
+#[cfg(windows)]
+fn cmd_launcher(path: &Path) -> ResolvedProgram {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    ResolvedProgram {
+        program: format!("{root}\\System32\\cmd.exe"),
+        prefix_args: vec![
+            "/D".to_string(),
+            "/S".to_string(),
+            "/C".to_string(),
+            path.display().to_string(),
+        ],
+        alt: None,
+    }
+}
+
+/// npm 生成的 `.cmd` shim → 「直接 `node <它背后的 js>`」。
+///
+/// npm 的 shim 最后一行大概是：
+/// `... & "%_prog%"  "%dp0%\node_modules\@costrict\csc\bin\csc.js" %*`
+/// 把 js 路径和 node 找出来，就能完全绕开 `cmd.exe`。
+#[cfg(windows)]
+fn npm_node_launcher(shim: &Path) -> Option<ResolvedProgram> {
+    let dir = shim.parent().unwrap_or(Path::new("."));
+    let contents = std::fs::read_to_string(shim).ok()?;
+    let js = parse_npm_shim(&contents, dir)?;
+    // shim 同目录下的 node.exe 优先（npm 的 portable 安装会把 node 放这儿）。
+    let bundled = dir.join("node.exe");
+    let program = if bundled.is_file() {
+        bundled.display().to_string()
+    } else {
+        find_in_path("node")
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "node".to_string())
+    };
+    Some(ResolvedProgram {
+        program,
+        prefix_args: vec![js.display().to_string()],
+        alt: None,
+    })
+}
+
+/// 从 npm shim 文本里找 JS 入口。**纯函数**（Linux 上也能单测）。
+///
+/// 只认「引号里、以 .js/.mjs/.cjs 结尾、含 `%dp0%`/`%~dp0`（或本来就是绝对
+/// 路径）」的 token。找不到就返回 None —— 调用方退回 cmd 启动器。
+// 生产路径只有 Windows 用；测试在三个平台都跑。
+#[cfg(any(windows, test))]
+fn parse_npm_shim(contents: &str, shim_dir: &Path) -> Option<PathBuf> {
+    let dir = shim_dir.display().to_string();
+    let dir_no_sep = dir.trim_end_matches(['\\', '/']);
+
+    for token in contents.split('"') {
+        let token = token.trim();
+        let lower = token.to_ascii_lowercase();
+        if !(lower.ends_with(".js") || lower.ends_with(".mjs") || lower.ends_with(".cjs")) {
+            continue;
+        }
+        let mut expanded = token.to_string();
+        for pattern in ["%~dp0", "%dp0%", "%dp0"] {
+            expanded = expanded.replace(pattern, dir_no_sep);
+        }
+        // `%dp0%` 自带结尾分隔符，替换后可能出现双分隔符。
+        while expanded.contains("\\\\") {
+            expanded = expanded.replace("\\\\", "\\");
+        }
+        while expanded.contains("//") {
+            expanded = expanded.replace("//", "/");
+        }
+        let candidate = PathBuf::from(&expanded);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// 给定路径（可能没有扩展名）：存在就返回。
@@ -244,10 +327,8 @@ impl Drop for TreeKiller {
     }
 }
 
-/// 起一个成员进程。stdin/stdout/stderr 全 piped；Windows 上不弹黑框。
-pub async fn spawn(plan: &CommandPlan) -> Result<Spawned, GroupError> {
-    let resolved = resolve_program(&plan.program)?;
-
+/// 按一份解析结果 + 计划拼 tokio Command（两种启动方式共用）。
+fn build_command(resolved: &ResolvedProgram, plan: &CommandPlan) -> Command {
     let mut cmd = Command::new(&resolved.program);
     cmd.args(&resolved.prefix_args);
     cmd.args(&plan.prefix_args);
@@ -291,10 +372,44 @@ pub async fn spawn(plan: &CommandPlan) -> Result<Spawned, GroupError> {
         }
     }
 
-    let mut child = cmd.spawn().map_err(|e| GroupError::Spawn {
-        program: resolved.program.clone(),
-        reason: e.to_string(),
-    })?;
+    cmd
+}
+
+/// 起一个成员进程。stdin/stdout/stderr 全 piped；Windows 上不弹黑框。
+pub async fn spawn(plan: &CommandPlan) -> Result<Spawned, GroupError> {
+    let mut resolved = resolve_program(&plan.program)?;
+
+    // ⚠️ 主路起不来时换 alt 重试（目前只有 npm `.cmd` 的「直连 node」）。
+    // 只在 **740** 时退让 —— 「程序不存在」换一条路也没用，反而会盖掉真错误。
+    let mut first: Option<(String, std::io::Error)> = None;
+    let mut child = loop {
+        match build_command(&resolved, plan).spawn() {
+            Ok(child) => break child,
+            Err(e) => {
+                let retry = e.raw_os_error() == Some(740);
+                match (retry, resolved.alt.take()) {
+                    (true, Some(alt)) => {
+                        if first.is_none() {
+                            first = Some((resolved.program.clone(), e));
+                        }
+                        resolved = *alt;
+                    }
+                    _ => {
+                        return Err(match first {
+                            Some((program, first_err)) => GroupError::spawn(
+                                &program,
+                                format!(
+                                    "{first_err}；改用「{}」启动也失败：{e}",
+                                    resolved.program
+                                ),
+                            ),
+                            None => spawn_error(&resolved.program, e),
+                        });
+                    }
+                }
+            }
+        }
+    };
 
     // prompt 走 stdin：单独一个任务写 + 关掉（不等它，避免大 prompt 卡住主流程）。
     if let Some(prompt) = plan.stdin.clone() {
@@ -401,25 +516,58 @@ pub async fn next_line<R: AsyncRead + Unpin>(
 /// 返回给人看的一行（stdout 优先，其次 stderr）。**不改用户环境**、不传 prompt。
 /// 配置面板的「探测」按钮用它回答「这个成员到底装没装、路径对不对」。
 pub async fn probe(program: &str, timeout: std::time::Duration) -> Result<String, GroupError> {
-    let resolved = resolve_program(program)?;
-    let mut cmd = Command::new(&resolved.program);
-    cmd.args(&resolved.prefix_args);
-    cmd.arg("--version");
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
+    let mut resolved = resolve_program(program)?;
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    // 和 `spawn` 同一套 740 退让（见 `ResolvedProgram::alt`）。
+    let mut first: Option<(String, std::io::Error)> = None;
+    let output = loop {
+        let mut cmd = Command::new(&resolved.program);
+        cmd.args(&resolved.prefix_args);
+        cmd.arg("--version");
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
 
-    let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| GroupError::spawn(program, "探测超时（5 秒）"))?
-        .map_err(|e| GroupError::spawn(program, e.to_string()))?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        match tokio::time::timeout(timeout, cmd.output()).await {
+            Err(_) => {
+                return Err(GroupError::spawn(
+                    &resolved.program,
+                    "探测超时（5 秒）",
+                ))
+            }
+            Ok(Ok(output)) => break output,
+            Ok(Err(e)) => {
+                let retry = e.raw_os_error() == Some(740);
+                match (retry, resolved.alt.take()) {
+                    (true, Some(alt)) => {
+                        if first.is_none() {
+                            first = Some((resolved.program.clone(), e));
+                        }
+                        resolved = *alt;
+                    }
+                    _ => {
+                        return Err(match first {
+                            Some((program, first_err)) => GroupError::spawn(
+                                &program,
+                                format!(
+                                    "{first_err}；改用「{}」启动也失败：{e}",
+                                    resolved.program
+                                ),
+                            ),
+                            None => spawn_error(&resolved.program, e),
+                        });
+                    }
+                }
+            }
+        }
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -435,6 +583,22 @@ pub async fn probe(program: &str, timeout: std::time::Duration) -> Result<String
     }
     // 只留第一行：有些 CLI 的 --version 会打一大段。
     Ok(text.lines().next().unwrap_or("").trim().to_string())
+}
+
+/// 起进程失败的统一文案。740 单独给一句能照做的提示。
+fn spawn_error(program: &str, e: std::io::Error) -> GroupError {
+    #[cfg(windows)]
+    if e.raw_os_error() == Some(740) {
+        return GroupError::spawn(
+            program,
+            format!(
+                "{e}（这个程序或启动它的方式要求管理员权限。\
+                 如果是 npm 装的 .cmd：先用 `where csc` 看 PATH 里指向哪个文件；\
+                 也可以把成员命令改成 node 的路径、额外参数里填那个 shim 背后的 .js）"
+            ),
+        );
+    }
+    GroupError::spawn(program, e.to_string())
 }
 
 /// 把 stdout / stderr 同时读掉（顺序读会死锁：管道缓冲满了子进程就不写了）。
@@ -587,5 +751,60 @@ mod tests {
     fn unix_能按_path_解析到_sh() {
         let resolved = resolve_program("sh").expect("在 PATH 里找 sh");
         assert!(resolved.program.ends_with("sh"));
+    }
+
+    // ------------------------------------------------ npm shim → node 直连
+
+    /// 造一个 npm 风格的 shim 文本（路径用 `/`，Windows 也接受 —— 这样
+    /// 这个纯函数在 Linux 上也能测）。
+    fn shim_text(js_rel: &str) -> String {
+        format!(
+            "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\n\
+             SETLOCAL\nCALL :find_dp0\n\
+             endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \
+             \"%_prog%\"  \"%dp0%{js_rel}\" %*\n"
+        )
+    }
+
+    #[test]
+    fn 识别_npm_shim_里真正的_js_入口() {
+        let dir = tempfile::tempdir().unwrap();
+        let js_dir = dir.path().join("node_modules/@costrict/csc/bin");
+        std::fs::create_dir_all(&js_dir).unwrap();
+        let js = js_dir.join("csc.js");
+        std::fs::write(&js, "// cli").unwrap();
+
+        let found = parse_npm_shim(&shim_text("/node_modules/@costrict/csc/bin/csc.js"), dir.path())
+            .expect("该认出 js 入口");
+        assert_eq!(found, js);
+    }
+
+    #[test]
+    fn 非_npm_shim_返回_none_继续走_cmd() {
+        // 我们自己测试用的桩脚本长这样（没有 node_modules / .js）
+        let body = "@echo off\nmore > \"C:\\tmp\\in.txt\"\ntype \"C:\\tmp\\out.txt\"\n";
+        assert!(parse_npm_shim(body, Path::new("C:\\tmp")).is_none());
+    }
+
+    #[test]
+    fn js_文件不存在也返回_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            parse_npm_shim(&shim_text("/node_modules/x/bin/missing.js"), dir.path()).is_none()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn 反斜杠路径也能解析_这是_npm_实际写出来的形状() {
+        let dir = tempfile::tempdir().unwrap();
+        let js_dir = dir.path().join("node_modules").join("@costrict").join("csc");
+        std::fs::create_dir_all(&js_dir).unwrap();
+        let js = js_dir.join("csc.js");
+        std::fs::write(&js, "// cli").unwrap();
+
+        let text = "@ECHO off\nendLocal & \"%_prog%\"  \"%dp0%\\node_modules\\@costrict\\csc\\csc.js\" %*\n";
+        let found = parse_npm_shim(text, dir.path()).expect("反斜杠也要认出");
+        assert_eq!(found, js);
     }
 }
