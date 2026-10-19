@@ -69,6 +69,19 @@ where
         .map_err(|e| format!("键值库的线程没能跑起来：{e}"))?
 }
 
+/// 读一个值，给别的命令层用（目前是群组读 agents 的 `git_bash`）。
+///
+/// ⚠️ 只读：**不触发搬迁**（那是 `kv_open` 的职责）。读不到就返回 None，
+/// 调用方自己决定退路。
+pub fn read_value(
+    app: &AppHandle,
+    state: &KvState,
+    module: &str,
+    key: &str,
+) -> Result<Option<String>, String> {
+    with_store(app, state, |store| store.get(module, key))
+}
+
 /// 开这个模块 + 搬迁老文件。
 ///
 /// **只有这个命令会返回「搬迁失败」那类错误** —— 前端看到它就该退回老实现。

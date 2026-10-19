@@ -53,6 +53,7 @@ mod tests {
             timeout: std::time::Duration::from_secs(10),
             turn_id: "t1".into(),
             program_override: None,
+            env: vec![],
         }
     }
 

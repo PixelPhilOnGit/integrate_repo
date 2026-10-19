@@ -174,6 +174,38 @@ where
         .map_err(|e| format!("群组库的线程没能跑起来：{e}"))?
 }
 
+/// 读智能体会话模块里配置的 Git Bash 路径（csc 在 Windows 上需要）。
+///
+/// ⚠️ 跨模块读同一个 KV 的键，是**刻意**的：用户在 agents 里已经配过一次，
+/// 让他再给群组填一遍是坏体验。键名/键空间跟着 agents store（`git_bash`）。
+/// 读不到就返回 None，群组自己会再自动探测一次。
+fn git_bash_setting(app: &AppHandle, kv: &crate::kv_commands::KvState) -> Option<String> {
+    let module = format!("agents{}", crate::scenario_commands::suffix());
+    let raw = crate::kv_commands::read_value(app, kv, &module, "git_bash").ok()??;
+    let path: String = serde_json::from_str(&raw).ok()?;
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// 给某个成员的探测/运行准备额外环境变量（目前只有 Git Bash 那条）。
+fn git_bash_env(kind: CliKind, git_bash: Option<String>) -> Vec<(String, String)> {
+    let Some(bash) = git_bash else {
+        return Vec::new();
+    };
+    let mut env = Vec::new();
+    if matches!(kind, CliKind::Claude | CliKind::Csc) {
+        env.push(("CLAUDE_CODE_GIT_BASH_PATH".to_string(), bash.clone()));
+    }
+    if kind == CliKind::Csc {
+        env.push(("COSTRICT_GIT_BASH_PATH".to_string(), bash));
+    }
+    env
+}
+
 fn new_turn_id() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -320,6 +352,7 @@ pub async fn group_send(
     app: AppHandle,
     state: State<'_, Arc<GroupState>>,
     runtime: State<'_, Arc<GroupRuntime>>,
+    kv: State<'_, Arc<crate::kv_commands::KvState>>,
     group_id: String,
     text: String,
     mention_ids: Vec<String>,
@@ -332,6 +365,7 @@ pub async fn group_send(
 
     let state = Arc::clone(state.inner());
     let runtime = Arc::clone(runtime.inner());
+    let git_bash = git_bash_setting(&app, kv.inner());
     let store = blocking({
         let app = app.clone();
         let state = Arc::clone(&state);
@@ -407,6 +441,7 @@ pub async fn group_send(
         store: Arc::clone(&store),
         user_message_id: started.user_message_id,
         started_at: started.started_at,
+        git_bash,
     };
 
     // ④ 起跑。Channel 必须 move 进来（见模块头）。
@@ -449,6 +484,8 @@ pub fn group_stop(
 /// 「起不来」是**结果**不是错误：前端要显示版本或失败原因。
 #[tauri::command]
 pub async fn group_probe(
+    app: AppHandle,
+    kv: State<'_, Arc<crate::kv_commands::KvState>>,
     kind: CliKind,
     command: Option<String>,
 ) -> Result<CliProbe, String> {
@@ -460,7 +497,8 @@ pub async fn group_probe(
         return Err("自定义工具要先填命令".to_string());
     }
 
-    match devtoolkit_group::proc::probe(&program, Duration::from_secs(5)).await {
+    let env = git_bash_env(kind, git_bash_setting(&app, kv.inner()));
+    match devtoolkit_group::proc::probe(&program, &env, Duration::from_secs(5)).await {
         Ok(version) => Ok(CliProbe {
             available: true,
             program,

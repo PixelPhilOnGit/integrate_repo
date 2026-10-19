@@ -2638,6 +2638,8 @@ Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，20
 的 vault 目录里拒绝启动（补 `--skip-git-repo-check`）；②Windows 上 npm 装的
 `csc` 起不来（740；改成识别 npm shim、必要时直连 node）。按补丁版本发，
 `v0.17.0` 的标签不动。
+**`v0.17.2`**：csc 起来之后的下一层 —— 它要 Git Bash（`COSTRICT_GIT_BASH_PATH`）。
+复用智能体会话里配好的路径，自动探测兜底。
 
 **接着做（按顺序）**：
 

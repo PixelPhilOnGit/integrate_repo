@@ -172,6 +172,8 @@ pub struct RunSpec {
     pub timeout: std::time::Duration,
     pub turn_id: String,
     pub program_override: Option<ProgramOverride>,
+    /// 额外环境变量（例如 csc 在 Windows 上需要的 `COSTRICT_GIT_BASH_PATH`）。
+    pub env: Vec<(String, String)>,
 }
 
 /// 「要跑什么」的完整描述。`proc::spawn` 只认这个，不认识任何一家 CLI。
@@ -276,7 +278,10 @@ pub(crate) fn base_plan(spec: &RunSpec, args: Vec<String>) -> Result<CommandPlan
                 "DEVTOOLKIT_GROUP_TURN_ID".to_string(),
                 spec.turn_id.clone(),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(spec.env.iter().cloned())
+        .collect(),
     })
 }
 

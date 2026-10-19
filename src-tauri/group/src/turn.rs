@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
-use crate::adapter::{adapter_for, AdapterEvent, MemberSpec, RunSpec, TurnMode};
+use crate::adapter::{adapter_for, AdapterEvent, CliKind, MemberSpec, RunSpec, TurnMode};
 use crate::error::GroupError;
 use crate::event::{
     EventSink, GroupEventKind, MemberActivity, MemberStatus, ToolState, TurnStatus,
@@ -96,6 +96,8 @@ pub struct TurnInput {
     pub store: Arc<GroupStore>,
     pub user_message_id: i64,
     pub started_at: i64,
+    /// Windows 上 Git Bash 的路径（来自智能体会话模块的设置；csc 需要它）。
+    pub git_bash: Option<String>,
 }
 
 /// 选出这一轮要发言的成员（按配置顺序）。
@@ -250,6 +252,7 @@ pub async fn run_turn(input: TurnInput, sink: EventSink, control: TurnControl, m
                 let sink2 = sink.clone();
                 let control2 = control.clone();
                 let cancel2 = cancel.clone();
+                let git_bash = input.git_bash.clone();
                 set.spawn(async move {
                     let local_input = TurnInput {
                         group,
@@ -261,6 +264,7 @@ pub async fn run_turn(input: TurnInput, sink: EventSink, control: TurnControl, m
                         store,
                         user_message_id: 0,
                         started_at: 0,
+                        git_bash,
                     };
                     let mut cancel2 = cancel2;
                     run_member(
@@ -365,6 +369,23 @@ async fn run_member(
         context_chars: input.group.context_chars.max(1000) as usize,
     });
 
+    // Windows 上 csc 要 Git Bash：优先用**用户已经给智能体会话配好的路径**
+    // （命令层从 KV 读来的），没有就自动探测。claude 也顺手设一份 ——
+    // 老版 claude 在 Windows 上同样认 `CLAUDE_CODE_GIT_BASH_PATH`。
+    let git_bash = input
+        .git_bash
+        .clone()
+        .or_else(|| proc::detect_git_bash().map(|p| p.display().to_string()));
+    let mut env: Vec<(String, String)> = Vec::new();
+    if let Some(bash) = git_bash {
+        if matches!(spec.kind, CliKind::Claude | CliKind::Csc) {
+            env.push(("CLAUDE_CODE_GIT_BASH_PATH".to_string(), bash.clone()));
+        }
+        if spec.kind == CliKind::Csc {
+            env.push(("COSTRICT_GIT_BASH_PATH".to_string(), bash));
+        }
+    }
+
     let run_spec = RunSpec {
         member: spec.clone(),
         workspace: std::path::PathBuf::from(&input.group.workspace),
@@ -373,6 +394,7 @@ async fn run_member(
         timeout: Duration::from_secs(input.group.timeout_secs.clamp(1, 3600) as u64),
         turn_id: input.turn_id.clone(),
         program_override: None,
+        env,
     };
 
     let plan = match adapter_for(spec.kind).plan(&run_spec) {

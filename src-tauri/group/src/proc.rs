@@ -186,6 +186,75 @@ fn parse_npm_shim(contents: &str, shim_dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Windows 上找 Git Bash（csc 在 Windows 上必须要有；老版 claude 也要）。
+///
+/// 顺序：用户设过的环境变量 → PATH 里的 `git.exe` 上溯 → 标准安装位置。
+///
+/// ⚠️ 和 `agents/src/pty.rs::find_git_bash` 是同一件事的两份实现：那一份还查
+/// 注册表、并读智能体会话的配置。群组这边**优先用命令层从 KV 读来的用户设置**
+/// （智能体会话模块里填过的那个路径），这个函数只是没有设置时的兜底。
+#[cfg(windows)]
+pub fn detect_git_bash() -> Option<PathBuf> {
+    for key in ["COSTRICT_GIT_BASH_PATH", "CLAUDE_CODE_GIT_BASH_PATH"] {
+        if let Ok(value) = std::env::var(key) {
+            let path = PathBuf::from(value.trim());
+            if usable_bash(&path) {
+                return Some(path);
+            }
+        }
+    }
+
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Some(git) = find_in_path("git") {
+        let mut current = git.parent();
+        for _ in 0..3 {
+            let Some(dir) = current else { break };
+            if dir.parent().is_none() {
+                break;
+            }
+            roots.push(dir.to_path_buf());
+            current = dir.parent();
+        }
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+        if let Ok(base) = std::env::var(key) {
+            let mut dir = PathBuf::from(base);
+            if key == "LOCALAPPDATA" {
+                dir.push("Programs");
+            }
+            roots.push(dir.join("Git"));
+        }
+    }
+
+    for root in roots {
+        // 先 `usr\bin\bash.exe`（Msys 本体），再 `bin\bash.exe`（包装器）——
+        // 顺序理由见 agents/src/pty.rs 的同名函数（真机教训）。
+        for candidate in [
+            root.join("usr").join("bin").join("bash.exe"),
+            root.join("bin").join("bash.exe"),
+        ] {
+            if usable_bash(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+pub fn detect_git_bash() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(windows)]
+fn usable_bash(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    name == "bash.exe" && path.is_file()
+}
+
 /// 给定路径（可能没有扩展名）：存在就返回。
 fn resolve_at(path: &Path) -> Option<PathBuf> {
     if path.is_file() {
@@ -515,7 +584,11 @@ pub async fn next_line<R: AsyncRead + Unpin>(
 ///
 /// 返回给人看的一行（stdout 优先，其次 stderr）。**不改用户环境**、不传 prompt。
 /// 配置面板的「探测」按钮用它回答「这个成员到底装没装、路径对不对」。
-pub async fn probe(program: &str, timeout: std::time::Duration) -> Result<String, GroupError> {
+pub async fn probe(
+    program: &str,
+    extra_env: &[(String, String)],
+    timeout: std::time::Duration,
+) -> Result<String, GroupError> {
     let mut resolved = resolve_program(program)?;
 
     // 和 `spawn` 同一套 740 退让（见 `ResolvedProgram::alt`）。
@@ -528,6 +601,9 @@ pub async fn probe(program: &str, timeout: std::time::Duration) -> Result<String
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
 
         #[cfg(windows)]
         {

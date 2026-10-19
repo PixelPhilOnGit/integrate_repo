@@ -75,6 +75,7 @@ fn input(h: &Harness, turn_id: &str, text: &str, mentions: Vec<String>, mode: Tu
         store: Arc::clone(&h.store),
         user_message_id: started.user_message_id,
         started_at: started.started_at,
+        git_bash: None,
     }
 }
 
