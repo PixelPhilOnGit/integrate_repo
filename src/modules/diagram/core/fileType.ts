@@ -9,7 +9,7 @@
  * 现在抽的抽象是凭猜测设计的。等真有模块需要列别的文件时一起做。
  */
 
-import { FILE_EXT } from './model';
+import { FILE_EXT } from '../../../shared/diagram/model';
 
 export const DIAGRAM_FILE_TYPE = {
   /** 磁盘上的后缀 */

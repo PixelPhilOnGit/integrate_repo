@@ -9,8 +9,8 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import type { Doc, Id, MessageKind } from '../core/model';
-import { hitActivationEdge, hitTest, type HitTarget, type Layout } from '../core/layout';
+import type { Doc, Id, MessageKind } from '../../../shared/diagram/model';
+import { hitActivationEdge, hitTest, type HitTarget, type Layout } from '../../../shared/diagram/layout';
 import {
   moveMessage,
   moveParticipant,
@@ -18,8 +18,8 @@ import {
   updateMessage,
   updateNote,
 } from '../core/commands';
-import { themeToCss } from '../core/theme';
-import { Diagram, PREVIEW_LABEL } from './Diagram';
+import { themeToCss } from '../../../shared/diagram/theme';
+import { Diagram, PREVIEW_LABEL } from '../../../shared/diagram/Diagram';
 import { ContextMenu, type MenuItem } from '../../../shared/ui/ContextMenu';
 import { InlineEditor } from './InlineEditor';
 import type { AppStore } from '../state/store';

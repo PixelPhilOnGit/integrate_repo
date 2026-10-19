@@ -12,8 +12,8 @@ import { toMermaid } from '../../src/modules/diagram/core/mermaid';
 import { addMessage, addNote, addParticipant, createDoc } from '../../src/modules/diagram/core/commands';
 import { createDemoDoc, createNewDoc } from '../../src/modules/diagram/core/samples';
 import { __resetIdsForTest } from '../../src/shared/ids';
-import { defaultTheme } from '../../src/modules/diagram/core/theme';
-import type { Doc, Participant } from '../../src/modules/diagram/core/model';
+import { defaultTheme } from '../../src/shared/diagram/theme';
+import type { Doc, Participant } from '../../src/shared/diagram/model';
 
 /** 断言这段文本是合法的 Mermaid（解析失败会抛异常） */
 async function expectValidMermaid(doc: Doc): Promise<void> {

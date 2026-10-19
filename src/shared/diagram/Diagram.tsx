@@ -10,15 +10,15 @@
  */
 
 import type { ReactNode } from 'react';
-import type { Id, MessageKind, ParticipantKind } from '../core/model';
+import type { Id, MessageKind, ParticipantKind } from './model';
 import type {
   ActivationGeom,
   Layout,
   MessageGeom,
   NoteGeom,
   ParticipantBoxGeom,
-} from '../core/layout';
-import type { PendingMessage, Selection } from '../types';
+} from './layout';
+import type { PendingMessage, Selection } from './types';
 
 // 空心箭头刻意画得比实心的大一圈：同步/异步的差别本来就只有箭头形状，
 // 尺寸一样大时在正常缩放下几乎分不出来

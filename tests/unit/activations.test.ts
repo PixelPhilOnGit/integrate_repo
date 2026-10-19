@@ -17,11 +17,11 @@ import {
   toggleActivation,
   updateMessage,
 } from '../../src/modules/diagram/core/commands';
-import { computeLayout, L } from '../../src/modules/diagram/core/layout';
+import { computeLayout, L } from '../../src/shared/diagram/layout';
 import { createApproxMeasurer } from '../../src/shared/text';
 import { __resetIdsForTest } from '../../src/shared/ids';
-import { defaultTheme } from '../../src/modules/diagram/core/theme';
-import type { Doc } from '../../src/modules/diagram/core/model';
+import { defaultTheme } from '../../src/shared/diagram/theme';
+import type { Doc } from '../../src/shared/diagram/model';
 
 beforeEach(() => __resetIdsForTest());
 

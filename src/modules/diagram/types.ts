@@ -14,16 +14,13 @@
  * 这个文件只依赖模块内的 `core/model` 和共享层的 `platform/types`，不反向依赖任何人。
  */
 
-import type { Doc, Id, MessageKind } from './core/model';
+import type { Doc, Id } from '../../shared/diagram/model';
 import type { FileNode } from '../../shared/platform/types';
 
-/** 画布上当前选中的东西。`none` 是显式状态，不是 `null` —— 调用方不必判空 */
-export type Selection =
-  | { type: 'none' }
-  | { type: 'participant'; id: Id }
-  | { type: 'message'; id: Id }
-  | { type: 'activation'; id: Id }
-  | { type: 'note'; id: Id };
+// ⚠️ `Selection` / `PendingMessage` 搬进了 `shared/diagram/types.ts`（纯展示层要用）。
+// 这里 re-export 一份，模块内和外部调用方的 import 一个字都不用改。
+export type { PendingMessage, Selection } from '../../shared/diagram/types';
+import type { PendingMessage, Selection } from '../../shared/diagram/types';
 
 /** 正在内联编辑的对象 */
 export interface EditTarget {
@@ -36,14 +33,6 @@ export interface Viewport {
   /** 视图左上角在文档坐标系里的位置 */
   panX: number;
   panY: number;
-}
-
-/** 拖拽画消息时的实时预览（还没落到文档里） */
-export interface PendingMessage {
-  from: Id;
-  to: Id;
-  y: number;
-  kind: MessageKind;
 }
 
 /**

@@ -689,7 +689,7 @@ export function createFakeRedis(options: FakeRedisOptions = {}): FakeRedis {
       '# Server',
       `redis_version:${VERSION}`,
       'redis_mode:standalone',
-      'os:Devtoolkit 浏览器版（内存假实现）',
+      'os:超级个体 浏览器版（内存假实现）',
       '# Keyspace',
       `db${currentDb}:keys=${db().size},expires=0,avg_ttl=0`,
       '',

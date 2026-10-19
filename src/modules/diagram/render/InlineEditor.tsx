@@ -12,8 +12,8 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Doc } from '../core/model';
-import type { Layout } from '../core/layout';
+import type { Doc } from '../../../shared/diagram/model';
+import type { Layout } from '../../../shared/diagram/layout';
 import type { EditTarget, Viewport } from '../types';
 
 export interface InlineEditorProps {

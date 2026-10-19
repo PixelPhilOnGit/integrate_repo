@@ -6,9 +6,9 @@
  * 完全空白反而每次都要先加两个框。
  */
 
-import type { Doc, Theme } from './model';
+import type { Doc, Theme } from '../../../shared/diagram/model';
 import { addMessage, addParticipant, createDoc } from './commands';
-import { defaultTheme } from './theme';
+import { defaultTheme } from '../../../shared/diagram/theme';
 
 export function createNewDoc(title: string, theme: Theme = defaultTheme()): Doc {
   let doc = createDoc(title, theme);

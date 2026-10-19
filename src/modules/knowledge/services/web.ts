@@ -17,6 +17,7 @@ import type {
   GenListener,
   KnowledgeClient,
   RunRow,
+  SourceAddOutcome,
   SourceRow,
   VaultInfo,
 } from './types';
@@ -25,10 +26,21 @@ interface FakeVault {
   cards: CardDetail[];
   sources: SourceRow[];
   runs: RunRow[];
+  /** `_files/…` → 字节（e2e 验内嵌图片/断链回落用） */
+  files: Map<string, Uint8Array>;
   genSeq: number;
   /** 正在跑的 runId → 已取消？ */
   cancelled: Set<string>;
 }
+
+/** 一张真的 1×1 PNG（透明）—— e2e 里 `<img>` 能真的加载出来。 */
+const PNG_1X1 = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+  0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+  0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78,
+  0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+  0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+]);
 
 const SEQ_SAMPLE = JSON.stringify({
   title: '登录流程',
@@ -107,7 +119,7 @@ export function createWebKnowledgeClient(): KnowledgeClient {
           created: '2026-10-15T09:00:00Z',
           tags: ['架构'],
           sources: [],
-          body: `# 架构备忘\n\n参考 [[登录流程]] 的约定，**服务端不存明文**。\n\n看 [文档](https://example.com/docs) 和这张图：\n\n![[架构图.png]]\n`,
+          body: `# 架构备忘\n\n参考 [[登录流程]] 的约定，**服务端不存明文**。\n\n看 [文档](https://example.com/docs) 和这张图：\n\n![[架构图.png]]\n\n还有一张找不到的：\n\n![[缺失图.png]]\n`,
         },
         {
           rel: '旧笔记.md',
@@ -122,6 +134,7 @@ export function createWebKnowledgeClient(): KnowledgeClient {
       ],
       sources: [],
       runs: [],
+      files: new Map([['_files/架构图.png', PNG_1X1]]),
       genSeq: 0,
       cancelled: new Set(),
     });
@@ -147,7 +160,14 @@ export function createWebKnowledgeClient(): KnowledgeClient {
     async createVault(name: string): Promise<void> {
       ensureSeed();
       if (vaults.has(name)) throw new Error(`已经存在：${name}`);
-      vaults.set(name, { cards: [], sources: [], runs: [], genSeq: 0, cancelled: new Set() });
+      vaults.set(name, {
+        cards: [],
+        sources: [],
+        runs: [],
+        files: new Map(),
+        genSeq: 0,
+        cancelled: new Set(),
+      });
     },
 
     async deleteVault(name: string): Promise<void> {
@@ -207,19 +227,24 @@ export function createWebKnowledgeClient(): KnowledgeClient {
       return [...vaultOf(name).sources];
     },
 
-    async sourceAdd(name: string): Promise<SourceRow | null> {
+    async sourceAdd(name: string): Promise<SourceAddOutcome | null> {
       const v = vaultOf(name);
       const n = v.sources.length + 1;
-      // 浏览器版没有真文件对话框 —— 造一份假资料（照 tasks 的先例）
+      // 浏览器版没有真文件对话框 —— 造一份假资料（照 tasks 的先例）。
+      // 每份带一张图，让「来源行显示 N 张图」和内嵌显示都有东西可验。
+      const imageRel = `_files/示例资料${n}-img-1.png`;
+      v.files.set(imageRel, PNG_1X1);
       const source: SourceRow = {
         rel: `_sources/示例资料${n}.md`,
         name: `示例资料${n}.md`,
         byteSize: 1024,
         extractStatus: 'ok',
         created: stamp(),
+        images: [{ rel: imageRel, originalName: `示例图片${n}.png`, page: null }],
+        imageNote: '',
       };
       v.sources.push(source);
-      return { ...source };
+      return { added: [{ ...source }], errors: [] };
     },
 
     async sourceDelete(name: string, rel: string, deleteGenerated: boolean): Promise<number> {
@@ -238,12 +263,17 @@ export function createWebKnowledgeClient(): KnowledgeClient {
       return removed;
     },
 
-    async generate(name, sourceRel, cli, note, onEvent: GenListener) {
+    async generate(name, sourceRels, cli, note, onEvent: GenListener) {
       const v = vaultOf(name);
       v.genSeq += 1;
       const runId = `run_fake_${v.genSeq}`;
-      const source = v.sources.find((s) => s.rel === sourceRel);
-      if (!source) throw new Error(`这份资料不在库里：${sourceRel}`);
+      if (sourceRels.length === 0) throw new Error('先选至少一份资料');
+      const sources = sourceRels.map((rel) => {
+        const hit = v.sources.find((s) => s.rel === rel);
+        if (!hit) throw new Error(`这份资料不在库里：${rel}`);
+        return hit;
+      });
+      const sourceRel = sourceRels[0] ?? '';
 
       const startedAt = Date.now();
       const emit = (note: string, first = false): void => {
@@ -255,6 +285,7 @@ export function createWebKnowledgeClient(): KnowledgeClient {
       v.runs.unshift({
         id: runId,
         sourceRel,
+        sourceRels: [...sourceRels],
         cli: cli === 'codex' ? 'codex' : 'claude',
         status: 'running',
         error: null,
@@ -275,7 +306,10 @@ export function createWebKnowledgeClient(): KnowledgeClient {
         await step(note.trim() === '' ? '整理中…' : `按你的要求整理：${note.trim()}`);
         await step('写卡片…');
 
-        const base = source.name.replace(/\.[^.]+$/, '');
+        const base =
+          sources.length === 1
+            ? (sources[0]?.name ?? '资料').replace(/\.[^.]+$/, '')
+            : `综合 ${sources.length} 份资料`;
         const created = stamp();
         // 去重要和 Rust 的 `unique_card_rel` 一个口径（同名加序号）——
         // 假实现这里一开始没去重，两轮生成同名资料就撞出两张同 rel 的卡
@@ -290,6 +324,7 @@ export function createWebKnowledgeClient(): KnowledgeClient {
           return rel;
         };
         const titles = [`整理：${base}`, `整理：${base}（续）`];
+        const firstImage = sources[0]?.images[0]?.rel;
         const made: CardDetail[] = titles.map((title, i) => ({
           rel: uniqueRel(title),
           title,
@@ -297,10 +332,11 @@ export function createWebKnowledgeClient(): KnowledgeClient {
           archived: false,
           created,
           tags: ['生成'],
-          sources: [sourceRel],
+          sources: [...sourceRels],
           body:
             i === 0
-              ? `# ${title}\n\n从「${source.name}」整理出的要点。\n`
+              ? `# ${title}\n\n从「${sources.map((s) => s.name).join('」「')}」整理出的要点。\n` +
+                (firstImage ? `\n![[${firstImage}]]\n` : '')
               : `# ${title}\n\n补充内容。相关：[[整理：${base}]]\n`,
         }));
         v.cards.push(...made);
@@ -330,7 +366,18 @@ export function createWebKnowledgeClient(): KnowledgeClient {
     },
 
     async runs(name: string, sourceRel: string): Promise<RunRow[]> {
-      return vaultOf(name).runs.filter((r) => r.sourceRel === sourceRel);
+      return vaultOf(name).runs.filter((r) => r.sourceRels.includes(sourceRel));
+    },
+
+    async fileRead(name: string, target: string): Promise<ArrayBuffer> {
+      const v = vaultOf(name);
+      const rel = target.startsWith('_files/') ? target : `_files/${target}`;
+      const bytes = v.files.get(rel);
+      if (!bytes) throw new Error(`图片不在库里：${target}`);
+      return bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength
+      ) as ArrayBuffer;
     },
 
     async cliProbe() {

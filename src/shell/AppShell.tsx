@@ -51,7 +51,7 @@ export function AppShell(): ReactNode {
   // 文档名进标题的部分不在这一轮）。
   useEffect(() => {
     if (!mod) return;
-    void platform.setWindowTitle(`${mod.name} — Devtoolkit`);
+    void platform.setWindowTitle(`${mod.name} — 超级个体`);
     // replaceState 而不是直接赋值：不往历史里堆条目（深链/前进后退不在本轮范围）
     window.history.replaceState(null, '', `#${mod.id}`);
   }, [mod]);

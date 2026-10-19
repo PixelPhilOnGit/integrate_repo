@@ -12,7 +12,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { parseDoc, serializeDoc } from '../../src/modules/diagram/core/schema';
+import { parseDoc, serializeDoc } from '../../src/shared/diagram/schema';
 
 function jsonExampleIn(file: string): string {
   const md = readFileSync(file, 'utf8');

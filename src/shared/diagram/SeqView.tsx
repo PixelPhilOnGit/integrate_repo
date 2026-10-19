@@ -18,16 +18,27 @@
  */
 
 import { useMemo, type ReactNode } from 'react';
-import { computeLayout } from '../../diagram/core/layout';
-import { parseDoc } from '../../diagram/core/schema';
-import { themeToCss } from '../../diagram/core/theme';
-import { Diagram } from '../../diagram/render/Diagram';
-import { createCanvasMeasurer } from '../../../shared/text';
+import { computeLayout } from './layout';
+import { parseDoc } from './schema';
+import { themeToCss } from './theme';
+import { Diagram } from './Diagram';
+import { createCanvasMeasurer } from '../text';
 
 // 量字是纯计算，进程里一个共享实例就够（和 useLayout.ts 同一个做法）
 const measurer = createCanvasMeasurer();
 
-export function SeqView({ json }: { json: string }): ReactNode {
+export interface SeqViewProps {
+  json: string;
+  /** 断链/失败态的 testid（调用方决定；默认是通用的） */
+  testId?: string;
+  brokenTestId?: string;
+}
+
+export function SeqView({
+  json,
+  testId = 'seq-view',
+  brokenTestId = 'seq-view-broken',
+}: SeqViewProps): ReactNode {
   const built = useMemo(() => {
     try {
       const doc = parseDoc(json, '时序图');
@@ -46,9 +57,9 @@ export function SeqView({ json }: { json: string }): ReactNode {
 
   if (!built.ok) {
     return (
-      <div className="rd-kb-seq-broken" data-testid="kb-seq-broken">
+      <div className="rd-seq-view-broken" data-testid={brokenTestId}>
         <p className="rd-muted">（{built.reason} —— 原文：）</p>
-        <pre className="rd-kb-seq-raw">{json}</pre>
+        <pre className="rd-seq-view-raw">{json}</pre>
       </div>
     );
   }
@@ -57,7 +68,7 @@ export function SeqView({ json }: { json: string }): ReactNode {
   const b = layout.bounds;
   const pad = 8;
   return (
-    <div className="rd-kb-seq" data-testid="kb-seq">
+    <div className="rd-seq-view" data-testid={testId}>
       <svg
         viewBox={`${b.x - pad} ${b.y - pad} ${b.width + pad * 2} ${b.height + pad * 2}`}
         role="img"

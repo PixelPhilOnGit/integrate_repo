@@ -73,8 +73,9 @@ describe('KnowledgeStore', () => {
     await readyOnSeed();
     const added = await knowledgeStore.addSource();
     expect(added).not.toBeNull();
+    const rel = added!.added[0]!.rel;
 
-    await knowledgeStore.generate(added!.rel, 'claude', '');
+    await knowledgeStore.generate([rel], 'claude', '');
     const s = knowledgeStore.getSnapshot();
     expect(s.gen?.done).toBe(2);
     expect(s.gen?.runId).toBe('run_fake_1');
@@ -87,7 +88,8 @@ describe('KnowledgeStore', () => {
   it('取消生成：runId 从第一条事件来_错误留在面板（不进外壳错误条）', async () => {
     await readyOnSeed();
     const added = await knowledgeStore.addSource();
-    const p = knowledgeStore.generate(added!.rel, 'claude', '');
+    const rel = added!.added[0]!.rel;
+    const p = knowledgeStore.generate([rel], 'claude', '');
     await sleep(5); // 第一条事件（带 runId）已经到了
     expect(knowledgeStore.getSnapshot().gen?.runId).not.toBeNull();
     await knowledgeStore.cancelGenerate();
@@ -102,11 +104,12 @@ describe('KnowledgeStore', () => {
   it('删来源的两种语义：保留卡片=断链_连带=卡片一起走', async () => {
     await readyOnSeed();
     const added = await knowledgeStore.addSource();
-    await knowledgeStore.generate(added!.rel, 'claude', '');
+    const rel = added!.added[0]!.rel;
+    await knowledgeStore.generate([rel], 'claude', '');
     expect(knowledgeStore.getSnapshot().cards.some((c) => c.rel === '整理：示例资料1.md')).toBe(true);
 
     // ① 保留卡片：卡片还在，来源引用断了
-    await knowledgeStore.deleteSource(added!.rel, false);
+    await knowledgeStore.deleteSource(rel, false);
     let cards = knowledgeStore.getSnapshot().cards;
     const kept = cards.find((c) => c.rel === '整理：示例资料1.md');
     expect(kept).toBeDefined();
@@ -114,11 +117,25 @@ describe('KnowledgeStore', () => {
 
     // ② 再来一轮，这次连带删
     const again = await knowledgeStore.addSource();
-    await knowledgeStore.generate(again!.rel, 'claude', '');
-    const removed = await knowledgeStore.deleteSource(again!.rel, true);
+    const rel2 = again!.added[0]!.rel;
+    await knowledgeStore.generate([rel2], 'claude', '');
+    const removed = await knowledgeStore.deleteSource(rel2, true);
     expect(removed).toBe(2);
     cards = knowledgeStore.getSnapshot().cards;
     expect(cards.some((c) => c.rel.includes('示例资料2'))).toBe(false);
+  });
+
+  it('多份资料生成：卡片的 sources 包含全部所选、run 记 sourceRels', async () => {
+    await readyOnSeed();
+    const a = await knowledgeStore.addSource();
+    const b = await knowledgeStore.addSource();
+    const rels = [a!.added[0]!.rel, b!.added[0]!.rel];
+
+    await knowledgeStore.generate(rels, 'claude', '');
+    const s = knowledgeStore.getSnapshot();
+    expect(s.gen?.sourceRels).toEqual(rels);
+    const card = s.cards.find((c) => c.title === '整理：综合 2 份资料');
+    expect(card?.sources).toEqual(rels);
   });
 
   it('wikilink 按标题找卡_找不到给 null（断链）', async () => {

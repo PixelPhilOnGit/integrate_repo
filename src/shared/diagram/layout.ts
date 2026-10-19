@@ -23,10 +23,10 @@ import type {
   ParticipantKind,
 } from './model';
 import { indexById } from './model';
-import type { Point, Rect } from '../../../shared/geometry';
-import { distanceToSegment, rectContainsPoint, unionRect } from '../../../shared/geometry';
-import type { TextMeasurer } from '../../../shared/text';
-import { wrapText } from '../../../shared/text';
+import type { Point, Rect } from '../geometry';
+import { distanceToSegment, rectContainsPoint, unionRect } from '../geometry';
+import type { TextMeasurer } from '../text';
+import { wrapText } from '../text';
 
 export const L = {
   marginX: 44,

@@ -6,11 +6,11 @@
  */
 
 import { useState, type ReactNode } from 'react';
-import type { Id, MessageKind, ParticipantKind, Theme } from '../core/model';
-import { MESSAGE_KINDS, PARTICIPANT_KINDS } from '../core/model';
+import type { Id, MessageKind, ParticipantKind, Theme } from '../../../shared/diagram/model';
+import { MESSAGE_KINDS, PARTICIPANT_KINDS } from '../../../shared/diagram/model';
 import { messagesOnParticipant } from '../core/commands';
 import { messageKindLabel, participantKindLabel } from '../core/mermaid';
-import { THEMES } from '../core/theme';
+import { THEMES } from '../../../shared/diagram/theme';
 import type { AppStore } from '../state/store';
 import type { AppState } from '../types';
 

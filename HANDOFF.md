@@ -1,5 +1,8 @@
 
-# Devtoolkit 交接文档
+# 超级个体 交接文档
+
+> 显示名是「超级个体」；内部 crate / 仓库仍叫 `devtoolkit-*`，`identifier` 仍是
+> `com.devtoolkit.desktop`（改它会搬应用数据目录 —— 用户的数据不能因为改名丢）。
 
 > 起初写于 2026-09-17，2026-09-18 加入 SSH 模块后重写，同日加入智能体会话模块后又补了一轮。
 > 2026-09-21 加入助手模块（自研 agent 内核）后再补一轮。
@@ -39,6 +42,15 @@ codex、claude、csc 等多个工具……把它们组成一个群，我能在�
 默认顺序接力（后来者能看到前面成员的回答）、共享工作目录且可写、进程树回收、
 事件流时间线、SQLite 持久化、场景分卷。见「群组协作」那一节。
 
+**2026-10-19 那一轮（v0.18.0）：知识库多文件 + 卡片图片；共享层收编。**
+- 上传可多选，生成对话框里**勾选多份资料**；模型可跨资料合成一张卡
+  （`S1..Sn` / `I1..Im` 编号 + 每卡 `sources` 契约）。
+- **上传时抽图到 `_files/`**：PDF（JPEG / Flate RGB·Gray）、Word/PPT media、
+  单独图片；阅读器**内嵌显示 + 点击放大**，失败回落文字角标；删除来源的两种
+  语义分别处理图片。
+- 顺序图纯展示栈搬进 `shared/diagram/`、图片查看器进 `shared/media/` ——
+  **全仓不再有跨模块 import**。见「知识库」那一节。
+
 - SSH 是第一个**流式**模块，也是第一个带安全决策（TOFU）的模块
 - 智能体会话是第一个**起用户本机进程**的模块，也是第一个**改工作区之外的文件**的模块
   （往 `~/.claude/settings.json` 和 `~/.codex/config.toml` 里装状态钩子 ——
@@ -54,9 +66,10 @@ codex、claude、csc 等多个工具……把它们组成一个群，我能在�
 - 知识库是第一个**「文件是真相、索引是派生」**的模块：卡片就是 vault 目录里的
   md（frontmatter 存状态），删了索引库不丢任何知识；也是第一个**把用户的
   claude/codex 当无头后端**用的模块（一次性进程 + JSONL 解析，不是 PTY）。
-- ⚠️ **全仓唯一的跨模块 import**：知识库的 `SeqView` 复用顺序图模块的渲染栈
-  （`parseDoc`/`computeLayout`/`<Diagram>`/`themeToCss` —— 它们本来就是
-  「纯展示、不 import store」的）。想彻底解耦就把它搬进 `shared/`，单独一轮。
+- **共享层（2026-10-19 收编）**：顺序图的纯展示栈（`model`/`layout`/`schema`/
+  `theme`/`<Diagram>`/`SeqView`）搬进了 `shared/diagram/`，知识库和顺序图模块
+  都从那里 import —— 全仓**不再有跨模块 import**。图片查看器（内嵌 + 灯箱）
+  在 `shared/media/`，任何模块都能用。规矩：`shared/` 不 import 任何 module。
 
 凭据走**操作系统钥匙串**：连接密码 + 助手的 API key（见「凭据存储」那节）。
 助手的 key 是**只写不读**的，和连接密码不一样 —— 理由见下面那一节。
@@ -795,7 +808,7 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
 ├── .devtoolkit/index.db   ← 派生索引（SQLite；删掉不丢知识，下次进模块增量重建）
 ├── 卡片.md / 子目录/卡片.md ← 卡片区：任意层级的 md；frontmatter 存 title/status/archived/tags/sources
 ├── _sources/<时间戳>_<清洗名> ← 上传的原件（拷而不引用；文件名清洗同 tasks 表）
-└── _files/…               ← 附件/图片（卡片的 ![[…]] 指向这里）
+└── _files/…               ← 图片（上传时从 PDF/Word/PPT/图片抽出来；卡片引用这里的确定路径）
 ```
 
 - **frontmatter 是手写的扁平 YAML 子集**（`knowledge/src/frontmatter.rs`）。
@@ -810,6 +823,13 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
   目录不是 git 仓库，codex 默认拒绝在非 git 目录里跑，报「Not inside a trusted
   directory and --skip-git-repo-check was not specified」——生成直接失败。
   群组模块的 codex adapter 也带了这个 flag。
+- **多份资料一次整理**（2026-10-19，用户：「多个文件之前的内容可能相互组合成
+  一个卡片」）：上传可多选；生成对话框里**勾选多份**（默认只勾点进来的那份）。
+  资料编号 `S1..Sn`、图片编号 `I1..Im`（全局连续），输出契约新增每卡的
+  `sources: ["S1","S2"]`；**缺省 = 本次全部资料**；认不出/全空 → 回落全部并
+  经 `GenEvent.note` 警告。引用了某份资料的图片 → 自动把那资料并进 sources
+  （否则删来源时卡片引用悬空）。run 表保留 `source_rel`（第一份）并新增
+  `source_rels` JSON（索引 **schema v2**，v1 打开时幂等补列 + 回填）。
   上传时 Rust 提取文本（md/txt 直读；pdf 用 `pdf-extract`、docx 用
   `zip`+`quick-xml`、xlsx 用 `calamine` —— 全纯 Rust，2 核机试装过才定的；
   **图片不提文本，走 CLI 直读**：claude `--allowedTools Read`+`--add-dir` /
@@ -830,9 +850,34 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
 - 前端的手写 markdown 渲染器在 `core/markdown.ts`：**解析成 AST、没有
   innerHTML**（卡片内容来自模型 + 用户手编，两边都不可信；链接只放行
   http/https，`javascript:` 连匹配都匹配不上）。
-- **明确不做**（都记着）：watcher、扫描版 PDF/OCR、pdf/docx 内嵌图片抽取、
-  助手直接查知识库（v1 靠「文件是真相」让会话自己能读）、`![[图片]]` 的字节
-  显示（v1 只画角标）、卡片的手动编辑正文（只有状态/归档/删除）。
+#### 卡片图片（2026-10-19，v0.18.0）
+
+用户：「只有文字，如果有图片可以更好」。落地：
+
+- **上传时就抽图**（不是生成时）：来源行立刻显示「（N 张图）」，生成命令保持
+  「只读资料、只写卡片」；删除来源能精确清理。
+- 落点 `_files/<来源存储名去扩展名>-img-<n>.<ext>`（确定性命名）。卡片里的
+  image 块在生成时统一改写成这个**确定路径**（`mapping.rs`）——无同名歧义，
+  Obsidian 也能直接打开；旧卡片/手编卡片的裸文件名由 `kb_file_read` 的单段
+  唯一命中兜底。
+- **PDF**：支持 `DCTDecode`（JPEG 直出）和 `FlateDecode` + 8-bit DeviceRGB/
+  DeviceGray（`flate2` 有界解压 → `png` 编码）。JPX/JBIG2/CCITT/LZW、多级
+  过滤、加密 PDF、inline image 一律**跳过并计数**，提示词里告诉模型不可引用。
+- **Word/PPT**：`word/media/*`、`ppt/media/*`（现有 zip）；`.emf/.wmf` 计入
+  跳过。**PPT 文本提取**也顺手补上了（否则 PPT 资料生成永远 failed）。
+- **阅读器**：`![[…]]` 内嵌显示（`shared/media/ImageEmbed`）+ 点击灯箱（Esc/
+  背板关闭）；加载失败回落成原来的文字角标。CSP 的 `img-src` 本来就有 `blob:`。
+- **读取命令** `kb_file_read(name, target)`：只允许 `_files/` 单段文件名、
+  symlink 拒绝、canonicalize 归属、32 MiB 上限。参数表里没有路径（老规矩）。
+- **删除语义**：删来源「保留卡片」→ 图片**保留**（卡片还在引用）；「连卡片
+  一起删」→ 按来源的图片清单一并删（尽力，文件不在不算错）。
+- ⚠️ **旧资料不会自动补图**：升级后旧的 `sources` 行 `images=[]`。要图就重新
+  上传（或以后加「重新提取」，本轮不做）。
+
+- **明确不做**（都记着）：watcher、扫描版 PDF/OCR、加密 PDF、PDF inline
+  image / 嵌套 Form、JPX/JBIG2/CCITT/LZW、xlsx 图片、旧 `.doc/.ppt`、
+  旧来源图片回填、图片孤儿清理/缩略图、助手直接查知识库（v1 靠「文件是真相」
+  让会话自己能读）、卡片的手动编辑正文（只有状态/归档/删除）。
 
 ### 群组协作（第十个模块，v0.17.0）
 
@@ -1058,9 +1103,9 @@ npm run tauri:dev    # 桌面版（需要 Rust + 系统 WebView 依赖，见 REA
 
 ```bash
 npm run typecheck    # 类型检查
-npm test             # 1443 个纯逻辑单测（秒级）
-npm run test:e2e     # 296 个端到端测试（真实 Chromium，这台机器上跑约 11 分半）
-cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 761 条 / 59 个测试目标（十一个内核 + app crate）
+npm test             # 1446 个纯逻辑单测（秒级）
+npm run test:e2e     # 298 个端到端测试（真实 Chromium，这台机器上跑约 12 分半）
+cd src-tauri && CARGO_BUILD_JOBS=2 cargo test   # 791 条 / 59 个测试目标（十一个内核 + app crate）
 ```
 
 ### ⚠️ 跑测试/编译之前必读
@@ -1103,6 +1148,8 @@ src/
 ├── shared/        通用层
 │   ├── connections/   连接类模块共用的连接层（Redis / SQL / SSH）
 │   ├── platform/      文件、对话框、系统偏好、键值存储
+│   ├── diagram/       顺序图**纯展示栈**（解析/布局/渲染/只读 SeqView）
+│   ├── media/         图片内嵌 + 灯箱（任何模块可复用）
 │   └── terminal/      终端实例表（SSH 和智能体会话共用）
 │                      ★ 不 import 任何模块
 ├── shell/         外壳：模块注册表、图标栏、状态栏、错误条
@@ -2617,13 +2664,15 @@ playwright 跑的是**浏览器版**：各模块的 `services/web.ts` 内存假�
 1. **上一轮评审推迟的几条**（顺序图深色 / 键盘右键通路 / ⚠️ emoji 统一 /
    行高 token / 「文档名进标题」那半）——
    检查器折叠、本地壳入口、**助手审批工具行**都已清。
-2. **群组协作的后续**（v0.17.0 明确没做）：CLI session resume（按成员记住
-   session id，只注入「上次之后的新消息」）、成员之间的**自动接力 @**（深度
-   上限）、远端/SSH 成员、跨窗口实时广播、并行写文件的锁/worktree、历史
-   分页、成本/用量面板。用户提了再做。
-3. **场景的后续**：删除场景（现在故意没做）、跨窗口场景通知、
+2. **群组协作的后续**（v0.17.0 明确没做）：CLI session resume、成员之间的
+   **自动接力 @**、远端/SSH 成员、跨窗口实时广播、并行写文件的锁/worktree、
+   历史分页、成本/用量面板。用户提了再做。
+3. **知识库的后续**（v0.18.0 明确没做）：加密 PDF、JPX/JBIG2/CCITT/LZW、
+   PDF inline image / 嵌套 Form、xlsx 图片、`kb_source_reextract`（旧资料
+   补图）、图片孤儿清理/缩略图。用户提了再做。
+4. **场景的后续**：删除场景（现在故意没做）、跨窗口场景通知、
    更粗粒度的「场景打包导出」等用户提了再说。
-4. 更早还躺着的：WebSocket（可整块砍）、Ctrl+± 字体缩放、画布元素 Ctrl+C。
+5. 更早还躺着的：WebSocket（可整块砍）、Ctrl+± 字体缩放、画布元素 Ctrl+C。
 
 **发版**：`v0.10.0` 之后又推了 `v0.11.0` → **`v0.14.0`**（连接目录树 /
 Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，2026-10-16 这一轮
@@ -2640,6 +2689,19 @@ Mongo 工作台 / 任务资料 那几轮），体验评审是 **`v0.15.0`**，20
 `v0.17.0` 的标签不动。
 **`v0.17.2`**：csc 起来之后的下一层 —— 它要 Git Bash（`COSTRICT_GIT_BASH_PATH`）。
 复用智能体会话里配好的路径，自动探测兜底。
+**`v0.18.0`**：知识库多文件 + 图片；共享层收编（`shared/diagram`、
+`shared/media`）。索引 schema v2（来源图片清单 + run 多来源）。同时**改名
+「超级个体」**（显示名；内部 crate / identifier 不动）。
+⚠️ 改名后 **Linux 只出 AppImage，不再出 deb**：Debian 的包名字段必须是 ASCII，
+中文 `productName` 会让 deb 装不上（tauri#14366）。`identifier` 仍是
+`com.devtoolkit.desktop` —— 改它等于搬应用数据目录。
+
+**再往后（用户 2026-10-19 提的）**：群成员要能**读/操作 Devtoolkit 自己的
+数据**（原话：「@codex -- 秘书 帮我看下我现在有什么待办事项……群成员要有
+操作、读取这些东西的能力」）。方案：给 app 二进制加 **`--mcp` 模式**（stdio
+JSON-RPC），把任务/知识库暴露成 MCP 工具；群成员配置里加「可访问 Devtoolkit
+数据」开关，启动时注入 `--mcp-config`（claude/csc）/ `-c mcp_servers…`
+（codex）。细节下一轮规划。
 
 **接着做（按顺序）**：
 

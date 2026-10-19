@@ -9,12 +9,12 @@
  * 否则 React 会陷入无限重渲染。
  */
 
-import type { Doc, Id, Message, Note, Participant, Theme } from '../core/model';
+import type { Doc, Id, Message, Note, Participant, Theme } from '../../../shared/diagram/model';
 import type { Rect } from '../../../shared/geometry';
 import { History } from '../../../shared/history';
 import * as cmd from '../core/commands';
 import { createNewDoc } from '../core/samples';
-import { parseDoc, serializeDoc, titleFromFileName } from '../core/schema';
+import { parseDoc, serializeDoc, titleFromFileName } from '../../../shared/diagram/schema';
 import { platform } from '../../../shared/platform';
 import { activeScenario } from '../../../shared/platform/scenario';
 import type { FileNode } from '../../../shared/platform/types';

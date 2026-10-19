@@ -1,9 +1,9 @@
 /** 顶部工具栏。所有按钮都直接映射到 store 的动作，不持有自己的状态。 */
 
 import type { ReactNode } from 'react';
-import { THEMES } from '../core/theme';
+import { THEMES } from '../../../shared/diagram/theme';
 import { exportMermaidFile, exportPngFile, exportSvgFile } from '../render/exportActions';
-import type { Layout } from '../core/layout';
+import type { Layout } from '../../../shared/diagram/layout';
 import type { AppStore } from '../state/store';
 import type { AppState } from '../types';
 
@@ -40,7 +40,7 @@ export function Toolbar({ state, store, layout }: ToolbarProps): ReactNode {
       */}
       <div className="rd-toolbar-scroll">
       <div className="rd-group">
-        <span className="rd-brand">Devtoolkit</span>
+        <span className="rd-brand">超级个体</span>
       </div>
 
       <div className="rd-group">

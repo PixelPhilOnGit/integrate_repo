@@ -196,8 +196,8 @@ function buildFileSystem(user: string, host: string): Map<string, FsEntry> {
 
   for (const path of ['/', '/etc', '/home', '/tmp', home, `${home}/项目`]) dir(path);
   file('/etc/hostname', `${host}\n`);
-  file('/etc/os-release', 'NAME="Devtoolkit 演示环境"\nID=devtoolkit\nVERSION_ID="0.2.0"\n');
-  file(`${home}/readme.txt`, 'Devtoolkit demo shell.\nEverything under this home lives in memory.\n');
+  file('/etc/os-release', 'NAME="超级个体 演示环境"\nID=devtoolkit\nVERSION_ID="0.2.0"\n');
+  file(`${home}/readme.txt`, '超级个体 demo shell.\nEverything under this home lives in memory.\n');
   file(
     `${home}/说明.txt`,
     '这是一个演示环境里的假文件。\n内容放在内存里，关掉窗口就没了。\n命令和文件都只在本进程内存在，不会碰真实系统。\n',
@@ -468,7 +468,7 @@ export function createFakeShell(opts: FakeShellOptions): FakeShell {
 
   /** 登录横幅。主机和用户名都点名 —— e2e 一眼能确认自己连的是哪个档案 */
   function banner(): void {
-    out(`欢迎使用 Devtoolkit 演示服务器（${host}）`);
+    out(`欢迎使用 超级个体 演示服务器（${host}）`);
     out(`已以 ${user} 登录。这是一个演示环境：命令和文件都是内存里的假实现，不会碰真实系统。`);
     out('输入 help 看看有哪些命令。');
     out(''); // 空一行，和真 ssh 登录后的 MOTD 一样

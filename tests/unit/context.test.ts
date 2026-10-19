@@ -13,12 +13,12 @@ import {
   notePlacement,
   resolveEndpoints,
 } from '../../src/modules/diagram/core/commands';
-import { computeLayout } from '../../src/modules/diagram/core/layout';
+import { computeLayout } from '../../src/shared/diagram/layout';
 import { createApproxMeasurer } from '../../src/shared/text';
 import { createDemoDoc, createNewDoc } from '../../src/modules/diagram/core/samples';
 import { __resetIdsForTest } from '../../src/shared/ids';
-import { defaultTheme } from '../../src/modules/diagram/core/theme';
-import type { Doc, Message, Note } from '../../src/modules/diagram/core/model';
+import { defaultTheme } from '../../src/shared/diagram/theme';
+import type { Doc, Message, Note } from '../../src/shared/diagram/model';
 
 beforeEach(() => __resetIdsForTest());
 

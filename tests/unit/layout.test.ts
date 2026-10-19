@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { computeLayout, hitTest, L } from '../../src/modules/diagram/core/layout';
+import { computeLayout, hitTest, L } from '../../src/shared/diagram/layout';
 import { createApproxMeasurer, estimateTextWidth } from '../../src/shared/text';
 import { createDemoDoc, createNewDoc } from '../../src/modules/diagram/core/samples';
 import { addMessage, addParticipant, moveMessage } from '../../src/modules/diagram/core/commands';
 import { __resetIdsForTest } from '../../src/shared/ids';
 import { rectContainsPoint, rectsOverlap } from '../../src/shared/geometry';
-import { defaultTheme } from '../../src/modules/diagram/core/theme';
-import type { Doc } from '../../src/modules/diagram/core/model';
+import { defaultTheme } from '../../src/shared/diagram/theme';
+import type { Doc } from '../../src/shared/diagram/model';
 
 const measurer = createApproxMeasurer();
 const layout = (doc: Doc) => computeLayout(doc, measurer);

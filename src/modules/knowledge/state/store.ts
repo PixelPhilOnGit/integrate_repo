@@ -19,12 +19,14 @@ import type {
   CardRow,
   CliProbe,
   SearchHits,
+  SourceAddOutcome,
   SourceRow,
   VaultInfo,
 } from '../services/types';
 
 export interface GenState {
-  sourceRel: string;
+  /** 这一次生成用到的资料（1..=12 份） */
+  sourceRels: string[];
   runId: string | null;
   notes: string[];
   /** null = 跑着；数字 = 成功写了 N 张 */
@@ -329,17 +331,27 @@ export class KnowledgeStore {
     }
   }
 
-  /** 挂一份原件。返回新挂的那份（取消给 null）——UI 拿它自动开生成面板 */
-  async addSource(): Promise<SourceRow | null> {
+  /**
+   * 挂资料（可多选）。返回这次的结果（取消给 null）——UI 拿它决定要不要
+   * 自动开生成面板。单个文件失败不打断整批，失败原因走上层错误条。
+   */
+  async addSource(): Promise<SourceAddOutcome | null> {
     const name = this.state.activeVault;
     if (name === null) return null;
     try {
-      const added = await knowledgeServices.client.sourceAdd(name);
-      if (added !== null) {
+      const outcome = await knowledgeServices.client.sourceAdd(name);
+      if (outcome !== null) {
         const sources = await knowledgeServices.client.sources(name);
         this.set({ sources });
+        if (outcome.errors.length > 0) {
+          this.shell?.reportError(
+            new Error(
+              `有 ${outcome.errors.length} 个文件没能挂上：${outcome.errors.join('；')}`,
+            ),
+          );
+        }
       }
-      return added;
+      return outcome;
     } catch (e) {
       this.fail(e);
       return null;
@@ -360,12 +372,12 @@ export class KnowledgeStore {
     }
   }
 
-  async generate(sourceRel: string, cli: string, note: string): Promise<void> {
+  async generate(sourceRels: string[], cli: string, note: string): Promise<void> {
     const name = this.state.activeVault;
     if (name === null) return;
-    this.set({ gen: { sourceRel, runId: null, notes: [], done: null, error: null } });
+    this.set({ gen: { sourceRels, runId: null, notes: [], done: null, error: null } });
     try {
-      const outcome = await knowledgeServices.client.generate(name, sourceRel, cli, note, (ev) => {
+      const outcome = await knowledgeServices.client.generate(name, sourceRels, cli, note, (ev) => {
         const gen = this.state.gen;
         if (gen === null) return;
         this.set({
@@ -386,6 +398,13 @@ export class KnowledgeStore {
       // 的现场（跑到哪一步挂的），弹到全局反而丢了上下文
       this.set({ gen: gen === null ? null : { ...gen, error: message } });
     }
+  }
+
+  /** 读一张图片（卡片阅读器内嵌显示用）；失败交给 `ImageEmbed` 回落角标。 */
+  async readFile(target: string): Promise<ArrayBuffer> {
+    const name = this.state.activeVault;
+    if (name === null) throw new Error('没有打开的知识库');
+    return await knowledgeServices.client.fileRead(name, target);
   }
 
   async cancelGenerate(): Promise<void> {

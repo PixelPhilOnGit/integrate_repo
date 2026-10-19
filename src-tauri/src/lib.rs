@@ -243,6 +243,8 @@ pub fn run() {
             kb_commands::kb_generate,
             kb_commands::kb_generate_cancel,
             kb_commands::kb_runs,
+            // 卡片/来源图片的字节（阅读器内嵌显示用；参数只有 vault 名 + target）
+            kb_commands::kb_file_read,
             kb_commands::kb_cli_probe,
 
             // 助手的凭据。**只写不读** —— 理由见 assistant_commands.rs

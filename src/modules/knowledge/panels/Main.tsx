@@ -152,12 +152,26 @@ function Reader(): ReactNode {
       <div className="rd-kb-reader-meta rd-muted">
         {detail.created !== '' && <span>创建：{detail.created}</span>}
         {detail.tags.length > 0 && <span>标签：{detail.tags.join('、')}</span>}
+        {detail.sources.length > 0 && (
+          <span data-testid="kb-reader-sources">
+            来源：
+            {detail.sources
+              .map(
+                (rel) =>
+                  state.sources.find((s) => s.rel === rel)?.name ??
+                  rel.split('/').pop() ??
+                  rel,
+              )
+              .join('、')}
+          </span>
+        )}
         {detail.archived && <span>（已归档）</span>}
       </div>
 
       <div className="rd-kb-reader-body">
         <MarkdownView
           body={detail.body}
+          loadImage={(target) => knowledgeStore.readFile(target)}
           linkExists={(target) => knowledgeStore.cardByTitle(target) !== null}
           onWikilink={(target) => {
             void (async () => {
@@ -185,7 +199,15 @@ function GenPanel(): ReactNode {
   return (
     <div className="rd-kb-gen" data-testid="kb-gen-panel">
       <div className="rd-kb-gen-head">
-        <span>生成中（{gen.sourceRel.split('/').pop() ?? gen.sourceRel}）</span>
+        <span>
+          生成中（
+          {gen.sourceRels.length === 1
+            ? (state.sources.find((s) => s.rel === gen.sourceRels[0])?.name ??
+              gen.sourceRels[0]?.split('/').pop() ??
+              '资料')
+            : `${gen.sourceRels.length} 份资料`}
+          ）
+        </span>
         <button type="button" className="rd-btn" data-testid="kb-gen-dismiss" onClick={() => knowledgeStore.dismissGen()}>
           收起
         </button>

@@ -138,7 +138,7 @@ test('新建连接、首次信任、终端里能敲命令', async ({ page }) => 
   await expect(page.getByTestId('ssh-status')).toContainText('已连接');
 
   // 横幅和提示符该已经出来了
-  await expect.poll(() => termText(page)).toContain('Devtoolkit');
+  await expect.poll(() => termText(page)).toContain('超级个体');
 
   await type(page, 'whoami');
   await expect.poll(() => termText(page)).toContain('root');

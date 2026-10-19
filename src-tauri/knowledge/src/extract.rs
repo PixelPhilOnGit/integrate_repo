@@ -52,6 +52,7 @@ pub fn extract(path: &Path, ext: &str) -> Result<ExtractOutcome, KbError> {
             Ok(ExtractOutcome::Text(clamp(text)))
         }
         "docx" => Ok(ExtractOutcome::Text(clamp(extract_docx(path)?))),
+        "pptx" => Ok(ExtractOutcome::Text(clamp(extract_pptx(path)?))),
         "xlsx" | "xls" | "ods" => Ok(ExtractOutcome::Text(clamp(extract_sheet(path)?))),
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => Ok(ExtractOutcome::None {
             reason: "图片没有文本可提取（生成时会把原图直接交给 CLI 看）".to_string(),
@@ -65,26 +66,29 @@ pub fn extract(path: &Path, ext: &str) -> Result<ExtractOutcome, KbError> {
 
 /// 超上限取头 + 尾，标注省略（见模块头）。
 fn clamp(text: String) -> String {
+    clamp_chars(text, MAX_CHARS)
+}
+
+/// 通用截断（多份资料拼提示词时也要按总预算截，`prompt.rs` 用它）。
+pub fn clamp_chars(text: String, max: usize) -> String {
     let total = text.chars().count();
-    if total <= MAX_CHARS {
+    if total <= max {
         return text;
     }
     // 头 60% / 尾 40%：开头是标题和主旨，结尾是结论
-    let head_n = MAX_CHARS * 6 / 10;
-    let tail_n = MAX_CHARS - head_n;
+    let head_n = max * 6 / 10;
+    let tail_n = max - head_n;
     let chars: Vec<char> = text.chars().collect();
     let head: String = chars[..head_n].iter().collect();
     let tail: String = chars[total - tail_n..].iter().collect();
     format!(
         "{head}\n\n……（中间省略了 {} 个字）……\n\n{tail}",
-        total - MAX_CHARS
+        total - max
     )
 }
 
 /// docx：zip 里的 `word/document.xml`，把 `<w:t>` 的文字按段落拼出来。
 fn extract_docx(path: &Path) -> Result<String, KbError> {
-    use quick_xml::events::Event;
-
     let file = File::open(path).map_err(|e| KbError::io(path.display().to_string(), e))?;
     let mut zip = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| KbError::Extract {
         rel: path.display().to_string(),
@@ -100,7 +104,53 @@ fn extract_docx(path: &Path) -> Result<String, KbError> {
     doc.read_to_string(&mut xml)
         .map_err(|e| KbError::io(path.display().to_string(), e))?;
 
-    let mut reader = quick_xml::Reader::from_str(&xml);
+    xml_paragraphs(&xml, &path.display().to_string())
+}
+
+/// pptx：zip 里的 `ppt/slides/slideN.xml`，按页序把每页文字拼出来。
+fn extract_pptx(path: &Path) -> Result<String, KbError> {
+    let file = File::open(path).map_err(|e| KbError::io(path.display().to_string(), e))?;
+    let mut zip = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| KbError::Extract {
+        rel: path.display().to_string(),
+        reason: format!("解不开 zip 容器：{e}"),
+    })?;
+
+    let mut slides: Vec<String> = zip
+        .file_names()
+        .filter_map(|name| name.ok())
+        .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
+        .map(|name| name.to_string())
+        .collect();
+    // slide2 要排在 slide10 前面 —— 按数字排，不按字符串。
+    slides.sort_by_key(|name| {
+        name.trim_start_matches("ppt/slides/slide")
+            .trim_end_matches(".xml")
+            .parse::<u32>()
+            .unwrap_or(u32::MAX)
+    });
+
+    let mut out = String::new();
+    for (index, name) in slides.iter().enumerate() {
+        let mut entry = zip.by_name(name).map_err(|e| KbError::Extract {
+            rel: path.display().to_string(),
+            reason: format!("读不了 {name}：{e}"),
+        })?;
+        let mut xml = String::new();
+        entry
+            .read_to_string(&mut xml)
+            .map_err(|e| KbError::io(path.display().to_string(), e))?;
+        out.push_str(&format!("\n【第 {} 页】\n", index + 1));
+        out.push_str(&xml_paragraphs(&xml, &path.display().to_string())?);
+    }
+    Ok(out)
+}
+
+/// 把一段 OOXML（docx 的 document.xml / pptx 的 slideN.xml）里的文字按段落
+/// 拼出来。两者的本地名一样（`t` 文字、`p` 段落、`tab` 制表符）。
+fn xml_paragraphs(xml: &str, rel: &str) -> Result<String, KbError> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut out = String::new();
     let mut in_text = false;
@@ -163,8 +213,8 @@ fn extract_docx(path: &Path) -> Result<String, KbError> {
             Ok(_) => {}
             Err(e) => {
                 return Err(KbError::Extract {
-                    rel: path.display().to_string(),
-                    reason: format!("document.xml 解析失败：{e}"),
+                    rel: rel.to_string(),
+                    reason: format!("XML 解析失败：{e}"),
                 })
             }
         }

@@ -142,7 +142,7 @@ export function KbSidebar({ onNewVault, onGenerate }: Props): ReactNode {
               <button
                 type="button"
                 data-testid="kb-source-add"
-                title="选一份文件挂进这个知识库（原件会拷进来）"
+                title="选文件挂进这个知识库（可多选；原件会拷进来）"
                 onClick={() => void knowledgeStore.addSource()}
               >
                 ＋ 上传
@@ -197,10 +197,24 @@ function SourceLine({
   const badge =
     source.extractStatus === 'ok' ? '' : source.extractStatus === 'none' ? '（图片）' : '（提取失败）';
   return (
-    <div className="rd-kb-source" data-testid={`kb-source-${source.rel}`} title={source.name}>
+    <div
+      className="rd-kb-source"
+      data-testid={`kb-source-${source.rel}`}
+      title={
+        source.imageNote === '' ? source.name : `${source.name}\n${source.imageNote}`
+      }
+    >
       <span className="rd-kb-source-name">
         {source.name}
         {badge !== '' && <span className="rd-muted">{badge}</span>}
+        {source.images.length > 0 && (
+          <span className="rd-muted">（{source.images.length} 张图）</span>
+        )}
+        {source.imageNote !== '' && (
+          <span className="rd-kb-source-note" title={source.imageNote}>
+            ⚠
+          </span>
+        )}
       </span>
       <button type="button" data-testid={`kb-generate-${source.rel}`} title="用 AI 整理这份资料" onClick={onGenerate}>
         生成

@@ -322,7 +322,7 @@ test('切模块时窗口标题和 location.hash 跟着变', async ({ page }) => 
   await expect(page).toHaveTitle(/顺序图/);
   await page.getByTestId('module-agents').click();
   await expect(page).toHaveTitle(/智能体会话/);
-  await expect(page).toHaveTitle(/Devtoolkit/);
+  await expect(page).toHaveTitle(/超级个体/);
   expect(new URL(page.url()).hash).toBe('#agents');
 });
 

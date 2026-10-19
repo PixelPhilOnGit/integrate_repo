@@ -9,7 +9,7 @@
 //!
 //! * `text` —— markdown 正文
 //! * `seq`  —— 本仓 .seq.json 的对象（**原样字符串化存进 md 的 ````seq` 围栏**）
-//! * `image`—— 引用 `_sources/` 里的图片文件名
+//! * `image`—— 引用 `_files/` 里的图片（生成时由 `mapping.rs` 换成确定路径）
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,10 @@ pub struct CardDoc {
     pub title: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 这张卡用到的**资料编号**（`S1`..）。写回时由 `mapping.rs` 换成 rel；
+    /// 缺省 = 本次全部资料（解释在 mapping，**validate 不判错**）。
+    #[serde(default)]
+    pub sources: Vec<String>,
     pub blocks: Vec<Block>,
 }
 
@@ -181,6 +185,7 @@ mod tests {
             cards: vec![CardDoc {
                 title: "甲".into(),
                 tags: vec![],
+                sources: vec![],
                 blocks: vec![],
             }],
         };
@@ -189,6 +194,7 @@ mod tests {
             cards: vec![CardDoc {
                 title: "甲".into(),
                 tags: vec![],
+                sources: vec![],
                 blocks: vec![Block::Text { text: "  ".into() }],
             }],
         };

@@ -24,14 +24,14 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::KbError;
 use crate::vault::{Vault, CARD_EXT};
 
 /// 索引库的结构版本（`PRAGMA user_version`）。迁移照 tasks 的规矩：
 /// **每一步都要能从任意旧版本跑上来**。
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// 列表/搜索里带出来的摘要长度（正文前 N 个字符）
 const EXCERPT_CHARS: usize = 200;
@@ -54,6 +54,17 @@ pub struct CardRow {
     pub size: u64,
 }
 
+/// 从一份资料里抽出来的图片（存索引，供提示词/UI/删除清理用）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceImage {
+    /// vault 相对路径（`_files/<来源名>-img-<n>.<ext>`）—— 也是卡片里的 target
+    pub rel: String,
+    /// 给人看的原始名字（PDF 用「第 N 页」，docx 用 zip 里的文件名）
+    pub original_name: String,
+    pub page: Option<u32>,
+}
+
 /// 索引里的一份上传原件。
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +74,22 @@ pub struct SourceRow {
     pub byte_size: u64,
     pub extract_status: String,
     pub created: String,
+    /// 上传时抽到 `_files/` 的图片
+    pub images: Vec<SourceImage>,
+    /// 图片抽取的一句人话说明（空串 = 没什么要说的）
+    pub image_note: String,
+}
+
+/// upsert 一份来源用的借用形状（避免调用方构造一堆 String）。
+pub struct SourceRecord<'a> {
+    pub rel: &'a str,
+    pub name: &'a str,
+    pub byte_size: u64,
+    pub extract_status: &'a str,
+    pub extracted: &'a str,
+    pub images: &'a [SourceImage],
+    pub image_note: &'a str,
+    pub created: &'a str,
 }
 
 /// 一次生成 run 的账（为「重新生成/看花费/排查」留在索引里）。
@@ -70,7 +97,10 @@ pub struct SourceRow {
 #[serde(rename_all = "camelCase")]
 pub struct RunRow {
     pub id: String,
+    /// 第一份资料（兼容旧字段/旧查询）
     pub source_rel: String,
+    /// 这一次用到的全部资料（按勾选顺序）
+    pub source_rels: Vec<String>,
     pub cli: String,
     pub status: String,
     pub error: Option<String>,
@@ -147,9 +177,50 @@ impl Index {
                  CREATE INDEX IF NOT EXISTS idx_runs_source ON runs(source_rel);",
             )?;
         }
+        if current < 2 {
+            // v1 → v2：来源的图片清单 + run 的多来源。用 table_info 判断列是否
+            // 已存在（半迁移之后再次启动不能炸）。**加列不重建表**。
+            for (table, column, ddl) in [
+                ("sources", "images", "ALTER TABLE sources ADD COLUMN images TEXT NOT NULL DEFAULT '[]'"),
+                ("sources", "image_note", "ALTER TABLE sources ADD COLUMN image_note TEXT NOT NULL DEFAULT ''"),
+                ("runs", "source_rels", "ALTER TABLE runs ADD COLUMN source_rels TEXT NOT NULL DEFAULT '[]'"),
+            ] {
+                if !self.has_column(table, column)? {
+                    self.conn.execute_batch(ddl)?;
+                }
+            }
+
+            // 回填：老 run 只有一份来源 → `source_rels = [source_rel]`。
+            let stale: Vec<(String, String)> = {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT id, source_rel FROM runs WHERE source_rels = '[]'")?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            for (id, source_rel) in stale {
+                let json = serde_json::to_string(&[source_rel])
+                    .map_err(|e| KbError::db(e.to_string()))?;
+                self.conn
+                    .execute("UPDATE runs SET source_rels = ?2 WHERE id = ?1", params![id, json])?;
+            }
+        }
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         Ok(())
+    }
+
+    /// 表里有没有这一列（迁移的幂等判据）。
+    fn has_column(&self, table: &str, column: &str) -> Result<bool, KbError> {
+        let mut stmt = self.conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     // ------------------------------------------------------------------ 卡片
@@ -230,11 +301,12 @@ impl Index {
     /// 某份原件「生出来的」卡片（删来源时的连带清理用）。
     pub fn cards_of_source(&self, source_rel: &str) -> Result<Vec<CardRow>, KbError> {
         // sources 列是 JSON 数组 —— LIKE 一把就够（值里带引号的精确匹配，
-        // 比解析一遍 JSON 便宜，也不会因为手编出畸形 JSON 漏删）
-        let like = format!("%\"{}\"%", source_rel);
+        // 比解析一遍 JSON 便宜，也不会因为手编出畸形 JSON 漏删）。
+        // ⚠️ `_sources` 自带下划线（LIKE 的单字符通配符），必须转义。
+        let like = format!("%\"{}\"%", escape_like(source_rel));
         let mut stmt = self.conn.prepare(
             "SELECT rel, title, status, archived, created, tags, sources, body, mtime, size
-             FROM cards WHERE sources LIKE ?1",
+             FROM cards WHERE sources LIKE ?1 ESCAPE '\\'",
         )?;
         let rows = stmt
             .query_map(params![like], row_to_card)?
@@ -265,42 +337,50 @@ impl Index {
 
     // ------------------------------------------------------------------ 来源
 
-    pub fn upsert_source(
-        &self,
-        rel: &str,
-        name: &str,
-        byte_size: u64,
-        extract_status: &str,
-        extracted: &str,
-        created: &str,
-    ) -> Result<(), KbError> {
+    pub fn upsert_source(&self, s: &SourceRecord<'_>) -> Result<(), KbError> {
+        let images = serde_json::to_string(s.images).map_err(|e| KbError::db(e.to_string()))?;
         self.conn.execute(
-            "INSERT INTO sources (rel, name, byte_size, extract_status, extracted, created)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO sources (rel, name, byte_size, extract_status, extracted, created,
+                                  images, image_note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(rel) DO UPDATE SET
                name=excluded.name, byte_size=excluded.byte_size,
-               extract_status=excluded.extract_status, extracted=excluded.extracted",
-            params![rel, name, byte_size as i64, extract_status, extracted, created],
+               extract_status=excluded.extract_status, extracted=excluded.extracted,
+               images=excluded.images, image_note=excluded.image_note",
+            params![
+                s.rel,
+                s.name,
+                s.byte_size as i64,
+                s.extract_status,
+                s.extracted,
+                s.created,
+                images,
+                s.image_note
+            ],
         )?;
         Ok(())
     }
 
     pub fn list_sources(&self) -> Result<Vec<SourceRow>, KbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT rel, name, byte_size, extract_status, created FROM sources ORDER BY created, rel",
+            "SELECT rel, name, byte_size, extract_status, created, images, image_note
+             FROM sources ORDER BY created, rel",
         )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok(SourceRow {
-                    rel: r.get(0)?,
-                    name: r.get(1)?,
-                    byte_size: r.get::<_, i64>(2)? as u64,
-                    extract_status: r.get(3)?,
-                    created: r.get(4)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+        let rows = stmt.query_map([], row_to_source)?.collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// 单查一份来源（生成时校验 rel 是否存在）。
+    pub fn source(&self, rel: &str) -> Result<Option<SourceRow>, KbError> {
+        self.conn
+            .query_row(
+                "SELECT rel, name, byte_size, extract_status, created, images, image_note
+                 FROM sources WHERE rel = ?1",
+                params![rel],
+                row_to_source,
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn source_extracted(&self, rel: &str) -> Result<Option<String>, KbError> {
@@ -325,20 +405,13 @@ impl Index {
         let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
         let like = format!("%{escaped}%");
         let mut stmt = self.conn.prepare(
-            "SELECT rel, name, byte_size, extract_status, created FROM sources
+            "SELECT rel, name, byte_size, extract_status, created, images, image_note
+             FROM sources
              WHERE name LIKE ?1 ESCAPE '\\' OR extracted LIKE ?1 ESCAPE '\\'
              ORDER BY rel",
         )?;
         let rows = stmt
-            .query_map(params![like], |r| {
-                Ok(SourceRow {
-                    rel: r.get(0)?,
-                    name: r.get(1)?,
-                    byte_size: r.get::<_, i64>(2)? as u64,
-                    extract_status: r.get(3)?,
-                    created: r.get(4)?,
-                })
-            })?
+            .query_map(params![like], row_to_source)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -349,15 +422,18 @@ impl Index {
     pub fn insert_run(
         &self,
         id: &str,
-        source_rel: &str,
+        source_rels: &[String],
         cli: &str,
         status: &str,
         started_at: i64,
     ) -> Result<(), KbError> {
+        // ⚠️ `source_rel` 是 NOT NULL 的旧列 —— 始终写第一份，别只写 JSON。
+        let first = source_rels.first().map(String::as_str).unwrap_or("");
+        let json = serde_json::to_string(source_rels).map_err(|e| KbError::db(e.to_string()))?;
         self.conn.execute(
-            "INSERT INTO runs (id, source_rel, cli, status, started_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, source_rel, cli, status, started_at],
+            "INSERT INTO runs (id, source_rel, source_rels, cli, status, started_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, first, json, cli, status, started_at],
         )?;
         Ok(())
     }
@@ -379,28 +455,52 @@ impl Index {
         Ok(())
     }
 
+    /// 某份资料的生成历史 —— **包含**它的 run 都算（多来源 run 在任一成员的
+    /// 历史里都能看到）。
     pub fn list_runs(&self, source_rel: &str) -> Result<Vec<RunRow>, KbError> {
+        let like = format!("%\"{}\"%", escape_like(source_rel));
         let mut stmt = self.conn.prepare(
-            "SELECT id, source_rel, cli, status, error, usage, started_at, finished_at, card_count
-             FROM runs WHERE source_rel = ?1 ORDER BY started_at DESC",
+            "SELECT id, source_rel, source_rels, cli, status, error, usage, started_at,
+                    finished_at, card_count
+             FROM runs WHERE source_rels LIKE ?1 ESCAPE '\\' ORDER BY started_at DESC",
         )?;
         let rows = stmt
-            .query_map(params![source_rel], |r| {
+            .query_map(params![like], |r| {
+                let rels: String = r.get(2)?;
                 Ok(RunRow {
                     id: r.get(0)?,
                     source_rel: r.get(1)?,
-                    cli: r.get(2)?,
-                    status: r.get(3)?,
-                    error: r.get(4)?,
-                    usage: r.get(5)?,
-                    started_at: r.get(6)?,
-                    finished_at: r.get(7)?,
-                    card_count: r.get(8)?,
+                    source_rels: serde_json::from_str(&rels).unwrap_or_default(),
+                    cli: r.get(3)?,
+                    status: r.get(4)?,
+                    error: r.get(5)?,
+                    usage: r.get(6)?,
+                    started_at: r.get(7)?,
+                    finished_at: r.get(8)?,
+                    card_count: r.get(9)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
+}
+
+/// LIKE 模式里的字面量转义（`_sources` 自带下划线，不转义会误匹配）。
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
+    let images: String = r.get(5)?;
+    Ok(SourceRow {
+        rel: r.get(0)?,
+        name: r.get(1)?,
+        byte_size: r.get::<_, i64>(2)? as u64,
+        extract_status: r.get(3)?,
+        created: r.get(4)?,
+        images: serde_json::from_str(&images).unwrap_or_default(),
+        image_note: r.get(6)?,
+    })
 }
 
 fn row_to_card(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
@@ -615,6 +715,106 @@ mod tests {
         idx.upsert_card(&row, "").unwrap();
         assert_eq!(idx.cards_of_source("_sources/abc_报告.pdf").unwrap().len(), 1);
         assert_eq!(idx.cards_of_source("_sources/别的.pdf").unwrap().len(), 0);
+    }
+
+    // ------------------------------------------------------ v2：图片 + 多来源
+
+    fn source_record<'a>(rel: &'a str, images: &'a [SourceImage]) -> SourceRecord<'a> {
+        SourceRecord {
+            rel,
+            name: "报告.pdf",
+            byte_size: 12,
+            extract_status: "ok",
+            extracted: "正文",
+            images,
+            image_note: "",
+            created: "2026-01-01",
+        }
+    }
+
+    #[test]
+    fn 来源的图片清单能存能读() {
+        let idx = Index::open_in_memory().unwrap();
+        let images = vec![SourceImage {
+            rel: "_files/1729_报告-img-1.jpg".into(),
+            original_name: "第2页-image1-0.jpg".into(),
+            page: Some(2),
+        }];
+        idx.upsert_source(&source_record("_sources/1729_报告.pdf", &images))
+            .unwrap();
+
+        let sources = idx.list_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].images, images);
+        assert_eq!(sources[0].image_note, "");
+        assert!(idx.source("_sources/1729_报告.pdf").unwrap().is_some());
+        assert!(idx.source("_sources/没有.pdf").unwrap().is_none());
+    }
+
+    #[test]
+    fn 多来源_run_在任一成员的历史里都能看到() {
+        let idx = Index::open_in_memory().unwrap();
+        let rels = vec!["_sources/a.pdf".to_string(), "_sources/b.pdf".to_string()];
+        idx.insert_run("r1", &rels, "claude", "running", 7).unwrap();
+
+        let a = idx.list_runs("_sources/a.pdf").unwrap();
+        let b = idx.list_runs("_sources/b.pdf").unwrap();
+        assert_eq!(a.len(), 1);
+        assert_eq!(b.len(), 1);
+        assert_eq!(a[0].source_rels, rels);
+        assert_eq!(a[0].source_rel, "_sources/a.pdf", "旧字段写第一份");
+        assert!(idx.list_runs("_sources/c.pdf").unwrap().is_empty());
+    }
+
+    #[test]
+    fn 按来源找卡片_下划线按字面匹配不误伤() {
+        let idx = Index::open_in_memory().unwrap();
+        let row = CardRow {
+            rel: "x.md".into(),
+            title: "t".into(),
+            status: "unreviewed".into(),
+            archived: false,
+            created: String::new(),
+            tags: vec![],
+            excerpt: String::new(),
+            sources: vec!["_sources/a_b.pdf".into()],
+            mtime: 1,
+            size: 1,
+        };
+        idx.upsert_card(&row, "").unwrap();
+        // `_` 如果没转义，这个模式会命中 `a_b`
+        assert_eq!(idx.cards_of_source("_sources/axb.pdf").unwrap().len(), 0);
+        assert_eq!(idx.cards_of_source("_sources/a_b.pdf").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v1_库升级到_v2_会回填_run_的来源数组() {
+        // 手写一个 v1 结构的库（不经过 migrate），塞一条 run，再用新代码打开。
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sources (
+                 rel TEXT PRIMARY KEY, name TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
+                 extract_status TEXT NOT NULL DEFAULT 'none', extracted TEXT NOT NULL DEFAULT '',
+                 created TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE runs (
+                 id TEXT PRIMARY KEY, source_rel TEXT NOT NULL, cli TEXT NOT NULL,
+                 status TEXT NOT NULL, error TEXT, usage TEXT, started_at INTEGER NOT NULL,
+                 finished_at INTEGER, card_count INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO runs (id, source_rel, cli, status, started_at)
+             VALUES ('r1', '_sources/老资料.pdf', 'claude', 'done', 1);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+
+        let idx = Index { conn };
+        idx.migrate().unwrap();
+        let runs = idx.list_runs("_sources/老资料.pdf").unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].source_rels, ["_sources/老资料.pdf"]);
+        // 幂等：再跑一次不炸
+        idx.migrate().unwrap();
     }
 
     #[test]

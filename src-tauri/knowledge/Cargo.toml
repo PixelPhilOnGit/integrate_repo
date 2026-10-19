@@ -31,6 +31,15 @@ quick-xml = "0.42.0"
 # pdf 文本抽取（数字版 PDF）。扫描件的 OCR 不在这一轮范围（HANDOFF 记了）。
 pdf-extract = "0.12.1"
 
+# PDF **图片**抽取。⚠️ 这三个都**已经在 Cargo.lock 的依赖树里**（pdf-extract
+# 带入 lopdf、zip/tauri 带入 flate2/png），加直接依赖不新增 crate。
+# lopdf 关掉默认 features（chrono/jiff/rayon/time 一个都不用）。
+lopdf = { version = "0.42.0", default-features = false }
+# FlateDecode 的裸像素解压（有界读取，防解压炸弹）。
+flate2 = "1.1"
+# 把裸像素编码成 PNG；DCTDecode 的 JPEG 原字节直出，不用它。
+png = "0.18.1"
+
 # 序列化（索引行 ↔ 命令层）。
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

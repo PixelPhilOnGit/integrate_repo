@@ -4394,7 +4394,7 @@ body.rd-resizing * {
 }
 
 .rd-kb-md-code,
-.rd-kb-seq-raw {
+.rd-seq-view-raw {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -4449,7 +4449,7 @@ body.rd-resizing * {
   font-size: 12px;
 }
 
-.rd-kb-seq {
+.rd-seq-view {
   margin: 10px 0;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -4458,13 +4458,13 @@ body.rd-resizing * {
   overflow: auto;
 }
 
-.rd-kb-seq svg {
+.rd-seq-view svg {
   display: block;
   max-width: 100%;
   height: auto;
 }
 
-.rd-kb-seq-broken {
+.rd-seq-view-broken {
   margin: 10px 0;
 }
 
@@ -5236,4 +5236,110 @@ body.rd-resizing * {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* --- 知识库：多选生成 + 图片 ------------------------------------------------ */
+
+/* 生成对话框里的资料勾选列表。资料多时自己滚，别把弹框撑高 */
+.rd-kb-gen-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  margin: 8px 0;
+}
+
+.rd-kb-gen-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.rd-kb-gen-source:hover {
+  background: var(--accent-soft);
+}
+
+.rd-kb-gen-source-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-kb-gen-source-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.rd-kb-source-note {
+  margin-left: 4px;
+  color: var(--danger);
+  cursor: help;
+}
+
+/* 内嵌图片：限宽、点击放大 */
+.rd-image-embed {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.rd-image-embed.is-loading,
+.rd-image-embed-fallback {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 灯箱：盖住整个窗口（图片是「这一刻唯一的焦点」） */
+.rd-image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  cursor: zoom-out;
+}
+
+.rd-image-lightbox-img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  cursor: default;
+  background: var(--panel);
+}
+
+.rd-image-lightbox-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  min-width: 28px;
+  min-height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--panel);
+  cursor: pointer;
+  font-size: 16px;
 }

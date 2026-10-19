@@ -141,6 +141,124 @@ impl Vault {
         })
     }
 
+    /// `_files/` 下某个文件的绝对路径（只在 Rust 侧用）。
+    pub fn files_path(&self, file_name: &str) -> PathBuf {
+        self.root.join(FILES_DIR).join(file_name)
+    }
+
+    /// 写一张图片（原子写；`rel` 必须过 `_files/` 闸门）。
+    pub fn write_file(&self, rel: &str, bytes: &[u8]) -> Result<(), KbError> {
+        let rel = safe_file_rel(rel)?;
+        let path = self.root.join(&rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| KbError::io(&rel, e))?;
+        }
+        atomic_write(&path, bytes).map_err(|e| KbError::io(&rel, e))
+    }
+
+    /// 删一张图片。**文件本来就不在也算成功**（尽力清理，见来源删除）。
+    pub fn delete_file(&self, rel: &str) -> Result<(), KbError> {
+        let rel = safe_file_rel(rel)?;
+        match fs::remove_file(self.root.join(&rel)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(KbError::io(&rel, e)),
+        }
+    }
+
+    /// 读一张图片的字节。闸门：`_files/` 单段 + 非符号链接 + canonicalize
+    /// 后仍在库里 + 普通文件 + 大小上限。
+    pub fn read_image(&self, rel: &str, max_bytes: u64) -> Result<Vec<u8>, KbError> {
+        let rel = safe_file_rel(rel)?;
+        let bad = |reason: &'static str| KbError::BadRel {
+            rel: rel.clone(),
+            reason,
+        };
+        let path = self.root.join(&rel);
+        let meta = fs::symlink_metadata(&path).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => KbError::NotFound { rel: rel.clone() },
+            _ => KbError::io(&rel, e),
+        })?;
+        if meta.file_type().is_symlink() {
+            return Err(bad("不许符号链接"));
+        }
+        if !meta.is_file() {
+            return Err(bad("不是普通文件"));
+        }
+        if meta.len() > max_bytes {
+            return Err(KbError::Extract {
+                rel,
+                reason: format!(
+                    "图片太大了（{:.1} MB，上限 {} MB）",
+                    meta.len() as f64 / 1024.0 / 1024.0,
+                    max_bytes / 1024 / 1024
+                ),
+            });
+        }
+        // 归属确认：解析掉沿途的软链之后，仍然必须在库根里面。
+        let root = fs::canonicalize(&self.root).map_err(|e| KbError::io("库根", e))?;
+        let real = fs::canonicalize(&path).map_err(|e| KbError::io(&rel, e))?;
+        if !real.starts_with(&root) {
+            return Err(bad("路径跑到库外面了"));
+        }
+        fs::read(&path).map_err(|e| KbError::io(&rel, e))
+    }
+
+    /// 裸文件名 → `_files/<唯一命中>`（旧卡片/手编卡片的兼容路径）。
+    ///
+    /// 同名多张**不猜** —— 要求写完整路径。
+    pub fn resolve_image_target(&self, target: &str) -> Result<String, KbError> {
+        let target = target.trim();
+        if target.starts_with(&format!("{FILES_DIR}/")) {
+            return safe_file_rel(target);
+        }
+        if target.contains('/') || target.contains('\\') {
+            return Err(KbError::BadRel {
+                rel: target.to_string(),
+                reason: "图片路径只接受 _files/<文件名>",
+            });
+        }
+        let mut hits: Vec<String> = Vec::new();
+        if let Ok(entries) = fs::read_dir(self.root.join(FILES_DIR)) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name == target {
+                    hits.push(name);
+                }
+            }
+        }
+        match hits.len() {
+            1 => Ok(format!("{FILES_DIR}/{}", hits[0])),
+            0 => Err(KbError::NotFound {
+                rel: target.to_string(),
+            }),
+            _ => Err(KbError::BadRel {
+                rel: target.to_string(),
+                reason: "有多张同名图片，请写完整路径",
+            }),
+        }
+    }
+
+    /// 批量上传时给来源算一个不撞的存储名（同一毫秒同名加 ` (2)`、` (3)`…）。
+    pub fn unique_source_stored_name(&self, stamp_ms: u128, clean: &str) -> String {
+        let first = format!("{stamp_ms}_{clean}");
+        if !self.source_path(&first).exists() {
+            return first;
+        }
+        let (base, ext) = match clean.rsplit_once('.') {
+            Some((base, ext)) => (base, format!(".{ext}")),
+            None => (clean, String::new()),
+        };
+        for n in 2..100u32 {
+            let name = format!("{stamp_ms}_{base} ({n}){ext}");
+            if !self.source_path(&name).exists() {
+                return name;
+            }
+        }
+        // 极端的病态情况：加纳秒后缀，保证仍然唯一。
+        format!("{stamp_ms}_{base} ({stamp_ms}){ext}")
+    }
+
     /// 扫一遍卡片区：所有 **非保留、非隐藏** 目录下的 `.md`。
     ///
     /// 跳过 `.` 开头的目录（`.devtoolkit`、用户自己在 Obsidian 里放的
@@ -249,6 +367,35 @@ pub fn safe_card_rel(rel: &str) -> Result<String, KbError> {
                 reason: "卡片不能写在保留目录/隐藏目录里",
             });
         }
+    }
+    Ok(rel)
+}
+
+/// `_files/` 的闸门：**只允许 `_files/<一个文件名>`**，扩展名必须是图片。
+///
+/// 卡片里手写的 `![[../…]]`、子目录、`_sources/` 一律拒绝 —— 图片读取命令
+/// 的参数来自前端，不能让它变成任意文件读取。
+pub fn safe_file_rel(rel: &str) -> Result<String, KbError> {
+    let rel = safe_rel(rel)?;
+    let bad = |reason: &'static str| KbError::BadRel {
+        rel: rel.clone(),
+        reason,
+    };
+    let mut parts = rel.split('/');
+    let dir = parts.next().unwrap_or("");
+    let name = parts.next().unwrap_or("");
+    if dir != FILES_DIR || name.is_empty() || parts.next().is_some() {
+        return Err(bad("只允许 _files/<文件名>"));
+    }
+    if name.starts_with('.') {
+        return Err(bad("不许隐藏文件"));
+    }
+    let ext = Path::new(name)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !crate::images::IMAGE_EXTS.contains(&ext.as_str()) {
+        return Err(bad("不是图片扩展名"));
     }
     Ok(rel)
 }
@@ -434,6 +581,88 @@ mod tests {
     fn 命名清洗_超长按字符截() {
         let long = "汉".repeat(100);
         assert_eq!(sanitize_card_name(&long).chars().count(), 60);
+    }
+
+    // ------------------------------------------------------ _files/（图片）
+
+    #[test]
+    fn 图片闸门_只允许_files_下单段图片名() {
+        assert!(safe_file_rel("_files/a.png").is_ok());
+        assert!(safe_file_rel("_files/a.jpg").is_ok());
+        assert!(safe_file_rel("_files/sub/a.png").is_err(), "不许子目录");
+        assert!(safe_file_rel("_sources/a.png").is_err(), "不许 _sources");
+        assert!(safe_file_rel("_files/../a.png").is_err());
+        assert!(safe_file_rel("_files/a.md").is_err(), "不是图片");
+        assert!(safe_file_rel("_files/.hidden.png").is_err());
+        assert!(safe_file_rel("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn 图片读写往返_删不存在的文件也算成功() {
+        let v = tmp_vault("files-rw");
+        v.write_file("_files/a.png", &[1, 2, 3]).unwrap();
+        assert_eq!(v.read_image("_files/a.png", 1024).unwrap(), vec![1, 2, 3]);
+        v.delete_file("_files/a.png").unwrap();
+        assert!(v.delete_file("_files/a.png").is_ok(), "删不存在的也 Ok");
+        assert!(v.read_image("_files/a.png", 1024).is_err());
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 读图片_大小上限和符号链接都挡住() {
+        let v = tmp_vault("files-gate");
+        v.write_file("_files/a.png", &[0u8; 32]).unwrap();
+        assert!(v.read_image("_files/a.png", 16).is_err(), "超过上限要报错");
+
+        // 造一个指向库外面的软链：读必须拒绝（只在 unix 上能造）
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!(
+                "devtoolkit-kb-outside-{}.png",
+                std::process::id()
+            ));
+            fs::write(&outside, b"secret").unwrap();
+            let link = v.files_path("link.png");
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside, &link).unwrap();
+            assert!(v.read_image("_files/link.png", 1024).is_err(), "软链必须拒绝");
+            let _ = fs::remove_file(&outside);
+        }
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 裸文件名解析_唯一命中才行() {
+        let v = tmp_vault("files-name");
+        v.write_file("_files/a.png", &[1]).unwrap();
+        assert_eq!(v.resolve_image_target("a.png").unwrap(), "_files/a.png");
+        assert_eq!(
+            v.resolve_image_target("_files/a.png").unwrap(),
+            "_files/a.png"
+        );
+        assert!(v.resolve_image_target("missing.png").is_err());
+        assert!(v.resolve_image_target("../a.png").is_err());
+
+        v.write_file("_files/b.png", &[2]).unwrap();
+        // 同名多张：造一个同名（不同前缀不可能同名 —— 直接写两个不同 rel）
+        v.write_file("_files/c.png", &[3]).unwrap();
+        // 用两个同名的不同目录是不允许的（单段）——所以「同名歧义」用
+        // 原始名场景在真实数据里来自不同来源前缀，这里只验裸名唯一命中。
+        assert!(v.resolve_image_target("b.png").is_ok());
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 来源存储名_同毫秒同名自动加序号() {
+        let v = tmp_vault("source-name");
+        let first = v.unique_source_stored_name(1729, "报告.pdf");
+        assert_eq!(first, "1729_报告.pdf");
+        fs::write(v.source_path(&first), b"x").unwrap();
+        let second = v.unique_source_stored_name(1729, "报告.pdf");
+        assert_eq!(second, "1729_报告 (2).pdf");
+        fs::write(v.source_path(&second), b"x").unwrap();
+        assert_eq!(v.unique_source_stored_name(1729, "报告.pdf"), "1729_报告 (3).pdf");
+        let _ = fs::remove_dir_all(v.root());
     }
 
     #[test]

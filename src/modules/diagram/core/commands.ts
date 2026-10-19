@@ -19,10 +19,10 @@ import type {
   Participant,
   ParticipantKind,
   Theme,
-} from './model';
-import { SCHEMA_VERSION } from './model';
+} from '../../../shared/diagram/model';
+import { SCHEMA_VERSION } from '../../../shared/diagram/model';
 import { newId } from '../../../shared/ids';
-import { L } from './layout';
+import { L } from '../../../shared/diagram/layout';
 
 /** 重建排序不变量。所有改动坐标的命令都要在最后调用它。 */
 export function normalize(doc: Doc): Doc {

@@ -9,7 +9,7 @@
  * activate/deactivate —— 否则 Mermaid 渲染出来的激活条会串位。
  */
 
-import type { Doc, Id, Message } from './model';
+import type { Doc, Id, Message } from '../../../shared/diagram/model';
 
 const SAFE_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -115,7 +115,7 @@ export function toMermaid(doc: Doc, opts: { comment?: boolean } = {}): string {
 
   const lines: string[] = ['sequenceDiagram'];
   if (withComment) {
-    lines.push('    %% 由 Devtoolkit 导出：版面坐标与配色不会保留');
+    lines.push('    %% 由 超级个体 导出：版面坐标与配色不会保留');
     lines.push('    %% 如需继续编辑，请使用 .seq.json 源文件');
   }
 

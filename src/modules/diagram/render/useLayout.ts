@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import type { Doc } from '../core/model';
-import { computeLayout, type Layout } from '../core/layout';
+import type { Doc } from '../../../shared/diagram/model';
+import { computeLayout, type Layout } from '../../../shared/diagram/layout';
 import { createCanvasMeasurer } from '../../../shared/text';
 
 /**

@@ -6,10 +6,10 @@
  */
 
 import type { SeedFile } from '../../../shared/platform/config';
-import { FILE_EXT } from './model';
+import { FILE_EXT } from '../../../shared/diagram/model';
 import { createNewDoc } from './samples';
-import { serializeDoc } from './schema';
-import { defaultTheme } from './theme';
+import { serializeDoc } from '../../../shared/diagram/schema';
+import { defaultTheme } from '../../../shared/diagram/theme';
 
 export function diagramSeed(): SeedFile[] {
   const doc = createNewDoc('未命名');

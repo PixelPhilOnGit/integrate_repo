@@ -7,23 +7,37 @@
  */
 
 import type { ReactNode } from 'react';
+import { ImageEmbed } from '../../../shared/media/ImageEmbed';
 import { parseInline, parseMarkdown, type MdBlock, type MdInline } from '../core/markdown';
-import { SeqView } from './SeqView';
+import { SeqView } from '../../../shared/diagram/SeqView';
 
 export interface MarkdownViewProps {
   body: string;
+  /** 读图片字节（`![[…]]` 内嵌显示用）；不传时回落文字角标 */
+  loadImage?: (target: string) => Promise<ArrayBuffer>;
   /** 点 `[[wikilink]]`：目标卡片存在就跳，不存在由这里就地提示断链 */
   onWikilink: (target: string) => void;
   /** 解析断链用：标题 → 是否存在 */
   linkExists: (target: string) => boolean;
 }
 
-export function MarkdownView({ body, onWikilink, linkExists }: MarkdownViewProps): ReactNode {
+export function MarkdownView({
+  body,
+  loadImage,
+  onWikilink,
+  linkExists,
+}: MarkdownViewProps): ReactNode {
   const blocks = parseMarkdown(body);
   return (
     <div className="rd-kb-md" data-testid="kb-md">
       {blocks.map((block, i) => (
-        <Block key={i} block={block} onWikilink={onWikilink} linkExists={linkExists} />
+        <Block
+          key={i}
+          block={block}
+          loadImage={loadImage}
+          onWikilink={onWikilink}
+          linkExists={linkExists}
+        />
       ))}
     </div>
   );
@@ -31,23 +45,25 @@ export function MarkdownView({ body, onWikilink, linkExists }: MarkdownViewProps
 
 function Block({
   block,
+  loadImage,
   onWikilink,
   linkExists,
 }: {
   block: MdBlock;
+  loadImage?: (target: string) => Promise<ArrayBuffer>;
   onWikilink: (target: string) => void;
   linkExists: (target: string) => boolean;
 }): ReactNode {
   switch (block.kind) {
     case 'heading': {
       const H = (['h1', 'h2', 'h3', 'h4'] as const)[Math.min(block.level, 4) - 1] ?? 'h4';
-      return <H className="rd-kb-md-h">{inline(block.text, onWikilink, linkExists)}</H>;
+      return <H className="rd-kb-md-h">{inline(block.text, loadImage, onWikilink, linkExists)}</H>;
     }
     case 'paragraph':
-      return <p className="rd-kb-md-p">{inline(block.text, onWikilink, linkExists)}</p>;
+      return <p className="rd-kb-md-p">{inline(block.text, loadImage, onWikilink, linkExists)}</p>;
     case 'list': {
       const items = block.items.map((item, i) => (
-        <li key={i}>{inline(item, onWikilink, linkExists)}</li>
+        <li key={i}>{inline(item, loadImage, onWikilink, linkExists)}</li>
       ));
       return block.ordered ? (
         <ol className="rd-kb-md-list">{items}</ol>
@@ -56,11 +72,11 @@ function Block({
       );
     }
     case 'quote':
-      return <blockquote className="rd-kb-md-quote">{inline(block.text, onWikilink, linkExists)}</blockquote>;
+      return <blockquote className="rd-kb-md-quote">{inline(block.text, loadImage, onWikilink, linkExists)}</blockquote>;
     case 'code':
       return <pre className="rd-kb-md-code">{block.text}</pre>;
     case 'seq':
-      return <SeqView json={block.json} />;
+      return <SeqView json={block.json} testId="kb-seq" brokenTestId="kb-seq-broken" />;
     case 'hr':
       return <hr className="rd-kb-md-hr" />;
   }
@@ -68,18 +84,29 @@ function Block({
 
 function inline(
   text: string,
+  loadImage: ((target: string) => Promise<ArrayBuffer>) | undefined,
   onWikilink: (target: string) => void,
   linkExists: (target: string) => boolean
 ): ReactNode[] {
-  return parseInline(text).map((node, i) => <Inline key={i} node={node} onWikilink={onWikilink} linkExists={linkExists} />);
+  return parseInline(text).map((node, i) => (
+    <Inline
+      key={i}
+      node={node}
+      loadImage={loadImage}
+      onWikilink={onWikilink}
+      linkExists={linkExists}
+    />
+  ));
 }
 
 function Inline({
   node,
+  loadImage,
   onWikilink,
   linkExists,
 }: {
   node: MdInline;
+  loadImage?: (target: string) => Promise<ArrayBuffer>;
   onWikilink: (target: string) => void;
   linkExists: (target: string) => boolean;
 }): ReactNode {
@@ -115,10 +142,18 @@ function Inline({
       );
     }
     case 'image':
-      // v1 不显示图片字节（`![[…]]` 只渲染成带名字的角标）—— 诚实标注，
-      // 真显示要加「按名字读 `_files/` 字节」的命令，记在 HANDOFF 里。
-      // ⚠️ 不用 emoji（容器里没装 emoji 字体，会渲染成豆腐块 —— 全仓的图标
-      // 规矩）；这里连 SVG 都省了，文字角标就够
+      // 有加载器就内嵌显示（点击放大）；加载失败由 `ImageEmbed` 回落成
+      // 现在的文字角标 —— 图片坏了不该让整个阅读器炸掉。
+      if (loadImage !== undefined) {
+        return (
+          <ImageEmbed
+            target={node.target}
+            load={loadImage}
+            testId={`kb-image-${node.target}`}
+            lightboxTestId="kb-image-lightbox"
+          />
+        );
+      }
       return (
         <span className="rd-kb-md-image" data-testid={`kb-image-${node.target}`} title={`图片：${node.target}`}>
           [图片] {node.target}

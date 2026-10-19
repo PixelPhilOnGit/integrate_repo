@@ -390,7 +390,7 @@ describe('假 SSH：目录与文件', () => {
 
     const text = h.since(mark);
     expect(text).toContain('cat: 没有这个文件: No such file or directory');
-    expect(text).toContain('Devtoolkit demo shell.');
+    expect(text).toContain('超级个体 demo shell.');
   });
 
   it('grep 按子串过滤文件的每一行', () => {

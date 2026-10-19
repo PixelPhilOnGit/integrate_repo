@@ -5,9 +5,9 @@
  * 所以导出结果和所见一致；PNG 则由同一份 SVG 光栅化而来，两者不会走样。
  */
 
-import type { Doc } from '../core/model';
-import type { Layout } from '../core/layout';
-import { themeToCss } from '../core/theme';
+import type { Doc } from '../../../shared/diagram/model';
+import type { Layout } from '../../../shared/diagram/layout';
+import { themeToCss } from '../../../shared/diagram/theme';
 import { toMermaid } from '../core/mermaid';
 import { platform } from '../../../shared/platform';
 import { basename, stripExt } from '../../../shared/platform/path';

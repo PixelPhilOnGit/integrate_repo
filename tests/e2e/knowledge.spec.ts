@@ -34,7 +34,7 @@ test('种子库：卡片墙、筛选计数、归档单独一档', async ({ page 
   await expect(page.getByTestId('kb-wall-登录流程.md')).toBeVisible();
 });
 
-test('阅读器：markdown 渲染（wikilink/图片角标）＋ seq 围栏画成图', async ({ page }) => {
+test('阅读器：markdown 渲染（wikilink/内嵌图片）＋ seq 围栏画成图', async ({ page }) => {
   await enterKnowledge(page);
 
   // 登录流程卡里有 seq 围栏 → 画成真的顺序图（只读）
@@ -144,4 +144,55 @@ test('新建知识库：空库空态、切库互不串', async ({ page }) => {
   // 切回示例库内容还在（隔离）
   await page.getByTestId('kb-vault-select').selectOption('示例库');
   await expect(page.getByTestId('kb-wall-登录流程.md')).toBeVisible();
+});
+
+test('卡片图片：内嵌显示、点击放大、Esc 关闭、断链回落角标', async ({ page }) => {
+  await enterKnowledge(page);
+  await page.getByTestId('kb-wall-架构备忘.md').click();
+
+  // 种子库里 `_files/架构图.png` 有真字节 → 内嵌 <img>（blob URL）
+  const image = page.getByTestId('kb-image-架构图.png');
+  await expect(image).toHaveAttribute('data-state', 'ready');
+  await expect(image).toHaveAttribute('src', /^blob:/);
+
+  // 点击放大 → 灯箱；Esc 关闭
+  await image.click();
+  await expect(page.getByTestId('kb-image-lightbox')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('kb-image-lightbox')).toHaveCount(0);
+
+  // 找不到的图片：回落成文字角标（data-state=error），阅读器不炸
+  const missing = page.getByTestId('kb-image-缺失图.png');
+  await expect(missing).toHaveAttribute('data-state', 'error');
+  await expect(missing).toContainText('[图片]');
+});
+
+test('多选资料：默认勾当前、全选后综合生成、阅读器显示两个来源', async ({ page }) => {
+  await enterKnowledge(page);
+  await page.getByTestId('kb-source-add').click();
+  await page.getByTestId('kb-source-add').click();
+  await expect(page.getByTestId('kb-source-_sources/示例资料2.md')).toBeVisible();
+
+  await page.getByTestId('kb-generate-_sources/示例资料1.md').click();
+  const first = page
+    .getByTestId('kb-gen-source-_sources/示例资料1.md')
+    .locator('input');
+  const second = page
+    .getByTestId('kb-gen-source-_sources/示例资料2.md')
+    .locator('input');
+  // 默认只勾「点进来的那一份」
+  await expect(first).toBeChecked();
+  await expect(second).not.toBeChecked();
+
+  await page.getByTestId('kb-gen-select-all').click();
+  await expect(second).toBeChecked();
+  await page.getByTestId('kb-gen-start').click();
+  await expect(page.getByTestId('kb-gen-done')).toContainText('写了 2 张卡片');
+  await page.getByTestId('kb-gen-dismiss').click();
+
+  // 多份资料的卡：标题带「综合 N 份资料」，阅读器 meta 列出两个来源
+  await page.getByTestId('kb-wall-整理：综合 2 份资料.md').click();
+  const sources = page.getByTestId('kb-reader-sources');
+  await expect(sources).toContainText('示例资料1.md');
+  await expect(sources).toContainText('示例资料2.md');
 });

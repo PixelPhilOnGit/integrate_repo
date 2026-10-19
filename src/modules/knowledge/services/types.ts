@@ -39,6 +39,15 @@ export interface CardDetail {
   body: string;
 }
 
+/** 从一份资料里抽出来的图片 */
+export interface SourceImage {
+  /** vault 相对路径（`_files/<来源名>-img-<n>.<ext>`）—— 卡片里的 target */
+  rel: string;
+  /** 给人看的原始名字（PDF 用「第 N 页」，docx 用 zip 里的文件名） */
+  originalName: string;
+  page: number | null;
+}
+
 /** 一份上传的原件 */
 export interface SourceRow {
   rel: string;
@@ -47,12 +56,26 @@ export interface SourceRow {
   /** ok = 提取成功；none = 没有文本可提（图片）；failed = 提取失败 */
   extractStatus: 'ok' | 'none' | 'failed';
   created: string;
+  /** 上传时抽到 `_files/` 的图片 */
+  images: SourceImage[];
+  /** 图片抽取的一句人话说明（空串 = 没什么要说的） */
+  imageNote: string;
+}
+
+/** 一次（可多选的）上传结果 */
+export interface SourceAddOutcome {
+  added: SourceRow[];
+  /** 单个文件的失败原因（其余文件照常入库） */
+  errors: string[];
 }
 
 /** 一次生成 run 的账 */
 export interface RunRow {
   id: string;
+  /** 第一份资料（兼容旧字段） */
   sourceRel: string;
+  /** 这一次用到的全部资料 */
+  sourceRels: string[];
   cli: 'claude' | 'codex';
   status: 'running' | 'done' | 'failed' | 'cancelled';
   error: string | null;
@@ -118,21 +141,29 @@ export interface KnowledgeClient {
   search(name: string, query: string): Promise<SearchHits>;
 
   sources(name: string): Promise<SourceRow[]>;
-  /** 挂一份原件；用户取消返回 null */
-  sourceAdd(name: string): Promise<SourceRow | null>;
+  /**
+   * 挂资料（可多选）；用户取消返回 null。
+   * 单个文件失败不打断整批 —— 看返回里的 `errors`。
+   */
+  sourceAdd(name: string): Promise<SourceAddOutcome | null>;
   /** 删原件；`deleteGenerated` = 连它生成的卡片一起删。返回连带删掉的卡片数 */
   sourceDelete(name: string, rel: string, deleteGenerated: boolean): Promise<number>;
 
-  /** 跑一次生成；进度走 `onEvent`（**第一条事件带 runId**，见 `GenEvent`） */
+  /**
+   * 跑一次生成（可多份资料）；进度走 `onEvent`（**第一条事件带 runId**）。
+   */
   generate(
     name: string,
-    sourceRel: string,
+    sourceRels: string[],
     cli: string,
     note: string,
     onEvent: GenListener
   ): Promise<GenOutcome>;
   cancelGenerate(name: string, runId: string): Promise<void>;
   runs(name: string, sourceRel: string): Promise<RunRow[]>;
+
+  /** 读图片字节（卡片阅读器内嵌显示用）。target 可以是 `_files/…` 或裸文件名 */
+  fileRead(name: string, target: string): Promise<ArrayBuffer>;
 
   cliProbe(): Promise<CliProbe>;
 }

@@ -17,16 +17,21 @@
 //! * 句柄里的 `cancels`：runId → 取消开关。生成可以并发跑（各自一个 CLI
 //!   进程），取消按 runId 点对点找。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use devtoolkit_knowledge::blocks;
 use devtoolkit_knowledge::extract::{self, ExtractOutcome};
+use devtoolkit_knowledge::images;
+use devtoolkit_knowledge::mapping;
 use devtoolkit_knowledge::frontmatter::Frontmatter;
-use devtoolkit_knowledge::index::{reindex, CardRow, Index, ReindexReport, RunRow, SourceRow};
-use devtoolkit_knowledge::prompt::{self, PromptInput, RelatedCard, RELATED_LIMIT};
+use devtoolkit_knowledge::index::{
+    reindex, CardRow, Index, ReindexReport, RunRow, SourceImage, SourceRecord, SourceRow,
+};
+use devtoolkit_knowledge::prompt::{self, PromptInput, PromptSource, RelatedCard, RELATED_LIMIT};
 use devtoolkit_knowledge::runner::{self, Cli, Progress, RunSpec};
 use devtoolkit_knowledge::timefmt;
 use devtoolkit_knowledge::vault::{self, unique_card_rel, Vault, SOURCES_DIR};
@@ -467,83 +472,150 @@ pub async fn kb_sources(
     .await
 }
 
-/// 挂一份原件：**对话框开在 Rust 侧**、原件拷进 `_sources/`、现场提取文本。
+/// 一次上传的结果：成功的条目 + 单个文件的失败原因。
 ///
-/// 取消返回 `Ok(None)`。提取失败**不当作挂载失败**（文件已经拷进来了，
-/// 状态记 failed，生成时会说清楚）。
+/// ⚠️ **单个文件失败不打断整批**（用户一次选了十个，不能因为第九个坏了
+/// 把前八个也吞掉）。取消整个对话框返回 `Ok(None)`。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceAddOutcome {
+    pub added: Vec<SourceRow>,
+    pub errors: Vec<String>,
+}
+
+/// 挂资料（**可多选**）：对话框开在 Rust 侧、原件拷进 `_sources/`、现场提取
+/// 文本和图片。
+///
+/// 取消返回 `Ok(None)`。单个文件提取失败**不当作挂载失败**（文件已经拷进来了，
+/// 状态记 failed，生成时会说清楚）；图片抽不出来也不影响入库。
 #[tauri::command]
 pub async fn kb_source_add(
     app: AppHandle,
     window: tauri::WebviewWindow,
     state: State<'_, Arc<KbState>>,
     name: String,
-) -> Result<Option<SourceRow>, String> {
+) -> Result<Option<SourceAddOutcome>, String> {
     // 对话框（照 task_commands.rs 的挂附件先例：channel(1) 当 oneshot 用）
     let (tx, mut rx) = tauri::async_runtime::channel(1);
     app.dialog()
         .file()
-        .set_title("选一份资料挂进这个知识库")
+        .set_title("选资料挂进这个知识库（可以多选）")
         .set_parent(&window)
-        .pick_file(move |picked| {
-            let path = picked
-                .map(|p| p.simplified())
-                .and_then(|p| p.into_path().ok());
-            let _ = tx.try_send(path);
+        .pick_files(move |picked| {
+            let paths = picked.map(|list| {
+                list.into_iter()
+                    .filter_map(|p| p.simplified().into_path().ok())
+                    .collect::<Vec<_>>()
+            });
+            let _ = tx.try_send(paths);
         });
     let picked = rx
         .recv()
         .await
         .ok_or_else(|| "选文件的对话框没能开起来（主线程忙不过来？）".to_string())?;
-    let Some(src) = picked else {
+    let Some(paths) = picked else {
         return Ok(None);
     };
+    if paths.is_empty() {
+        return Ok(None);
+    }
 
     let state = Arc::clone(state.inner());
     crate::commands::blocking(move || {
         let h = handle_of(&state, &app, &name)?;
-        let file_name = src
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .ok_or_else(|| "选的东西没有文件名".to_string())?;
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let stored = format!("{stamp}_{}", sanitize_source_name(&file_name));
-        let rel = format!("{SOURCES_DIR}/{stored}");
-        let dest = h.vault.source_path(&stored);
-
-        // 拷而不引用（老规矩：原文件挪走/删掉都不影响）
-        let same = std::fs::canonicalize(&src).ok() == std::fs::canonicalize(&dest).ok();
-        if !same {
-            std::fs::copy(&src, &dest).map_err(|e| format!("拷进来失败了（{e}）"))?;
+        let mut added = Vec::new();
+        let mut errors = Vec::new();
+        for src in paths {
+            match add_one_source(&h, &src) {
+                Ok(row) => added.push(row),
+                Err(e) => errors.push(format!("{}：{e}", src.display())),
+            }
         }
-        let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
-
-        // 现场提取（图片给 None 不算失败）
-        let ext = src
-            .extension()
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_default();
-        let (status, extracted) = match extract::extract(&dest, &ext) {
-            Ok(ExtractOutcome::Text(text)) => ("ok", text),
-            Ok(ExtractOutcome::None { .. }) => ("none", String::new()),
-            Err(_) => ("failed", String::new()),
-        };
-
-        let created = timefmt::now_iso();
-        let idx = index_of(&h);
-        idx.upsert_source(&rel, &file_name, size, status, &extracted, &created)
-            .map_err(|e| e.to_string())?;
-        Ok(Some(SourceRow {
-            rel,
-            name: file_name,
-            byte_size: size,
-            extract_status: status.to_string(),
-            created,
-        }))
+        Ok(Some(SourceAddOutcome { added, errors }))
     })
     .await
+}
+
+/// 挂一个文件：拷贝 → 文本提取 → 图片提取（落 `_files/`）→ 入库。
+fn add_one_source(h: &VaultHandle, src: &Path) -> Result<SourceRow, String> {
+    let file_name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| "选的东西没有文件名".to_string())?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    // ⚠️ 批量上传同一毫秒的同名文件不能互相覆盖。
+    let stored = h
+        .vault
+        .unique_source_stored_name(stamp, &sanitize_source_name(&file_name));
+    let rel = format!("{SOURCES_DIR}/{stored}");
+    let dest = h.vault.source_path(&stored);
+
+    // 拷而不引用（老规矩：原文件挪走/删掉都不影响）
+    let same = std::fs::canonicalize(src).ok() == std::fs::canonicalize(&dest).ok();
+    if !same {
+        std::fs::copy(src, &dest).map_err(|e| format!("拷进来失败了（{e}）"))?;
+    }
+    let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+
+    // 现场提取（图片给 None 不算失败）
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let (status, extracted) = match extract::extract(&dest, &ext) {
+        Ok(ExtractOutcome::Text(text)) => ("ok", text),
+        Ok(ExtractOutcome::None { .. }) => ("none", String::new()),
+        Err(_) => ("failed", String::new()),
+    };
+
+    // 图片：上传时就抽到 `_files/`（生成前就能显示、删除来源能精确清理）。
+    // ⚠️ 抽图失败**不让上传失败** —— 记一句说明就好。
+    let (images, image_note) = match images::extract_images(&dest, &ext) {
+        Ok(set) => {
+            let stem = images::source_stem(&stored);
+            let mut saved = Vec::new();
+            for (index, image) in set.images.iter().enumerate() {
+                let file_rel = images::image_rel(&stem, index + 1, &image.ext);
+                h.vault
+                    .write_file(&file_rel, &image.bytes)
+                    .map_err(|e| format!("图片存不进库（{e}）"))?;
+                saved.push(SourceImage {
+                    rel: file_rel,
+                    original_name: image.original_name.clone(),
+                    page: image.page,
+                });
+            }
+            (saved, set.note)
+        }
+        Err(e) => (Vec::new(), format!("图片没有提取：{e}")),
+    };
+
+    let created = timefmt::now_iso();
+    index_of(h)
+        .upsert_source(&SourceRecord {
+            rel: &rel,
+            name: &file_name,
+            byte_size: size,
+            extract_status: status,
+            extracted: &extracted,
+            images: &images,
+            image_note: &image_note,
+            created: &created,
+        })
+        .map_err(|e| e.to_string())?;
+
+    Ok(SourceRow {
+        rel,
+        name: file_name,
+        byte_size: size,
+        extract_status: status.to_string(),
+        created,
+        images,
+        image_note,
+    })
 }
 
 /// 文件名清洗（保留扩展名）：主名走卡片同一套规则，尾巴截短。
@@ -573,6 +645,8 @@ pub async fn kb_source_delete(
     crate::commands::blocking(move || {
         let h = handle_of(&state, &app, &name)?;
         let idx = index_of(&h);
+        // 先记下这份来源抽出来的图片（删行之后就查不到了）
+        let source = idx.source(&rel).map_err(|e| e.to_string())?;
 
         let mut removed_cards = 0usize;
         if delete_generated {
@@ -603,6 +677,16 @@ pub async fn kb_source_delete(
             Err(e) => return Err(format!("原件的文件删不掉（{e}）")),
         }
         idx.remove_source(&rel).map_err(|e| e.to_string())?;
+
+        // 连卡片一起删 → 这个来源抽出来的图片也没有存在意义了（尽力删，
+        // 文件不在不算错）。保留卡片时**不动图片** —— 卡片还在引用它们。
+        if delete_generated {
+            if let Some(source) = &source {
+                for image in &source.images {
+                    let _ = h.vault.delete_file(&image.rel);
+                }
+            }
+        }
         Ok(removed_cards)
     })
     .await
@@ -642,16 +726,17 @@ pub async fn kb_cli_probe() -> Result<CliProbe, String> {
     Ok(CliProbe { claude, codex })
 }
 
-/// 跑一次生成：读原件提取文本 →（查相关的旧卡片）→ 组提示词 → 跑 CLI →
-/// 解析校验 → 写卡片文件 → 更新索引 → 记 run。
+/// 跑一次生成：读**一份或多份**资料 →（查相关的旧卡片）→ 组提示词 → 跑 CLI →
+/// 解析校验 → 改写图片引用 → 写卡片文件 → 更新索引 → 记 run。
 ///
-/// 进度走 `channel`（一句一句的 Note）；成败走返回值。
+/// 多份资料允许模型把内容**综合进同一张卡**，每张卡的 `sources` 由模型标注
+/// （缺省 = 本次全部资料）。进度走 `channel`（一句一句的 Note）；成败走返回值。
 #[tauri::command]
 pub async fn kb_generate(
     app: AppHandle,
     state: State<'_, Arc<KbState>>,
     name: String,
-    source_rel: String,
+    source_rels: Vec<String>,
     cli: String,
     note: String,
     channel: Channel<GenEvent>,
@@ -661,64 +746,120 @@ pub async fn kb_generate(
     let cli = Cli::parse(&cli).ok_or_else(|| format!("不认识这个 CLI：{cli}"))?;
     let handle = handle_of(state.inner(), &app, &name)?;
 
-    // 读来源（提取文本 + 展示名）
-    let (source_name, extracted) = {
-        let idx = index_of(&handle);
-        let sources = idx.list_sources().map_err(|e| e.to_string())?;
-        let source = sources
-            .into_iter()
-            .find(|s| s.rel == source_rel)
-            .ok_or_else(|| format!("这份资料不在库里：{source_rel}"))?;
-        let text = idx
-            .source_extracted(&source_rel)
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default();
-        (source.name, text)
-    };
-
-    // 提取文本空了：要么是图片（直读原件），要么提取失败
-    let source_abs = handle
-        .vault
-        .abs(&source_rel)
-        .map_err(|e| e.to_string())?
-        .display()
-        .to_string();
-    let extract_outcome = if extracted.trim().is_empty() {
-        ExtractOutcome::None {
-            reason: "没有可用的提取文本（图片，或提取失败）".to_string(),
+    // 去重保序 + 数量/存在性校验（顺序就是提示词里的 S1..Sn）
+    let mut rels: Vec<String> = Vec::new();
+    for rel in source_rels {
+        if !rels.contains(&rel) {
+            rels.push(rel);
         }
-    } else {
-        ExtractOutcome::Text(extracted)
-    };
+    }
+    if rels.is_empty() {
+        return Err("先选至少一份资料".to_string());
+    }
+    if rels.len() > prompt::MAX_SOURCES {
+        return Err(format!("一次最多整理 {} 份资料", prompt::MAX_SOURCES));
+    }
 
-    // 「查知识库」：用用户指示（有的话）或资料名（去扩展名）当查询词，
-    // 带相关的旧卡片进提示词
-    let related = {
-        let query = if note.trim().is_empty() {
-            source_name
-                .rsplit_once('.')
-                .map(|(s, _)| s.to_string())
-                .unwrap_or_else(|| source_name.clone())
-        } else {
-            note.clone()
-        };
+    let sources: Vec<SourceRow> = {
         let idx = index_of(&handle);
-        idx.search(&query)
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .take(RELATED_LIMIT)
-            .map(|c| RelatedCard {
-                title: c.title,
-                excerpt: c.excerpt,
-                rel: c.rel,
-            })
-            .collect::<Vec<_>>()
+        let mut out = Vec::with_capacity(rels.len());
+        for rel in &rels {
+            let source = idx
+                .source(rel)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("这份资料不在库里：{rel}"))?;
+            out.push(source);
+        }
+        out
     };
 
+    // 编号：资料 S1..Sn、图片 I1..Im（全局连续）
+    let (source_bindings, image_bindings) = mapping::build_bindings(&sources);
+
+    // 每份资料的提取结果 + 绝对路径 + 属于它的图片
+    let mut extract_outcomes: Vec<ExtractOutcome> = Vec::with_capacity(sources.len());
+    let mut abs_paths: Vec<String> = Vec::with_capacity(sources.len());
+    let mut images_by_source: Vec<Vec<mapping::ImageBinding>> = Vec::with_capacity(sources.len());
+    {
+        let idx = index_of(&handle);
+        for source in &sources {
+            let text = idx
+                .source_extracted(&source.rel)
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
+            extract_outcomes.push(if text.trim().is_empty() {
+                ExtractOutcome::None {
+                    reason: "没有可用的提取文本（图片，或提取失败）".to_string(),
+                }
+            } else {
+                ExtractOutcome::Text(text)
+            });
+            abs_paths.push(
+                handle
+                    .vault
+                    .abs(&source.rel)
+                    .map_err(|e| e.to_string())?
+                    .display()
+                    .to_string(),
+            );
+            images_by_source.push(
+                image_bindings
+                    .iter()
+                    .filter(|image| image.source_rel == source.rel)
+                    .cloned()
+                    .collect(),
+            );
+        }
+    }
+
+    // 「查知识库」：有用户指示就用它；否则逐份资料名检索并去重。
+    let related = {
+        let idx = index_of(&handle);
+        let queries: Vec<String> = if note.trim().is_empty() {
+            sources
+                .iter()
+                .map(|s| {
+                    s.name
+                        .rsplit_once('.')
+                        .map(|(stem, _)| stem.to_string())
+                        .unwrap_or_else(|| s.name.clone())
+                })
+                .collect()
+        } else {
+            vec![note.clone()]
+        };
+        let mut out: Vec<RelatedCard> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        'outer: for query in queries {
+            for card in idx.search(&query).map_err(|e| e.to_string())? {
+                if out.len() >= RELATED_LIMIT {
+                    break 'outer;
+                }
+                if seen.insert(card.rel.clone()) {
+                    out.push(RelatedCard {
+                        title: card.title,
+                        excerpt: card.excerpt,
+                        rel: card.rel,
+                    });
+                }
+            }
+        }
+        out
+    };
+
+    let prompt_sources: Vec<PromptSource<'_>> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| PromptSource {
+            binding: &source_bindings[index],
+            extract: &extract_outcomes[index],
+            source_abs: &abs_paths[index],
+            images: &images_by_source[index],
+            image_note: &source.image_note,
+        })
+        .collect();
     let bundle = prompt::build(&PromptInput {
-        source_name: &source_name,
-        extract: &extract_outcome,
-        source_abs: &source_abs,
+        sources: &prompt_sources,
         related: &related,
         note: &note,
     });
@@ -738,7 +879,7 @@ pub async fn kb_generate(
         .unwrap_or(0);
     {
         let idx = index_of(&handle);
-        idx.insert_run(&run_id, &source_rel, cli.as_str(), "running", started_at)
+        idx.insert_run(&run_id, &rels, cli.as_str(), "running", started_at)
             .map_err(|e| e.to_string())?;
     }
 
@@ -811,19 +952,32 @@ pub async fn kb_generate(
         }
     };
 
-    // 写卡片文件 + 索引
-    let written = crate::commands::blocking({
+    // 写卡片文件 + 索引。图片引用在这里统一改写成 `_files/<确定名>`；
+    // 卡片的 sources 由模型标注的 S 编号解析成真实 rel。
+    let (written, warnings) = crate::commands::blocking({
         let handle = Arc::clone(&handle);
         let usage = outcome.usage.clone();
         let run_id2 = run_id.clone();
         move || {
+            let mut doc = doc;
+            let mut warnings = mapping::rewrite_images(&mut doc, &image_bindings);
             let created = timefmt::now_iso();
             let mut rows: Vec<CardRow> = Vec::new();
             for card in &doc.cards {
+                // 引用了某份资料的图片 → 自动把那资料并进 sources（否则删
+                // 来源时卡片引用会悬空）。
+                let extra = mapping::image_sources_in_card(card, &image_bindings);
+                let (card_sources, mut source_warnings) = mapping::resolve_card_sources(
+                    &card.sources,
+                    &source_bindings,
+                    &extra,
+                );
+                warnings.append(&mut source_warnings);
+
                 let rel = unique_card_rel(&handle.vault, "", &card.title);
                 let mut fm = Frontmatter::new(&card.title, &created);
                 fm.tags = card.tags.clone();
-                fm.sources = vec![source_rel.clone()];
+                fm.sources = card_sources;
                 let body = blocks::blocks_to_markdown(&card.blocks);
                 handle
                     .vault
@@ -863,10 +1017,24 @@ pub async fn kb_generate(
                     now_ms(),
                 )
                 .map_err(|e| e.to_string())?;
-            Ok(rows)
+            Ok((rows, warnings))
         }
     })
     .await?;
+
+    // 警告不静默：合并成一条事件发给用户（太多条就截断）。
+    if !warnings.is_empty() {
+        let shown = warnings.iter().take(5).cloned().collect::<Vec<_>>().join("；");
+        let more = if warnings.len() > 5 {
+            format!("（还有 {} 条）", warnings.len() - 5)
+        } else {
+            String::new()
+        };
+        let _ = channel.send(GenEvent {
+            note: format!("提醒：{shown}{more}"),
+            run_id: None,
+        });
+    }
 
     let _ = channel.send(GenEvent {
         note: format!("写好了 {} 张卡片", written.len()),
@@ -920,6 +1088,38 @@ pub async fn kb_runs(
     })
     .await
 }
+
+/// 读一张图片的字节（卡片阅读器用）。
+///
+/// 参数只有 vault 名 + `target`（`_files/<文件名>` 或裸文件名）。绝对路径
+/// 仍由 Rust 侧算 —— 和这个模块「参数表里没有路径」的立场一致。
+/// 闸门在 `Vault::resolve_image_target` / `read_image`（单段、非软链、
+/// canonicalize 归属、32 MiB 上限）。
+#[tauri::command]
+pub async fn kb_file_read(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    target: String,
+) -> Result<tauri::ipc::Response, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let rel = h
+            .vault
+            .resolve_image_target(&target)
+            .map_err(|e| e.to_string())?;
+        let bytes = h
+            .vault
+            .read_image(&rel, MAX_IMAGE_READ)
+            .map_err(|e| e.to_string())?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+}
+
+/// 单张图片的读取上限（和任务附件缩略图同一个量级）。
+const MAX_IMAGE_READ: u64 = 32 * 1024 * 1024;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()

@@ -24,7 +24,7 @@ export function KnowledgeSidebar(): ReactNode {
       <KbSidebar onNewVault={() => setNewVault(true)} onGenerate={(rel) => setGenSource(rel)} />
       {newVault && <NewVaultDialog onClose={() => setNewVault(false)} />}
       {genSource !== null && (
-        <GenerateDialog sourceRel={genSource} onClose={() => setGenSource(null)} />
+        <GenerateDialog initialRel={genSource} onClose={() => setGenSource(null)} />
       )}
     </>
   );
@@ -112,10 +112,10 @@ function NewVaultDialog({ onClose }: { onClose: () => void }): ReactNode {
 }
 
 function GenerateDialog({
-  sourceRel,
+  initialRel,
   onClose,
 }: {
-  sourceRel: string;
+  initialRel: string;
   onClose: () => void;
 }): ReactNode {
   const state = useKb();
@@ -123,28 +123,80 @@ function GenerateDialog({
   useModalKeys({ ref });
   const [cli, setCli] = useState<'claude' | 'codex'>('claude');
   const [note, setNote] = useState('');
+  // 默认只勾「点进来的那一份」；用户可多选（跨资料合成一张卡）。
+  const [selected, setSelected] = useState<string[]>([initialRel]);
 
   const probe = state.cliProbe;
   const claudeOk = probe?.claude != null;
   const codexOk = probe?.codex != null;
   const anyOk = claudeOk || codexOk;
-  const name = sourceRel.split('/').pop() ?? sourceRel;
+
+  const sources = state.sources;
+  const only = selected.length === 1 ? sources.find((s) => s.rel === selected[0]) : undefined;
+  const title =
+    only !== undefined
+      ? `用 AI 整理「${only.name}」`
+      : `用 AI 综合整理 ${selected.length} 份资料`;
+
+  const toggle = (rel: string): void => {
+    setSelected((prev) =>
+      prev.includes(rel) ? prev.filter((r) => r !== rel) : [...prev, rel],
+    );
+  };
+  const selectAll = (): void => setSelected(sources.map((s) => s.rel));
+  const invert = (): void =>
+    setSelected(sources.filter((s) => !selected.includes(s.rel)).map((s) => s.rel));
 
   const start = (): void => {
+    if (selected.length === 0) return;
     onClose();
-    void knowledgeStore.generate(sourceRel, cli, note);
+    void knowledgeStore.generate(selected, cli, note);
   };
 
   return (
     <div className="rd-modal-backdrop">
       <div className="rd-modal" ref={ref} role="dialog" aria-modal="true" aria-labelledby="kb-gen-title">
         <h2 className="rd-modal-title" id="kb-gen-title">
-          用 AI 整理「{name}」
+          {title}
         </h2>
         <p className="rd-hint">
-          用你机器上装着的 CLI 读这份资料，生成知识卡片（未评审状态入库）。
-          生成的卡片里可以带文字、时序图、图片引用。
+          勾选要一起整理的多份资料 —— 模型可以把它们的内容**综合进同一张卡片**。
+          生成的卡片（未评审）里可以带文字、时序图、图片。
         </p>
+
+        <div className="rd-kb-gen-source-tools">
+          <button type="button" data-testid="kb-gen-select-all" onClick={selectAll}>
+            全选
+          </button>
+          <button type="button" data-testid="kb-gen-invert" onClick={invert}>
+            反选
+          </button>
+          <span className="rd-muted">已选 {selected.length} 份</span>
+        </div>
+        <div className="rd-kb-gen-sources" data-testid="kb-gen-sources">
+          {sources.map((s) => (
+            <label
+              key={s.rel}
+              className="rd-kb-gen-source"
+              data-testid={`kb-gen-source-${s.rel}`}
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(s.rel)}
+                onChange={() => toggle(s.rel)}
+              />
+              <span className="rd-kb-gen-source-name">{s.name}</span>
+              {s.extractStatus !== 'ok' && (
+                <span className="rd-muted">
+                  {s.extractStatus === 'none' ? '（图片）' : '（提取失败）'}
+                </span>
+              )}
+              {s.images.length > 0 && (
+                <span className="rd-muted">（{s.images.length} 张图）</span>
+              )}
+            </label>
+          ))}
+        </div>
 
         <div className="rd-kb-gen-cli" data-testid="kb-gen-cli">
           <label>
@@ -193,7 +245,7 @@ function GenerateDialog({
             type="button"
             className="rd-btn-primary"
             data-testid="kb-gen-start"
-            disabled={!anyOk}
+            disabled={!anyOk || selected.length === 0}
             onClick={start}
           >
             开始生成
