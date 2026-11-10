@@ -11,6 +11,7 @@
 
 import {
   asArray,
+  asGroupId,
   asPort,
   asRecord,
   asString,
@@ -83,6 +84,8 @@ function sanitize(raw: unknown): SshProfile[] {
     if (id === '') continue; // 没有 id 的记录没法用：连接、重命名、删除都要靠它
 
     profiles.push({
+      // ⚠️ 目录归属也要读回来 —— 少了这一行，连接重载后就掉回未分组
+      ...asGroupId(record),
       id,
       name: asString(record.name) || '未命名连接',
       kind: asKind(record.kind),

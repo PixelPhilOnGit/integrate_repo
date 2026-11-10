@@ -6,7 +6,14 @@
 
 import { isDefaultName, nextAvailableName } from '../../../shared/connections/profiles';
 import { newId } from '../../../shared/ids';
-import { DEFAULT_PORT, type ConnectParams, type SqlKind, type SqlProfile } from './types';
+import {
+  DEFAULT_DATABASE,
+  DEFAULT_PORT,
+  DEFAULT_USER,
+  type ConnectParams,
+  type SqlKind,
+  type SqlProfile,
+} from './types';
 
 export type ProfileField = 'name' | 'host' | 'port' | 'username' | 'database';
 
@@ -21,23 +28,8 @@ export const DEFAULT_HOST = '127.0.0.1';
  *
  * ⚠️ **表驱动**，不是一串三元表达式：四个引擎之后，`kind === 'mysql' ? 'root' : …`
  * 那种写法每加一个引擎就要改五处，漏一处**不报错**、只是默认值变得莫名其妙。
+ * 默认用户 / 库名在 `types.ts`（读盘整形也用它，不能各写一份）。
  */
-const DEFAULT_USER: Record<SqlKind, string> = {
-  postgres: 'postgres',
-  mysql: 'root',
-  // ClickHouse 的默认用户就叫 default
-  clickhouse: 'default',
-  // Mongo 本地跑通常不开鉴权，别硬塞一个用户名进去
-  mongodb: '',
-};
-
-const DEFAULT_DATABASE: Record<SqlKind, string> = {
-  postgres: 'postgres',
-  mysql: '',
-  clickhouse: '',
-  mongodb: '',
-};
-
 const DEFAULT_NAME: Record<SqlKind, string> = {
   postgres: '新建 PostgreSQL 连接',
   mysql: '新建 MySQL 连接',

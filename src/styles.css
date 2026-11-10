@@ -54,7 +54,7 @@
 
   --toolbar-h: 48px;
   --status-h: 26px;
-  --rail-w: 50px;
+  --rail-w: 64px;
   font-synthesis: none;
   /* 浏览器自己画的东西（滚动条、表单控件、默认背景）跟着走。
      不设的话深色界面里会冒出几根刺眼的亮色滚动条 */
@@ -6535,4 +6535,280 @@ body.rd-resizing * {
 button.rd-btn-primary,
 .rd-ssh-connect {
   justify-content: center;
+}
+
+/* ======================================================================
+ * v0.20.0 导航与命令面板
+ *
+ * 图标栏从「一排没有文字的图标」升级成**带标签的导航栏**：十一个模块
+ * 光靠线条图标记不住谁是谁，文字是最便宜的可发现性。标签用 10px，
+ * 图标仍是 20px，整格 46px —— 900 高的窗口一屏放得下，600 高时中间那段
+ * 自己滚（顶部场景/搜索和底部外观永远钉住）。
+ * ====================================================================== */
+
+.rd-module-rail {
+  gap: 4px;
+  padding: 8px 0 6px;
+}
+
+.rd-rail-utils {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  flex: none;
+}
+
+.rd-rail-tabs {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 2px;
+  padding: 2px 4px;
+  /* 导航栏的滚动条不画出来：它只在 600 高的小窗口里出现，且滚的是
+     整列图标，有一条灰条反而像界面出错 */
+  scrollbar-width: none;
+}
+
+.rd-rail-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.rd-module-tab {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  min-height: 46px;
+  padding: 4px 2px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.rd-module-tab svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.rd-module-label {
+  max-width: 54px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+
+.rd-module-tab:hover:not(:disabled) {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.rd-module-tab.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-module-tab.is-active:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.rd-module-tab.is-active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+
+.rd-module-tab .rd-module-badge {
+  top: 2px;
+  right: 5px;
+  box-shadow: 0 0 0 2px var(--panel-2);
+}
+
+/* 模块激活背景是 accent-soft，角标描边要跟着它，而不是固定 panel-2 */
+.rd-module-tab.is-active .rd-module-badge {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+/* ---------------------------------------------------------------- 命令面板 */
+
+.rd-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: min(14vh, 120px) 24px 24px;
+  background: rgb(12 17 23 / 38%);
+  backdrop-filter: blur(3px);
+}
+
+.rd-palette {
+  display: flex;
+  flex-direction: column;
+  width: min(580px, calc(100vw - 48px));
+  max-height: min(70vh, 560px);
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+}
+
+.rd-palette-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted);
+  flex: none;
+}
+
+.rd-palette-search input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+}
+
+.rd-palette-search input:hover,
+.rd-palette-search input:focus {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.rd-palette-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.rd-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.rd-palette-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-palette-item.is-active .rd-palette-item-hint,
+.rd-palette-item.is-active .rd-palette-key {
+  color: var(--accent);
+}
+
+.rd-palette-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.rd-palette-item-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.rd-palette-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.rd-palette-item-hint {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.rd-palette-key {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.rd-palette-empty {
+  padding: 28px 16px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12.5px;
+}
+
+.rd-palette-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted);
+  font-size: 11px;
+  flex: none;
+}
+
+.rd-palette-foot > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* 顶部工具（场景/搜索）和模块列表之间的一道细线 —— 让「工具」和「导航」
+   在视觉上分开，但不占一条完整的分区标题 */
+.rd-rail-sep {
+  width: 28px;
+  height: 1px;
+  flex: none;
+  margin: 3px 0;
+  background: var(--border);
 }

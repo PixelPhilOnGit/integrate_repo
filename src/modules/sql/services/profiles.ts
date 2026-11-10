@@ -8,6 +8,7 @@
 
 import {
   asArray,
+  asGroupId,
   asPort,
   asRecord,
   asString,
@@ -15,14 +16,16 @@ import {
 } from '../../../shared/connections/profiles';
 import type { KeyValueStore } from '../../../shared/platform/kv';
 import type { ProfileStore } from '../../../shared/connections/types';
-import type { SqlKind, SqlProfile } from '../core/types';
+import {
+  asSqlKind,
+  DEFAULT_DATABASE,
+  DEFAULT_PORT,
+  DEFAULT_USER,
+  type SqlProfile,
+} from '../core/types';
 
 export function createSqlProfileStore(kv: KeyValueStore): ProfileStore<SqlProfile> {
   return createSecretProfileStore<SqlProfile>(kv, { sanitize });
-}
-
-function asKind(value: unknown): SqlKind {
-  return value === 'mysql' ? 'mysql' : 'postgres';
 }
 
 /** 把存储里的不可信数据整形成 `SqlProfile[]`，坏记录丢掉而不是让整个列表消失 */
@@ -36,16 +39,23 @@ function sanitize(raw: unknown): SqlProfile[] {
     const id = asString(record.id);
     if (id === '') continue; // 没有 id 的记录没法用：连接、断开、删除都要靠它
 
-    const kind = asKind(record.kind);
+    // ⚠️ **四种引擎都要认**。这里以前写的是「是 mysql 就 mysql，否则 PG」——
+    // 用户新增的 Mongo / ClickHouse 连接一重载就变成 PG，端口和用户也一起
+    // 掉回 PG 的默认值。2026-11-10 真机反馈的原话就是这个。
+    const kind = asSqlKind(record.kind);
 
     profiles.push({
+      // ⚠️ 目录归属也要读回来 —— 少了这一行，连接重载后就掉回未分组
+      ...asGroupId(record),
       id,
       name: asString(record.name) || '未命名连接',
       kind,
       host: asString(record.host) || '127.0.0.1',
-      port: asPort(record.port, kind === 'mysql' ? 3306 : 5432),
-      username: asString(record.username) || (kind === 'mysql' ? 'root' : 'postgres'),
-      database: asString(record.database),
+      // 端口兜底跟着引擎走：Mongo 的坏端口不该变成 5432
+      port: asPort(record.port, DEFAULT_PORT[kind]),
+      // 用户名/库名同理，沿用新建档案时的那张表
+      username: asString(record.username) || DEFAULT_USER[kind],
+      database: asString(record.database) || DEFAULT_DATABASE[kind],
       password: asString(record.password),
     });
   }

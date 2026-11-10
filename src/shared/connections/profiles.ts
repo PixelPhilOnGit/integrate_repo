@@ -128,6 +128,29 @@ export function asString(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+/**
+ * 读档案里可选的 `groupId`（连接被放进了哪个目录）。
+ *
+ * 返回的是**可以原样展开进档案对象**的一小块：
+ *
+ * ```ts
+ * profiles.push({ ...asGroupId(record), id, name, ... });
+ * ```
+ *
+ * ⚠️ **每个模块的 sanitize 都必须调它。** 2026-11-10 用户报的
+ * 「SSH 连接重装后掉出目录」就是所有 sanitize 都按字段清单重建对象、
+ * 却漏了 `groupId` —— 内存里移动是好使的，一读盘就悄悄丢了；
+ * 同一处 `SqlProfile` 的 `kind` 白名单还只认 mysql，Mongo/ClickHouse
+ * 读回来全变成 PG。字段清单是手写的，所以「漏字段」永远是这一类 bug 的形状。
+ *
+ * 空串 / 非字符串 = 未分组；**不写这个键**（而不是留 `groupId: undefined`），
+ * 和 `withoutGroup` 保持同一种干净形状。
+ */
+export function asGroupId(record: Record<string, unknown>): { groupId?: string } {
+  const groupId = asString(record.groupId);
+  return groupId === '' ? {} : { groupId };
+}
+
 /** 端口必须是 1–65535 的整数，否则给默认值 */
 export function asPort(value: unknown, fallback: number): number {
   const port = typeof value === 'number' ? value : Number(value);

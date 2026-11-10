@@ -8,7 +8,7 @@
  * tablist 里，读屏软件会把它当成一个「模块」念出来。
  */
 
-import { useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { platform } from '../shared/platform';
 import { shortcutLabel } from '../shared/platform/detect';
 import { ContextMenu, type MenuItem } from '../shared/ui/ContextMenu';
@@ -20,13 +20,28 @@ import { resolveTheme, systemPrefersDark, THEME_OPTIONS } from './theme';
 export interface ModuleRailProps {
   /** 是否渲染。只有一个模块时没必要占地方 */
   visible?: boolean;
+  /** 打开命令面板（外壳持有面板的开关状态，图标栏只负责触发） */
+  onOpenPalette?: () => void;
 }
 
-export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
+export function ModuleRail({ visible = true, onOpenPalette }: ModuleRailProps): ReactNode {
   const shell = useSyncExternalStore(shellStore.subscribe, shellStore.getSnapshot);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   /** 图标右键菜单（多窗口）：「在新窗口打开」。和外观菜单分开记状态，互不干扰 */
   const [railMenu, setRailMenu] = useState<{ x: number; y: number; id: string; name: string } | null>(null);
+  const tabsRef = useRef<HTMLDivElement>(null);
+
+  /*
+   * 切模块时把激活项滚进可视区。
+   *
+   * 带标签之后图标栏在 600 高的小窗口里会滚（900 高不会）；用命令面板跳到
+   * 第 10 个模块时，如果那条正好在可视区外，用户会以为「没切过去」。
+   */
+  useEffect(() => {
+    const active = tabsRef.current?.querySelector<HTMLElement>('[data-testid^="module-"][aria-selected="true"]');
+    active?.scrollIntoView({ block: 'nearest' });
+  }, [shell.activeModule]);
+
   if (!visible) return null;
 
   const items: MenuItem[] = THEME_OPTIONS.map(({ choice, label }) => ({
@@ -40,9 +55,23 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
 
   return (
     <div className="rd-module-rail" data-testid="module-rail">
-      {/* 场景：最左侧的最上方 —— 「今天在团队 1、明天在团队 2」的切换处 */}
-      <ScenarioControl compact />
-      <div className="rd-rail-tabs" role="tablist" aria-label="模块">
+      <div className="rd-rail-utils">
+        {/* 场景：最左侧的最上方 —— 「今天在团队 1、明天在团队 2」的切换处 */}
+        <ScenarioControl compact />
+        <button
+          type="button"
+          className="rd-module-btn rd-palette-btn"
+          data-testid="open-command-palette"
+          title={`命令面板（${shortcutLabel('Ctrl+K')}）`}
+          aria-label="打开命令面板"
+          onClick={onOpenPalette}
+        >
+          <SearchIcon />
+        </button>
+      </div>
+      <div className="rd-rail-sep" aria-hidden="true" />
+
+      <div className="rd-rail-tabs" role="tablist" aria-label="模块" ref={tabsRef}>
         {MODULES.map((m, i) => {
           const active = m.id === shell.activeModule;
           // 角标是模块自己的组件（外壳不认识它的内容），有才渲染
@@ -57,7 +86,7 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
               role="tab"
               aria-selected={active}
               data-testid={`module-${m.id}`}
-              className={`rd-module-btn${active ? ' is-active' : ''}`}
+              className={`rd-module-tab${active ? ' is-active' : ''}`}
               // Ctrl+1/2/3 与图标顺序一致，提示里写出来（mac 上翻成 ⌘，
               // 见 shortcutLabel 的注释）
               title={`${m.name}${shortcut}`}
@@ -68,6 +97,9 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
               }}
             >
               {m.icon}
+              {/* 图标下面那个名字：11 个模块光靠图标记不住，标签是最便宜的
+                  可发现性。窄窗口里 rails 自己滚，不挤主区 */}
+              <span className="rd-module-label">{m.name}</span>
               {Badge && <Badge />}
             </button>
           );
@@ -116,6 +148,25 @@ export function ModuleRail({ visible = true }: ModuleRailProps): ReactNode {
 
 function currentLabel(choice: string): string {
   return THEME_OPTIONS.find((o) => o.choice === choice)?.label ?? '跟随系统';
+}
+
+/** 命令面板的入口：放大镜。和模块图标同一套线性风格 */
+function SearchIcon(): ReactNode {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="8.5" cy="8.5" r="5" />
+      <path d="M12.2 12.2 16.5 16.5" />
+    </svg>
+  );
 }
 
 /**

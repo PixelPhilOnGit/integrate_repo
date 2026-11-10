@@ -22,7 +22,7 @@ import { tasksModule } from '../modules/tasks';
 import { parseModuleHash } from './moduleHash';
 import type { Module } from './types';
 
-export const MODULES: readonly Module[] = [
+const ALL_MODULES: readonly Module[] = [
   diagramModule,
   redisModule,
   sqlModule,
@@ -38,6 +38,21 @@ export const MODULES: readonly Module[] = [
   groupModule,
   devPlaceholderModule,
 ];
+
+/**
+ * 注册表。
+ *
+ * ⚠️ **占位模块只在开发模式出现**：它是「加模块 = 一个目录 + 一行」的活体
+ * 样本（README 提到的那个），开发时留着当检查点；但正式安装包里它是
+ * 「数据库（待实现）」——和真正的「数据库」模块并排，用户会以为程序坏了。
+ * 生产构建里把它摘掉，`Ctrl+数字` 的顺序也随之干净。
+ *
+ * e2e 跑在 `vite dev` 下，所以仍然能看到 11 个页签；shell.spec 里那条
+ * 「有几个模块就有几个图标」的断言照旧有效。
+ */
+export const MODULES: readonly Module[] = import.meta.env.DEV
+  ? ALL_MODULES
+  : ALL_MODULES.filter((m) => m.id !== 'devplaceholder');
 
 export function moduleById(id: string): Module | undefined {
   return MODULES.find((m) => m.id === id);

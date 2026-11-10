@@ -10,8 +10,9 @@
  * 这些东西全在模块自己手里。
  */
 
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { platform } from '../shared/platform';
+import { CommandPalette } from './CommandPalette';
 import { ModuleRail } from './ModuleRail';
 import { MODULES, moduleById } from './registry';
 import { ResizableSlot } from './ResizableSlot';
@@ -23,6 +24,7 @@ export function AppShell(): ReactNode {
   const mod = moduleById(shell.activeModule) ?? MODULES[0];
   const prevId = useRef<string | null>(null);
   const inspectorOpen = mod !== undefined && shellStore.inspectorOpen(mod.id);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   /**
    * 模块的装载/卸载钩子。
@@ -58,6 +60,37 @@ export function AppShell(): ReactNode {
 
   useShellShortcuts();
 
+  /*
+   * 命令面板的全局开关。
+   *
+   * ⚠️ **焦点在输入框 / 终端里时不抢 Ctrl+K**：readline 的 Ctrl+K 是
+   * 「删到行尾」，在 SSH 终端里抢掉它会让终端用户没法用。想从输入框里打开，
+   * 点图标栏顶部那个放大镜。
+   */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      const isShortcut =
+        (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyK';
+      if (!isShortcut) return;
+
+      if (paletteOpen) {
+        e.preventDefault();
+        setPaletteOpen(false);
+        return;
+      }
+
+      const t = e.target as HTMLElement | null;
+      const typing =
+        t !== null && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      if (typing) return;
+
+      e.preventDefault();
+      setPaletteOpen(true);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [paletteOpen]);
+
   if (!mod) return <div className="rd-app">没有注册任何模块</div>;
 
   const { Toolbar, Sidebar, Main, Inspector, StatusItems } = mod;
@@ -70,7 +103,7 @@ export function AppShell(): ReactNode {
         状态栏留在外面，横跨整个窗口宽度（和 VS Code 一致）。
       */}
       <div className="rd-body">
-        <ModuleRail />
+        <ModuleRail onOpenPalette={() => setPaletteOpen(true)} />
 
         <div className="rd-content">
           {Toolbar && <Toolbar />}
@@ -129,6 +162,8 @@ export function AppShell(): ReactNode {
           </button>
         </div>
       )}
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

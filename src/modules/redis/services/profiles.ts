@@ -7,6 +7,7 @@
  */
 
 import {
+  asGroupId,
   asNonNegativeInt,
   asPort,
   asRecord,
@@ -36,6 +37,8 @@ function sanitize(raw: unknown): ConnectionProfile[] {
     if (id === '') continue; // 没有 id 的记录没法用：连接、断开、删除都要靠它
 
     profiles.push({
+      // ⚠️ 目录归属也要读回来 —— 少了这一行，连接重载后就掉回未分组
+      ...asGroupId(record),
       id,
       name: asString(record.name) || '未命名连接',
       host: asString(record.host) || '127.0.0.1',

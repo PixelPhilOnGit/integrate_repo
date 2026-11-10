@@ -45,6 +45,34 @@ export const DEFAULT_PORT: Record<SqlKind, number> = {
   mongodb: 27017,
 };
 
+/**
+ * 各引擎的默认用户名 / 库名。
+ *
+ * ⚠️ **这里是唯一一份**：新建档案（`core/profile.ts`）和**读盘整形**
+ * （`services/profiles.ts`）都从这儿取。两边各写一份的话，Mongo 的档案
+ * 读回来会被塞一个 `postgres` 用户名 —— 看着像另一个 bug。
+ */
+export const DEFAULT_USER: Record<SqlKind, string> = {
+  postgres: 'postgres',
+  mysql: 'root',
+  // ClickHouse 的默认用户就叫 default
+  clickhouse: 'default',
+  // Mongo 本地跑通常不开鉴权，别硬塞一个用户名进去
+  mongodb: '',
+};
+
+export const DEFAULT_DATABASE: Record<SqlKind, string> = {
+  postgres: 'postgres',
+  mysql: '',
+  clickhouse: '',
+  mongodb: '',
+};
+
+/** 存档里的 kind 不可信：只认四个合法值，认不出来一律当 PG（老数据的默认） */
+export function asSqlKind(value: unknown): SqlKind {
+  return KIND_ORDER.includes(value as SqlKind) ? (value as SqlKind) : 'postgres';
+}
+
 export interface SqlProfile extends ConnectionProfileBase {
   kind: SqlKind;
   /**

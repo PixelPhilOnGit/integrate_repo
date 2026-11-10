@@ -334,3 +334,44 @@ test('图标右键有「在新窗口打开」；浏览器版点了给一句诚�
   // 浏览器版没有多窗口：入口不消失（不然 e2e 测不到），点了如实说一句
   await expect(page.getByTestId('status-text')).toHaveText('这是浏览器版，没有多窗口');
 });
+
+test('命令面板：Ctrl+K 搜索模块、回车切换、Esc 关闭，输入框里不抢键', async ({ page }) => {
+  await page.keyboard.press('Control+k');
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+  await expect(page.getByTestId('command-palette-input')).toBeFocused();
+
+  await page.getByTestId('command-palette-input').fill('知识');
+  await expect(page.getByTestId('palette-module-knowledge')).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.getByTestId('kb-sidebar')).toBeVisible();
+  await expect(page.getByTestId('command-palette')).toHaveCount(0);
+
+  // 图标栏上的放大镜是给「焦点在输入框里」时留的入口
+  await page.getByTestId('open-command-palette').click();
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+
+  // 外观命令也走同一条路：选深色 → html 属性真的变了
+  await page.getByTestId('command-palette-input').fill('深色');
+  await page.getByTestId('palette-theme-dark').click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(page.getByTestId('command-palette')).toHaveCount(0);
+
+  // Esc 关闭
+  await page.keyboard.press('Control+k');
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('command-palette')).toHaveCount(0);
+
+  // ⚠️ 终端/输入框里的 Ctrl+K 必须留给 readline —— 不能抢
+  await page.getByTestId('module-sql').click();
+  await page.getByTestId('sql-editor').click();
+  await page.keyboard.press('Control+k');
+  await expect(page.getByTestId('command-palette')).toHaveCount(0);
+});
+
+test('导航栏：每个模块图标下面有名字（光靠图标记不住十一个模块）', async ({ page }) => {
+  const rail = page.getByTestId('module-rail');
+  for (const name of ['顺序图', 'Redis', '数据库', 'SSH', '任务', '助手', '知识库', '群组协作']) {
+    await expect(rail.getByText(name, { exact: true }).first()).toBeVisible();
+  }
+});
