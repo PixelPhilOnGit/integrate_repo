@@ -15,7 +15,7 @@
  */
 
 /** 没拖过时的宽度（和 `.rd-panel` 的 CSS 默认值一致）。 */
-export const DEFAULT_PANEL_WIDTH = 240;
+export const DEFAULT_PANEL_WIDTH = 252;
 
 /** 再窄就只剩下一列图标了，反而不好点。 */
 export const MIN_PANEL_WIDTH = 180;

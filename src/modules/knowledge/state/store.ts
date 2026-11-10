@@ -12,7 +12,16 @@
 
 import { describeError } from '../../../shell/store';
 import type { ShellApi } from '../../../shell/types';
-import { counts, visibleCards, nextUnreviewed, type KbCounts, type KbFilter } from '../core/filters';
+import { localStampNow } from '../core/format';
+import {
+  cardsUnder,
+  childDirs,
+  counts,
+  visibleCards,
+  nextUnreviewed,
+  type KbCounts,
+  type KbFilter,
+} from '../core/filters';
 import { knowledgeServices } from '../services';
 import type {
   CardDetail,
@@ -40,6 +49,10 @@ export interface KbState {
   activeVault: string | null;
   cards: CardRow[];
   sources: SourceRow[];
+  /** 卡片区里的全部目录（含空目录；`dir` 形式，空串 = 根） */
+  dirs: string[];
+  /** 当前浏览的目录（空串 = 根；根视图包含整棵树的卡片） */
+  currentDir: string;
   filter: KbFilter;
   query: string;
   /** 搜索生效时的命中集（null = 没在搜） */
@@ -61,6 +74,8 @@ export class KnowledgeStore {
     activeVault: null,
     cards: [],
     sources: [],
+    dirs: [],
+    currentDir: '',
     filter: 'all',
     query: '',
     hits: null,
@@ -83,10 +98,25 @@ export class KnowledgeStore {
 
   getSnapshot = (): KbState => this.state;
 
-  /** 当前筛选/搜索下可见的卡片（组件和「下一张」共用同一个口径） */
-  visible = (): CardRow[] => visibleCards(this.state.cards, this.state.filter, this.state.hits?.cards ?? null);
+  /**
+   * 当前筛选/搜索下可见的卡片（组件和「下一张」共用同一个口径）。
+   * 搜索是**全库**的（用户找东西不该被当前目录困住）；不搜索时按目录子树。
+   */
+  visible = (): CardRow[] => {
+    const { cards, filter, hits, currentDir } = this.state;
+    return hits !== null
+      ? visibleCards(cards, filter, hits.cards)
+      : visibleCards(cardsUnder(cards, currentDir), filter, null);
+  };
 
-  counts = (): KbCounts => counts(this.state.cards);
+  counts = (): KbCounts => counts(cardsUnder(this.state.cards, this.state.currentDir));
+
+  /** 当前目录的直接子目录（卡片墙上的文件夹卡片）。 */
+  subdirs = (): string[] => childDirs(this.state.dirs, this.state.currentDir);
+
+  /** 某个目录（子树）里有多少张**未归档**卡片 —— 文件夹卡片上的角标。 */
+  countInDir = (dir: string): number =>
+    cardsUnder(this.state.cards, dir).filter((c) => !c.archived).length;
 
   private set(patch: Partial<KbState>): void {
     this.state = { ...this.state, ...patch };
@@ -130,10 +160,14 @@ export class KnowledgeStore {
 
   /** 切库：清卡片现场，**同步一遍再拉**（用户可能在 Obsidian 里改过文件）。 */
   async setActiveVault(name: string): Promise<void> {
+    this.cancelSearch();
     this.set({
       activeVault: name,
       cards: [],
       sources: [],
+      dirs: [],
+      currentDir: '',
+      query: '',
       hits: null,
       selectedRel: null,
       detail: null,
@@ -147,11 +181,16 @@ export class KnowledgeStore {
     if (name === null) return;
     try {
       await knowledgeServices.client.sync(name);
-      const [cards, sources] = await Promise.all([
+      const [cards, sources, dirs] = await Promise.all([
         knowledgeServices.client.cards(name),
         knowledgeServices.client.sources(name),
+        knowledgeServices.client.dirs(name),
       ]);
-      this.set({ cards, sources });
+      // 当前目录被外部删掉/改名了：退回根目录
+      const currentDir = this.existsDir(dirs, this.state.currentDir)
+        ? this.state.currentDir
+        : '';
+      this.set({ cards, sources, dirs, currentDir });
       // 选中的卡片同步后可能变了内容/没了：重读或清掉
       const sel = this.state.selectedRel;
       if (sel !== null) {
@@ -161,6 +200,228 @@ export class KnowledgeStore {
           this.set({ selectedRel: null, detail: null });
         }
       }
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  private existsDir(dirs: readonly string[], dir: string): boolean {
+    return dir === '' || dirs.includes(dir);
+  }
+
+  /** 取消一个还没到点的搜索（切目录/建卡时用，免得旧结果迟到）。 */
+  private cancelSearch(): void {
+    if (this.searchTimer !== null) {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+  }
+
+  /** 进入/退出目录：清搜索和阅读现场 —— 目录切换是「换一个浏览范围」。 */
+  setCurrentDir(dir: string): void {
+    if (dir !== '' && !this.state.dirs.includes(dir)) return;
+    this.cancelSearch();
+    this.set({
+      currentDir: dir,
+      query: '',
+      hits: null,
+      selectedRel: null,
+      detail: null,
+    });
+  }
+
+  /** 手动新建卡片（`dir` 缺省 = 当前目录），完成后打开它。 */
+  async createCard(title: string, body: string, dir?: string): Promise<boolean> {
+    const name = this.state.activeVault;
+    if (name === null) return false;
+    const target = dir ?? this.state.currentDir;
+    try {
+      const detail = await knowledgeServices.client.cardCreate(name, target, title, body);
+      const [cards, dirs] = await Promise.all([
+        knowledgeServices.client.cards(name),
+        knowledgeServices.client.dirs(name),
+      ]);
+      this.cancelSearch();
+      this.set({
+        cards,
+        dirs,
+        currentDir: target,
+        detail,
+        selectedRel: detail.rel,
+        query: '',
+        hits: null,
+        // 新卡是未评审：把筛选拨回「全部」，否则在「已评审/归档」档里
+        // 建完卡返回会找不到它
+        filter: 'all',
+      });
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    }
+  }
+
+  /** 保存标题与正文（阅读器「编辑」）。 */
+  async updateCard(rel: string, title: string, body: string): Promise<boolean> {
+    const name = this.state.activeVault;
+    if (name === null) return false;
+    try {
+      const detail = await knowledgeServices.client.cardUpdate(name, rel, title, body);
+      const cards = await knowledgeServices.client.cards(name);
+      // 标题改了列表行也得跟着变（rel 没变）
+      this.set({ cards, detail, selectedRel: detail.rel });
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    }
+  }
+
+  /** 在正文末尾追加一条带本地时间的备注（「像任务备注一样」）。 */
+  async appendToCard(rel: string, text: string): Promise<boolean> {
+    const name = this.state.activeVault;
+    if (name === null) return false;
+    try {
+      const detail = await knowledgeServices.client.cardAppend(
+        name,
+        rel,
+        text,
+        localStampNow()
+      );
+      const cards = await knowledgeServices.client.cards(name);
+      this.set({ cards, detail, selectedRel: detail.rel });
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    }
+  }
+
+  /** 新建目录（`parent` 缺省 = 当前目录），完成后进入它。 */
+  async createDir(dirName: string, parent?: string): Promise<boolean> {
+    const name = this.state.activeVault;
+    if (name === null) return false;
+    const target = parent ?? this.state.currentDir;
+    try {
+      const rel = await knowledgeServices.client.dirCreate(name, target, dirName);
+      const dirs = await knowledgeServices.client.dirs(name);
+      this.cancelSearch();
+      this.set({ dirs, currentDir: rel, selectedRel: null, detail: null, query: '', hits: null });
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    }
+  }
+
+  async renameDir(rel: string, newName: string): Promise<boolean> {
+    const name = this.state.activeVault;
+    if (name === null) return false;
+    try {
+      const newRel = await knowledgeServices.client.dirRename(name, rel, newName);
+      const [cards, dirs] = await Promise.all([
+        knowledgeServices.client.cards(name),
+        knowledgeServices.client.dirs(name),
+      ]);
+      // 当前目录/选中的卡在被改名的子树里 → 跟着换前缀
+      const remap = (path: string): string => {
+        if (path === rel) return newRel;
+        if (path.startsWith(`${rel}/`)) return `${newRel}${path.slice(rel.length)}`;
+        return path;
+      };
+      const currentDir = remap(this.state.currentDir);
+      const selectedRel = this.state.selectedRel === null ? null : remap(this.state.selectedRel);
+      this.set({ cards, dirs, currentDir, selectedRel });
+      if (selectedRel !== null) await this.selectCard(selectedRel);
+      return true;
+    } catch (e) {
+      this.fail(e);
+      return false;
+    }
+  }
+
+  async deleteDir(rel: string): Promise<void> {
+    const name = this.state.activeVault;
+    if (name === null) return;
+    try {
+      await knowledgeServices.client.dirDelete(name, rel);
+      const [cards, dirs] = await Promise.all([
+        knowledgeServices.client.cards(name),
+        knowledgeServices.client.dirs(name),
+      ]);
+      const inside = (path: string): boolean =>
+        path === rel || path.startsWith(`${rel}/`);
+      const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+      const currentDir = inside(this.state.currentDir) ? parent : this.state.currentDir;
+      const selectedRel =
+        this.state.selectedRel !== null && inside(this.state.selectedRel)
+          ? null
+          : this.state.selectedRel;
+      this.set({
+        cards,
+        dirs,
+        currentDir,
+        selectedRel,
+        detail: selectedRel === null ? null : this.state.detail,
+      });
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  /** 把卡片移到另一个目录；返回新 rel（失败 null）。 */
+  async moveCard(rel: string, dir: string): Promise<string | null> {
+    const name = this.state.activeVault;
+    if (name === null) return null;
+    try {
+      const detail = await knowledgeServices.client.cardMove(name, rel, dir);
+      const cards = await knowledgeServices.client.cards(name);
+      this.set({ cards, detail, selectedRel: detail.rel });
+      return detail.rel;
+    } catch (e) {
+      this.fail(e);
+      return null;
+    }
+  }
+
+  /** 给卡片挂文件；返回挂完后共有几个附件（用户取消 null）。 */
+  async attachFile(rel: string): Promise<number | null> {
+    const name = this.state.activeVault;
+    if (name === null) return null;
+    try {
+      const outcome = await knowledgeServices.client.cardAttach(name, rel);
+      if (outcome === null) return null;
+      const cards = await knowledgeServices.client.cards(name);
+      this.set({ cards, detail: outcome.detail, selectedRel: outcome.detail.rel });
+      if (outcome.errors.length > 0) {
+        this.shell?.reportError(
+          new Error(`有 ${outcome.errors.length} 个文件没能挂上：${outcome.errors.join('；')}`)
+        );
+      }
+      return outcome.detail.attachments.length;
+    } catch (e) {
+      this.fail(e);
+      return null;
+    }
+  }
+
+  async removeAttachment(rel: string, attachment: string): Promise<void> {
+    const name = this.state.activeVault;
+    if (name === null) return;
+    try {
+      const detail = await knowledgeServices.client.cardAttachmentRemove(name, rel, attachment);
+      const cards = await knowledgeServices.client.cards(name);
+      this.set({ cards, detail, selectedRel: detail.rel });
+    } catch (e) {
+      this.fail(e);
+    }
+  }
+
+  async openAttachment(rel: string, attachment: string): Promise<void> {
+    const name = this.state.activeVault;
+    if (name === null) return;
+    try {
+      await knowledgeServices.client.cardAttachmentOpen(name, rel, attachment);
     } catch (e) {
       this.fail(e);
     }
@@ -180,7 +441,15 @@ export class KnowledgeStore {
     try {
       await knowledgeServices.client.deleteVault(name);
       if (this.state.activeVault === name) {
-        this.set({ activeVault: null, cards: [], sources: [], selectedRel: null, detail: null });
+        this.set({
+          activeVault: null,
+          cards: [],
+          sources: [],
+          dirs: [],
+          currentDir: '',
+          selectedRel: null,
+          detail: null,
+        });
       }
       await this.refreshVaults();
       const next = this.state.vaults[0]?.name ?? null;
@@ -291,7 +560,10 @@ export class KnowledgeStore {
     }
   }
 
-  private patchCardLocal(rel: string, patch: Partial<CardRow>): void {
+  private patchCardLocal(
+    rel: string,
+    patch: Partial<Pick<CardRow, 'status' | 'archived'>>
+  ): void {
     const cards = this.state.cards.map((c) => (c.rel === rel ? { ...c, ...patch } : c));
     const detail =
       this.state.detail !== null && this.state.detail.rel === rel

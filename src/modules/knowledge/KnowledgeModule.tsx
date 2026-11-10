@@ -35,13 +35,17 @@ export { KbMain as KnowledgeMain };
 /** 状态栏右侧：「N 张卡片 · M 张未评审」 */
 export function KnowledgeStatusItems(): ReactNode {
   const state = useKb();
-  const counts = useMemo(() => knowledgeStore.counts(), [state.cards]);
+  const counts = useMemo(
+    () => knowledgeStore.counts(),
+    [state.cards, state.currentDir]
+  );
 
   if (state.activeVault === null) return null;
   return (
     <>
       <span className="rd-muted" data-testid="kb-status">
         {counts.all} 张卡片
+        {state.currentDir !== '' ? `（${state.currentDir.split('/').pop()}）` : ''}
       </span>
       <span
         className={counts.unreviewed > 0 ? 'rd-agent-waiting-text' : 'rd-muted'}

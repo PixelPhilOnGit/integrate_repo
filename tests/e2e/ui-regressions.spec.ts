@@ -266,3 +266,49 @@ test('文件浏览器：刷新按钮命中区、分界线够宽、标签不矮',
     expect(tab.height).toBeGreaterThanOrEqual(22);
   }
 });
+
+/**
+ * 群组主区占满剩余宽度（回归：2026-11-10 截图巡检）。
+ *
+ * `.rd-group-chat` 少了 `flex: 1`、空态用的 `.rd-main-panel` 根本没有样式，
+ * 于是主区只画到内容宽度为止，右边留出一大片空白（1440 宽的视口里
+ * 主区只到 1009px）。功能用例只按 testid 点，完全看不到这一层。
+ */
+test('群组主区占满到检查器左边（回归：flex: 1 漏了，右侧空一大片）', async ({ page }) => {
+  await page.getByTestId('module-group').click();
+  await expect(page.getByTestId('group-main')).toBeVisible();
+  await page.getByTestId('group-new-empty').click();
+  await page.getByTestId('group-new-name').fill('宽度群');
+  await page.getByTestId('group-new-confirm').click();
+  await page.getByTestId('group-title').waitFor();
+  await openInspector(page);
+
+  const chat = await box(page, '.rd-group-chat');
+  const inspector = await box(page, '.rd-slot-right');
+  expect(Math.abs(chat.x + chat.width - inspector.x)).toBeLessThanOrEqual(1);
+});
+
+/**
+ * 知识库卡片墙不能横向溢出（回归：2026-11-10 截图巡检）。
+ *
+ * 一张卡片的正文里有一段没有空格的长文本；`1fr` 的最小尺寸是 min-content，
+ * 于是整张卡片被撑宽、文字一直跑到视口外面。`min-width: 0` + `overflow-wrap`
+ * 修掉之后，卡片和墙的 scrollWidth 都不该超过 clientWidth。
+ */
+test('知识库卡片墙不横向溢出（回归：长文本把卡片撑到视口外）', async ({ page }) => {
+  await page.getByTestId('module-knowledge').click();
+  await expect(page.getByTestId('kb-wall')).toBeVisible();
+
+  const overflow = await page.evaluate(() => {
+    const wall = document.querySelector('[data-testid="kb-wall"]');
+    if (!(wall instanceof HTMLElement)) return null;
+    const cards = [...wall.querySelectorAll('.rd-kb-card')];
+    return {
+      wall: wall.scrollWidth - wall.clientWidth,
+      cards: cards.filter((c) => c.scrollWidth > c.clientWidth + 1).length,
+    };
+  });
+  expect(overflow).not.toBeNull();
+  expect(overflow!.wall).toBeLessThanOrEqual(1);
+  expect(overflow!.cards).toBe(0);
+});

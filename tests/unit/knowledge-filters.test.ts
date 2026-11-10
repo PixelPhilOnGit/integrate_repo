@@ -6,6 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  cardsUnder,
+  childDirs,
   counts,
   nextUnreviewed,
   visibleCards,
@@ -20,6 +22,7 @@ const card = (rel: string, status: 'unreviewed' | 'reviewed', archived = false, 
   created,
   tags: [],
   sources: [],
+  attachments: [],
   excerpt: '',
   mtime: 0,
   size: 0,
@@ -54,6 +57,41 @@ describe('visibleCards', () => {
     const hits = [card('b.md', 'reviewed')];
     expect(visibleCards(cards, 'all', hits).map((c) => c.rel)).toEqual(['b.md']);
     expect(visibleCards(cards, 'unreviewed', hits)).toHaveLength(0);
+  });
+});
+
+describe('目录作用域', () => {
+  const nested = [
+    card('根.md', 'reviewed'),
+    card('项目/甲.md', 'unreviewed'),
+    card('项目/子/乙.md', 'reviewed'),
+    card('项目二/丙.md', 'reviewed'),
+  ];
+
+  it('根目录 = 全部（老库里散在子目录的卡不消失）', () => {
+    expect(cardsUnder(nested, '').map((c) => c.rel)).toEqual([
+      '根.md',
+      '项目/甲.md',
+      '项目/子/乙.md',
+      '项目二/丙.md',
+    ]);
+  });
+
+  it('目录 = 整棵子树_不误伤同前缀的兄弟目录', () => {
+    expect(cardsUnder(nested, '项目').map((c) => c.rel)).toEqual([
+      '项目/甲.md',
+      '项目/子/乙.md',
+    ]);
+    expect(cardsUnder(nested, '项目/子').map((c) => c.rel)).toEqual(['项目/子/乙.md']);
+    expect(cardsUnder(nested, '项目二').map((c) => c.rel)).toEqual(['项目二/丙.md']);
+  });
+
+  it('子目录只取直接一层', () => {
+    const dirs = ['项目', '项目/子', '项目/子/深', '项目二'];
+    expect(childDirs(dirs, '')).toEqual(['项目', '项目二']);
+    expect(childDirs(dirs, '项目')).toEqual(['项目/子']);
+    expect(childDirs(dirs, '项目/子')).toEqual(['项目/子/深']);
+    expect(childDirs(dirs, '不存在')).toEqual([]);
   });
 });
 

@@ -31,7 +31,9 @@ use crate::vault::{Vault, CARD_EXT};
 
 /// 索引库的结构版本（`PRAGMA user_version`）。迁移照 tasks 的规矩：
 /// **每一步都要能从任意旧版本跑上来**。
-const SCHEMA_VERSION: i64 = 2;
+///
+/// v3（2026-11-09）：卡片多一列 `attachments`（卡片挂载的文件）。
+const SCHEMA_VERSION: i64 = 3;
 
 /// 列表/搜索里带出来的摘要长度（正文前 N 个字符）
 const EXCERPT_CHARS: usize = 200;
@@ -50,6 +52,8 @@ pub struct CardRow {
     pub excerpt: String,
     /// 来自 frontmatter（卡片关联的上传原件，`_sources/…`）
     pub sources: Vec<String>,
+    /// 来自 frontmatter（卡片挂载的文件，`_attachments/…`）
+    pub attachments: Vec<String>,
     pub mtime: u64,
     pub size: u64,
 }
@@ -151,6 +155,7 @@ impl Index {
                      created TEXT NOT NULL DEFAULT '',
                      tags TEXT NOT NULL DEFAULT '[]',
                      sources TEXT NOT NULL DEFAULT '[]',
+                     attachments TEXT NOT NULL DEFAULT '[]',
                      body TEXT NOT NULL DEFAULT '',
                      mtime INTEGER NOT NULL DEFAULT 0,
                      size INTEGER NOT NULL DEFAULT 0
@@ -205,6 +210,20 @@ impl Index {
                     .execute("UPDATE runs SET source_rels = ?2 WHERE id = ?1", params![id, json])?;
             }
         }
+        if current < 3 {
+            // v2 → v3：卡片的挂载文件清单。和 v2 同样的判据（列在不在）——
+            // 半迁移之后再次启动不能炸。
+            if !self.has_column("cards", "attachments")? {
+                self.conn.execute_batch(
+                    "ALTER TABLE cards ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'",
+                )?;
+            }
+            // 老行的 attachments 是默认空值；把手编在 frontmatter 里的附件
+            // 也带进来，**强制一次全量重解析**（下次 `kb_sync` 会做）。
+            // 否则旧的、mtime/size 没变的卡片永远搜不到附件名。
+            self.conn
+                .execute_batch("UPDATE cards SET mtime = -1, size = -1;")?;
+        }
         self.conn
             .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
         Ok(())
@@ -228,11 +247,12 @@ impl Index {
     /// 写一行卡片（重建/生成/状态变更都走它）。
     pub fn upsert_card(&self, c: &CardRow, body: &str) -> Result<(), KbError> {
         self.conn.execute(
-            "INSERT INTO cards (rel, title, status, archived, created, tags, sources, body, mtime, size)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO cards (rel, title, status, archived, created, tags, sources, attachments, body, mtime, size)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(rel) DO UPDATE SET
                title=excluded.title, status=excluded.status, archived=excluded.archived,
                created=excluded.created, tags=excluded.tags, sources=excluded.sources,
+               attachments=excluded.attachments,
                body=excluded.body, mtime=excluded.mtime, size=excluded.size",
             params![
                 c.rel,
@@ -242,6 +262,7 @@ impl Index {
                 c.created,
                 serde_json::to_string(&c.tags).unwrap_or_else(|_| "[]".to_string()),
                 serde_json::to_string(&c.sources).unwrap_or_else(|_| "[]".to_string()),
+                serde_json::to_string(&c.attachments).unwrap_or_else(|_| "[]".to_string()),
                 body,
                 c.mtime as i64,
                 c.size as i64,
@@ -260,7 +281,7 @@ impl Index {
     /// 按自己的规则排，排序口径放前端一处，免得两边漂）。
     pub fn list_cards(&self) -> Result<Vec<CardRow>, KbError> {
         let mut stmt = self.conn.prepare(
-            "SELECT rel, title, status, archived, created, tags, sources, body, mtime, size
+            "SELECT rel, title, status, archived, created, tags, sources, attachments, body, mtime, size
              FROM cards ORDER BY rel",
         )?;
         let rows = stmt
@@ -272,7 +293,7 @@ impl Index {
     pub fn card(&self, rel: &str) -> Result<Option<CardRow>, KbError> {
         self.conn
             .query_row(
-                "SELECT rel, title, status, archived, created, tags, sources, body, mtime, size
+                "SELECT rel, title, status, archived, created, tags, sources, attachments, body, mtime, size
                  FROM cards WHERE rel = ?1",
                 params![rel],
                 row_to_card,
@@ -287,9 +308,11 @@ impl Index {
         let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
         let like = format!("%{escaped}%");
         let mut stmt = self.conn.prepare(
-            "SELECT rel, title, status, archived, created, tags, sources, body, mtime, size
+            "SELECT rel, title, status, archived, created, tags, sources, attachments, body, mtime, size
              FROM cards
-             WHERE title LIKE ?1 ESCAPE '\\' OR tags LIKE ?1 ESCAPE '\\' OR body LIKE ?1 ESCAPE '\\'
+             WHERE title LIKE ?1 ESCAPE '\\' OR tags LIKE ?1 ESCAPE '\\'
+                OR attachments LIKE ?1 ESCAPE '\\' OR rel LIKE ?1 ESCAPE '\\'
+                OR body LIKE ?1 ESCAPE '\\'
              ORDER BY rel",
         )?;
         let rows = stmt
@@ -305,8 +328,22 @@ impl Index {
         // ⚠️ `_sources` 自带下划线（LIKE 的单字符通配符），必须转义。
         let like = format!("%\"{}\"%", escape_like(source_rel));
         let mut stmt = self.conn.prepare(
-            "SELECT rel, title, status, archived, created, tags, sources, body, mtime, size
+            "SELECT rel, title, status, archived, created, tags, sources, attachments, body, mtime, size
              FROM cards WHERE sources LIKE ?1 ESCAPE '\\'",
+        )?;
+        let rows = stmt
+            .query_map(params![like], row_to_card)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// 引用了某个附件的卡片（删附件时的「还有别人在用吗」检查）。
+    pub fn cards_of_attachment(&self, attachment_rel: &str) -> Result<Vec<CardRow>, KbError> {
+        // 和 `cards_of_source` 同一个办法：JSON 数组按带引号的精确值匹配。
+        let like = format!("%\"{}\"%", escape_like(attachment_rel));
+        let mut stmt = self.conn.prepare(
+            "SELECT rel, title, status, archived, created, tags, sources, attachments, body, mtime, size
+             FROM cards WHERE attachments LIKE ?1 ESCAPE '\\'",
         )?;
         let rows = stmt
             .query_map(params![like], row_to_card)?
@@ -504,9 +541,10 @@ fn row_to_source(r: &rusqlite::Row<'_>) -> rusqlite::Result<SourceRow> {
 }
 
 fn row_to_card(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
-    let body: String = r.get(7)?;
+    let body: String = r.get(8)?;
     let tags: String = r.get(5)?;
     let sources: String = r.get(6)?;
+    let attachments: String = r.get(7)?;
     Ok(CardRow {
         rel: r.get(0)?,
         title: r.get(1)?,
@@ -515,9 +553,10 @@ fn row_to_card(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
         created: r.get(4)?,
         tags: serde_json::from_str(&tags).unwrap_or_default(),
         sources: serde_json::from_str(&sources).unwrap_or_default(),
+        attachments: serde_json::from_str(&attachments).unwrap_or_default(),
         excerpt: excerpt_of(&body),
-        mtime: r.get::<_, i64>(8)? as u64,
-        size: r.get::<_, i64>(9)? as u64,
+        mtime: r.get::<_, i64>(9)? as u64,
+        size: r.get::<_, i64>(10)? as u64,
     })
 }
 
@@ -583,6 +622,7 @@ pub fn reindex(vault: &Vault, index: &Index) -> Result<ReindexReport, KbError> {
                     created: fm.created.clone(),
                     tags: fm.tags.clone(),
                     sources: fm.sources.clone(),
+                    attachments: fm.attachments.clone(),
                     excerpt: String::new(), // upsert 时由 body 现算
                     mtime: f.mtime,
                     size: f.size,
@@ -681,6 +721,7 @@ mod tests {
             tags: vec!["auth".into()],
             excerpt: String::new(),
             sources: vec![],
+            attachments: vec![],
             mtime: 1,
             size: 1,
         };
@@ -692,6 +733,7 @@ mod tests {
         assert_eq!(idx.search("登录").unwrap().len(), 1, "标题命中");
         assert_eq!(idx.search("auth").unwrap().len(), 2, "标签命中（两行标签一样）");
         assert_eq!(idx.search("refresh").unwrap().len(), 1, "正文命中（只有 a.md 有）");
+        assert_eq!(idx.search("a.md").unwrap().len(), 1, "目录/文件名也搜（定位到项目）");
         // `%` 是字面量不是通配符：搜 `100%` 命中（a.md 正文里有），搜 `1%0` 不命中
         assert_eq!(idx.search("100%").unwrap().len(), 1);
         assert_eq!(idx.search("1%0").unwrap().len(), 0);
@@ -709,6 +751,7 @@ mod tests {
             tags: vec![],
             excerpt: String::new(),
             sources: vec!["_sources/abc_报告.pdf".into()],
+            attachments: vec![],
             mtime: 1,
             size: 1,
         };
@@ -778,6 +821,7 @@ mod tests {
             tags: vec![],
             excerpt: String::new(),
             sources: vec!["_sources/a_b.pdf".into()],
+            attachments: vec![],
             mtime: 1,
             size: 1,
         };
@@ -792,7 +836,14 @@ mod tests {
         // 手写一个 v1 结构的库（不经过 migrate），塞一条 run，再用新代码打开。
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
-            "CREATE TABLE sources (
+            "CREATE TABLE cards (
+                 rel TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL,
+                 archived INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL DEFAULT '',
+                 tags TEXT NOT NULL DEFAULT '[]', sources TEXT NOT NULL DEFAULT '[]',
+                 body TEXT NOT NULL DEFAULT '', mtime INTEGER NOT NULL DEFAULT 0,
+                 size INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE sources (
                  rel TEXT PRIMARY KEY, name TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
                  extract_status TEXT NOT NULL DEFAULT 'none', extracted TEXT NOT NULL DEFAULT '',
                  created TEXT NOT NULL DEFAULT ''
@@ -813,6 +864,80 @@ mod tests {
         let runs = idx.list_runs("_sources/老资料.pdf").unwrap();
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].source_rels, ["_sources/老资料.pdf"]);
+        // 幂等：再跑一次不炸
+        idx.migrate().unwrap();
+    }
+
+    // ------------------------------------------------------ v3：卡片附件
+
+    #[test]
+    fn 附件的引用能存能搜_并能反查引用它的卡片() {
+        let idx = Index::open_in_memory().unwrap();
+        let row = CardRow {
+            rel: "x.md".into(),
+            title: "t".into(),
+            status: "unreviewed".into(),
+            archived: false,
+            created: String::new(),
+            tags: vec![],
+            excerpt: String::new(),
+            sources: vec![],
+            attachments: vec!["_attachments/1729_接口草稿.docx".into()],
+            mtime: 1,
+            size: 1,
+        };
+        idx.upsert_card(&row, "").unwrap();
+
+        let list = idx.list_cards().unwrap();
+        assert_eq!(list[0].attachments, row.attachments);
+        assert_eq!(idx.search("接口草稿").unwrap().len(), 1, "附件名也能搜到");
+        assert_eq!(
+            idx.cards_of_attachment("_attachments/1729_接口草稿.docx")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            idx.cards_of_attachment("_attachments/别的.docx").unwrap().len(),
+            0
+        );
+    }
+
+    #[test]
+    fn v2_库升级到_v3_补上附件列并保留旧行() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE cards (
+                 rel TEXT PRIMARY KEY, title TEXT NOT NULL, status TEXT NOT NULL,
+                 archived INTEGER NOT NULL DEFAULT 0, created TEXT NOT NULL DEFAULT '',
+                 tags TEXT NOT NULL DEFAULT '[]', sources TEXT NOT NULL DEFAULT '[]',
+                 body TEXT NOT NULL DEFAULT '', mtime INTEGER NOT NULL DEFAULT 0,
+                 size INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE sources (
+                 rel TEXT PRIMARY KEY, name TEXT NOT NULL, byte_size INTEGER NOT NULL DEFAULT 0,
+                 extract_status TEXT NOT NULL DEFAULT 'none', extracted TEXT NOT NULL DEFAULT '',
+                 created TEXT NOT NULL DEFAULT '', images TEXT NOT NULL DEFAULT '[]',
+                 image_note TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE runs (
+                 id TEXT PRIMARY KEY, source_rel TEXT NOT NULL, source_rels TEXT NOT NULL DEFAULT '[]',
+                 cli TEXT NOT NULL, status TEXT NOT NULL, error TEXT, usage TEXT,
+                 started_at INTEGER NOT NULL, finished_at INTEGER, card_count INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO cards (rel, title, status, body)
+             VALUES ('旧卡.md', '旧卡', 'reviewed', '正文');
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+
+        let idx = Index { conn };
+        idx.migrate().unwrap();
+        let cards = idx.list_cards().unwrap();
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title, "旧卡");
+        assert!(cards[0].attachments.is_empty(), "老行回落到空清单");
+        assert_eq!(cards[0].mtime, u64::MAX, "强制下次 reindex 重解析这行");
         // 幂等：再跑一次不炸
         idx.migrate().unwrap();
     }

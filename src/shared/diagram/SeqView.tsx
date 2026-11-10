@@ -67,10 +67,22 @@ export function SeqView({
   const { doc, layout } = built;
   const b = layout.bounds;
   const pad = 8;
+  const w = Math.ceil(b.width + pad * 2);
+  const h = Math.ceil(b.height + pad * 2);
   return (
     <div className="rd-seq-view" data-testid={testId}>
       <svg
-        viewBox={`${b.x - pad} ${b.y - pad} ${b.width + pad * 2} ${b.height + pad * 2}`}
+        // ⚠️ `rd-root` 是主题变量的**挂载点**：`themeToCss()` 把变量定义在
+        // `.rd-root` 上，图里的 `.rd-participant-box` 等类才有东西可读。
+        // 漏了它，所有 `var(--rd-*)` 都会退回初始值 —— 在浅色阅读器里表现为
+        // 一整块黑色圆角矩形（2026-11-10 截图巡检抓到的）。
+        className="rd-root"
+        // ⚠️ 必须给**显式**的宽高。只给 viewBox 的话，Chromium 会把无内在
+        // 宽度的 SVG 按容器宽度拉伸 —— 卡片里一张 182×319 的图被放大到
+        // 762×1336（4 倍），一张两人的小图占满整屏。
+        width={w}
+        height={h}
+        viewBox={`${b.x - pad} ${b.y - pad} ${w} ${h}`}
         role="img"
         aria-label={doc.title}
       >

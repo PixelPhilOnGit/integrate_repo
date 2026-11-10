@@ -13,6 +13,8 @@ pub enum KbError {
     BadName { name: String, reason: &'static str },
     /// 已经存在
     Exists { rel: String },
+    /// 目录不是空的（我们只允许删空目录，避免误删一张卡片的整个子树）
+    NotEmpty { rel: String },
     /// 文档提取失败（解析不了、格式不认识）
     Extract { rel: String, reason: String },
     /// 底层 IO
@@ -43,6 +45,9 @@ impl fmt::Display for KbError {
             KbError::NotFound { rel } => write!(f, "不存在：{rel}"),
             KbError::BadName { name, reason } => write!(f, "名字不合法（{reason}）：{name}"),
             KbError::Exists { rel } => write!(f, "已经存在：{rel}"),
+            KbError::NotEmpty { rel } => {
+                write!(f, "目录不是空的（先移走/删掉里面的卡片和子目录）：{rel}")
+            }
             KbError::Extract { rel, reason } => write!(f, "这个文件读不动（{reason}）：{rel}"),
             KbError::Io { rel, source } => write!(f, "文件操作失败（{source}）：{rel}"),
             KbError::Db { reason } => write!(f, "索引库出错：{reason}"),

@@ -77,6 +77,7 @@ export function QueryPane({ state, store }: Props): ReactNode {
         <div className="rd-sql-actions">
           <button
             type="button"
+            className="rd-btn-primary"
             data-testid="btn-sql-run"
             // 灰着的时候要说出为什么（2026-10-15 体验评审：灰按钮 + 静默的
             // Ctrl+Enter = 「点了按了都没反应，也没人告诉我为什么」）

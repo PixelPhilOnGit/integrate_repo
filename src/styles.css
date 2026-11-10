@@ -5,24 +5,56 @@
  */
 
 :root {
-  --bg: #f7f8fa;
+  /* ------------------------------------------------------------------
+   * 设计令牌（v0.19.0 视觉统一）
+   *
+   * 这一层只放「语义色 + 尺寸 + 圆角 + 阴影」，各模块不再自己发明色值。
+   * 浅色以「白面板 + 低对比灰底」为骨架，强调色只留给主行动和选中态 ——
+   * 一屏里蓝色太多，反而看不出该点哪里。
+   * ------------------------------------------------------------------ */
+  --bg: #f5f6f8;
   --panel: #ffffff;
-  --border: #dfe3e8;
-  --text: #1f2933;
+  --panel-2: #f9fafb;
+  --border: #e4e7ec;
+  --border-strong: #d0d5dd;
+  --border-soft: #eef0f3;
+  --text: #1d2129;
   /* 次要文字与报错红都加深过一档（2026-10-15 体验评审：原来 #7b8794
      对白底只有 3.66:1、#d64545 只有 4.38:1，11–12px 的灰字/红字都够不着
      AA 的 4.5:1）。现值对 panel 白底 4.9:1、对页面底 4.6:1；深色那套不用动
      （实测 5.5:1 / 6.6:1，本来就够） */
-  --muted: #66727d;
-  --accent: #2f80ed;
-  --accent-soft: #e8f1fd;
+  --muted: #667085;
+  --accent: #2563eb;
+  --accent-soft: #edf3ff;
+  --accent-hover: #1d4ed8;
   /* 主按钮（`.rd-btn-primary`）的两件套：实心底上的字色 + hover 加深档。
      深色主题里 accent 是浅蓝，白字读不清，所以在那边翻成深字（见下） */
   --accent-ink: #ffffff;
-  --accent-strong: #2670d0;
-  --danger: #c94040;
-  --toolbar-h: 46px;
+  --accent-strong: #1d4ed8;
+  --danger: #cf2a1f;
+  --danger-soft: #fef3f2;
+  --success: #12b76a;
+  --warning: #d97706;
+
+  /* 圆角：控件 6 / 卡片 10 / 弹层 12。三档足够，再多就开始「每个角都不一样」 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  /* 阴影只用于「浮起来的东西」：菜单、弹框、灯箱。平面面板一律用边框分层 */
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 5%);
+  --shadow-md: 0 6px 20px rgb(16 24 40 / 10%), 0 2px 6px rgb(16 24 40 / 6%);
+  --shadow-lg: 0 20px 48px rgb(16 24 40 / 18%), 0 6px 16px rgb(16 24 40 / 8%);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-mono: "SFMono-Regular", ui-monospace, Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --toolbar-h: 48px;
   --status-h: 26px;
+  --rail-w: 50px;
   font-synthesis: none;
   /* 浏览器自己画的东西（滚动条、表单控件、默认背景）跟着走。
      不设的话深色界面里会冒出几根刺眼的亮色滚动条 */
@@ -40,18 +72,28 @@
  * 所以由 `shell/theme.ts` 把选择解析成一个确定的值再写上来，CSS 只管照着画。
  */
 :root[data-theme='dark'] {
-  --bg: #14181f;
-  --panel: #1c222b;
-  --border: #2f3844;
-  --text: #e4e7eb;
-  --muted: #8d99a6;
-  --accent: #63b3ed;
-  --accent-soft: #23364a;
+  --bg: #121418;
+  --panel: #1a1d22;
+  --panel-2: #20242a;
+  --border: #2b3139;
+  --border-strong: #3a424d;
+  --border-soft: #23282f;
+  --text: #e6e8eb;
+  --muted: #9aa4b2;
+  --accent: #6ea8fe;
+  --accent-soft: #1b2b45;
+  --accent-hover: #8bbcff;
   /* 深色主题的 accent 是浅蓝 —— 主按钮上的字反过来用深色（白字在浅蓝上
      对比度只有 2 出头） */
-  --accent-ink: #16212e;
-  --accent-strong: #7fc0f2;
-  --danger: #f08a8a;
+  --accent-ink: #0f1a2b;
+  --accent-strong: #8bbcff;
+  --danger: #f97066;
+  --danger-soft: #3a1d1d;
+  --success: #32d583;
+  --warning: #fdb022;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 35%);
+  --shadow-md: 0 8px 24px rgb(0 0 0 / 45%), 0 2px 8px rgb(0 0 0 / 30%);
+  --shadow-lg: 0 24px 56px rgb(0 0 0 / 55%), 0 8px 20px rgb(0 0 0 / 35%);
   color-scheme: dark;
 }
 
@@ -67,11 +109,51 @@ body,
 }
 
 body {
-  font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
+  line-height: 1.5;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* 细滚动条：Chromium（Tauri 的 WebView）认这一套；Firefox / Safari 认
+   `scrollbar-width`。不画轨道、只画一颗圆头滑块，界面会安静很多。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 button,
@@ -83,21 +165,44 @@ textarea {
 }
 
 button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 12.5px;
+  line-height: 1.35;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 
 button:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+button:active:not(:disabled) {
+  background: var(--border-soft);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 button:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: default;
 }
 
@@ -145,17 +250,42 @@ select,
 textarea {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
   width: 100%;
   min-width: 0;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    background-color 0.12s ease;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--border-strong);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  outline: 2px solid var(--accent-soft);
+  outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: default;
 }
 
 /*
@@ -176,6 +306,7 @@ input[type='checkbox'],
 input[type='radio'] {
   width: auto;
   min-width: 14px;
+  accent-color: var(--accent);
 }
 
 /* ------------------------------------------------------------------ 布局 */
@@ -4328,6 +4459,124 @@ body.rd-resizing * {
   color: var(--muted);
 }
 
+/* ------- 目录栏 / 文件夹卡片 */
+
+.rd-kb-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-kb-crumb-track {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.rd-kb-crumb {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 12.5px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-kb-crumb:hover {
+  background: var(--accent-soft);
+}
+
+.rd-kb-crumb.is-current {
+  color: inherit;
+  cursor: default;
+}
+
+.rd-kb-crumb.is-current:hover {
+  background: none;
+}
+
+.rd-kb-crumb-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rd-kb-crumb-sep {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-kb-crumb-note {
+  font-size: 11px;
+  margin-left: 6px;
+}
+
+.rd-kb-folders {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.rd-kb-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.rd-kb-folder:hover {
+  border-color: var(--accent);
+  border-style: solid;
+}
+
+.rd-kb-folder-icon {
+  flex: none;
+}
+
+.rd-kb-folder-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-kb-folder-count {
+  flex: none;
+  font-size: 11px;
+}
+
+.rd-kb-folder-more {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.rd-kb-folder-more:hover {
+  color: var(--accent);
+}
+
 /* ------- 阅读器 */
 
 .rd-kb-reader {
@@ -4355,6 +4604,7 @@ body.rd-resizing * {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
   margin: 10px 0 6px;
 }
 
@@ -4368,6 +4618,172 @@ body.rd-resizing * {
 .rd-kb-reader-body {
   border-top: 1px solid var(--border);
   padding-top: 10px;
+}
+
+/* ------- 编辑正文 */
+
+.rd-kb-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.rd-kb-edit-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rd-kb-edit-body,
+.rd-kb-new-card-body,
+.rd-kb-append-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 8px 10px;
+  min-height: 120px;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.rd-kb-new-card-body {
+  min-height: 100px;
+}
+
+.rd-kb-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ------- 附件 */
+
+.rd-kb-section-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.rd-kb-attachments {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 14px;
+}
+
+.rd-kb-attachments-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.rd-kb-attachments-empty {
+  font-size: 12px;
+  margin: 4px 0;
+}
+
+.rd-kb-attachment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rd-kb-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rd-kb-attachment-thumb {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  cursor: zoom-in;
+}
+
+.rd-kb-attachment-icon {
+  flex: none;
+  width: 44px;
+  text-align: center;
+  font-size: 16px;
+}
+
+.rd-kb-attachment-name {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  text-align: left;
+  font-size: 12.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rd-kb-attachment-size {
+  flex: none;
+  font-size: 11px;
+}
+
+.rd-kb-attachment-remove {
+  flex: none;
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.rd-kb-attachment-remove:hover {
+  color: var(--danger);
+}
+
+/* ------- 继续补充（备注式追加） */
+
+.rd-kb-append {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 14px;
+}
+
+.rd-kb-append-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.rd-kb-append-text {
+  min-height: 84px;
+}
+
+.rd-kb-append-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.rd-kb-move-target {
+  width: 100%;
+  margin: 8px 0;
 }
 
 /* ------- markdown 正文 */
@@ -4985,8 +5401,26 @@ body.rd-resizing * {
   position: relative;
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 10px 14px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * 主区根节点的通用兜底。
+ *
+ * 群组协作的空态 / 加载态用的是 `.rd-main-panel`，这个类此前**没有任何
+ * 样式** —— 于是 `.rd-main` 里那一格不占满，右边留出一大片空白（截图巡检
+ * 抓到的：主区只到 1009px，视口 1440px）。群组聊天态也有同样的问题：
+ * `.rd-group-chat` 少了 `flex: 1`。两处一起补上，主区总是填满剩余宽度。
+ */
+.rd-main-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -5360,4 +5794,745 @@ body.rd-resizing * {
 .rd-image-lightbox-img {
   touch-action: none;
   user-select: none;
+}
+
+/* ======================================================================
+ * v0.19.0 视觉统一（2026-11-10）
+ *
+ * 只做外观：结构、类名、data-testid 一个都不动。
+ *
+ * 参考 DBX 的三条：**面板用边框分层、强调色只给主行动、字号/圆角/间距
+ * 各只留三档**。这一节把所有模块共用的外壳、面板、树、页签、表格、
+ * 菜单、弹框收口到同一套令牌上，模块自己那套配色仍然排在后面之前 ——
+ * 所以这里只覆盖「共用骨架」，模块特有的语义色（状态点、图表配色）不动。
+ *
+ * ⚠️ 这里的覆盖规则都放在文件最后：同权重时后写的赢。改模块样式时先
+ * grep 一下这一节，别在中间另起一套。
+ * ====================================================================== */
+
+/* ---------------------------------------------------------------- 外壳 */
+
+.rd-app,
+.rd-body {
+  background: var(--bg);
+}
+
+/*
+ * 工具栏 + 主区是同一块白面板。侧栏/检查器用竖线隔开，主区不再自己上色 ——
+ * 「一屏里有几块白」少了，层级反而更清楚。
+ */
+.rd-content {
+  background: var(--panel);
+}
+
+.rd-main {
+  background: var(--panel);
+}
+
+.rd-toolbar {
+  gap: 12px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-toolbar.is-split > .rd-toolbar-scroll {
+  gap: 12px;
+}
+
+.rd-group {
+  gap: 4px;
+}
+
+.rd-group + .rd-group {
+  padding-left: 10px;
+  border-left-color: var(--border-soft);
+}
+
+.rd-toolbar.is-split > .rd-group.rd-right {
+  padding-left: 10px;
+  border-left-color: var(--border-soft);
+}
+
+.rd-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rd-brand {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+/* ------------------------------------------------------------ 模块图标栏 */
+
+.rd-module-rail {
+  width: var(--rail-w);
+  gap: 3px;
+  padding: 8px 0;
+  background: var(--panel-2);
+  border-right: 1px solid var(--border);
+}
+
+.rd-rail-tabs {
+  gap: 3px;
+}
+
+.rd-module-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  color: var(--muted);
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.rd-module-btn svg {
+  width: 19px;
+  height: 19px;
+}
+
+.rd-module-btn:hover:not(:disabled) {
+  background: var(--panel);
+  color: var(--text);
+  border: none;
+  box-shadow: var(--shadow-sm);
+}
+
+.rd-module-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-module-btn.is-active:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.rd-module-btn.is-active::before {
+  left: -6px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+}
+
+/* 角标压在图标右上角，白描边让它从任何底色上都浮得出来 */
+.rd-module-badge {
+  box-shadow: 0 0 0 2px var(--panel-2);
+}
+
+/* -------------------------------------------------------------- 面板骨架 */
+
+.rd-panel {
+  width: 252px;
+  background: var(--panel);
+}
+
+.rd-inspector {
+  width: 288px;
+}
+
+.rd-filetree {
+  border-right: 1px solid var(--border);
+}
+
+.rd-panel-head {
+  min-height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.rd-panel-title {
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.rd-workspace-path {
+  padding: 7px 12px;
+  background: var(--panel-2);
+  border-bottom-color: var(--border-soft);
+  font-size: 11.5px;
+}
+
+/* 侧栏顶部那排操作：默认长得像「工具」而不是一排正式按钮 */
+.rd-tree-actions {
+  gap: 4px;
+  padding: 7px 8px;
+  border-bottom-color: var(--border-soft);
+}
+
+.rd-tree-actions button {
+  padding: 3px 8px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.rd-tree-actions button:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.rd-tree-body {
+  padding: 5px 6px;
+}
+
+/* ---------------------------------------------------------------- 树行 */
+
+.rd-tree-row {
+  min-height: 27px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.1s ease;
+}
+
+.rd-tree-row:hover {
+  background: var(--accent-soft);
+}
+
+.rd-tree-row.is-selected {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.rd-tree-row.is-current {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.rd-tree-caret {
+  color: var(--muted);
+}
+
+.rd-tree-caret.is-open {
+  color: var(--text);
+}
+
+/* 连接树 / 库树：和文件树用同一套行高与圆角 */
+.rd-conn-row,
+.rd-db-row {
+  border-radius: var(--radius-sm);
+  transition: background-color 0.1s ease;
+}
+
+.rd-conn-row {
+  padding: 7px 9px;
+}
+
+.rd-db-row {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.rd-db-row.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.rd-conn-group-head {
+  border-radius: var(--radius-sm);
+}
+
+.rd-section-label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+/* ---------------------------------------------------------------- 页签 */
+
+.rd-tabs {
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-tabs button {
+  flex: none;
+  height: 35px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.rd-tabs button:hover:not(:disabled) {
+  background: transparent;
+  border: none;
+  color: var(--text);
+}
+
+.rd-tabs button.is-active {
+  color: var(--accent);
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ---------------------------------------------------------------- 表单 */
+
+.rd-form {
+  gap: 11px;
+  padding: 14px 12px;
+}
+
+.rd-form h4 {
+  margin-top: 8px;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.rd-field {
+  gap: 4px;
+}
+
+.rd-field > span {
+  font-size: 11.5px;
+}
+
+.rd-hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------------- 状态栏 */
+
+.rd-statusbar {
+  height: var(--status-h);
+  padding: 0 12px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- 菜单 */
+
+.rd-menu {
+  min-width: 190px;
+  padding: 5px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+.rd-menu-item {
+  gap: 14px;
+  min-height: 29px;
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+
+.rd-menu-item:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.rd-menu-item.is-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.rd-menu-sep {
+  background: var(--border-soft);
+}
+
+/* ---------------------------------------------------------------- 弹框 */
+
+.rd-modal-backdrop {
+  background: rgb(15 20 25 / 42%);
+  backdrop-filter: blur(3px);
+}
+
+.rd-modal {
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  border-color: var(--border);
+  box-shadow: var(--shadow-lg);
+  width: min(480px, calc(100vw - 48px));
+}
+
+.rd-modal-title {
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.rd-modal-actions {
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.rd-modal-actions button {
+  min-width: 64px;
+  padding: 5px 14px;
+}
+
+/* ------------------------------------------------------------ 空态 / 提示 */
+
+.rd-empty {
+  padding: 20px 16px;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.rd-error {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+/* ---------------------------------------------------------------- 表格 */
+
+.rd-sql-editor {
+  background: var(--panel);
+  border-bottom-color: var(--border);
+}
+
+.rd-sql-editor textarea {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  padding: 12px 14px;
+}
+
+.rd-sql-actions {
+  gap: 9px;
+  padding: 7px 12px;
+  background: var(--panel-2);
+  border-top-color: var(--border-soft);
+}
+
+.rd-sql-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 12px;
+  background: var(--panel-2);
+  border-bottom-color: var(--border-soft);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rd-sql-table {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.rd-sql-table th {
+  padding: 7px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.rd-sql-table td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  border-right: 1px solid var(--border-soft);
+}
+
+.rd-sql-table tbody tr:nth-child(even) {
+  background: var(--panel-2);
+}
+
+.rd-sql-table tbody tr:hover {
+  background: var(--accent-soft);
+}
+
+.rd-sql-table .rd-sql-rownum {
+  background: var(--panel-2);
+  font-size: 11px;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.rd-sql-table tbody tr:hover .rd-sql-rownum {
+  background: var(--accent-soft);
+}
+
+.rd-sql-coltype {
+  font-size: 10.5px;
+}
+
+/* Redis / 通用键值表：同一套表格语言 */
+.rd-value-table th {
+  background: var(--panel-2);
+  border-bottom-color: var(--border-soft);
+}
+
+.rd-value-table td {
+  border-bottom-color: var(--border-soft);
+}
+
+/* ------------------------------------------------------------ 检查器把手 */
+
+.rd-inspector-toggle {
+  width: 16px;
+  background: var(--panel-2);
+  border-left: 1px solid var(--border);
+}
+
+.rd-inspector-toggle:hover {
+  background: var(--accent-soft);
+}
+
+/* ------------------------------------------------------------ 卡片语言 */
+
+/*
+ * 任务 / 知识库 / 群组都用「面板上的一张卡片」。统一到同一档圆角、边框和
+ * hover 阴影；卡片不是按钮，hover 只抬一点点（border 不变蓝，蓝边留给选中）。
+ */
+.rd-task-card {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.rd-kb-card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease,
+    transform 0.12s ease;
+}
+
+.rd-kb-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.rd-kb-card.is-unreviewed {
+  border-left-width: 3px;
+}
+
+.rd-kb-main {
+  padding: 16px;
+}
+
+.rd-kb-wall {
+  gap: 12px;
+}
+
+.rd-kb-badge.is-reviewed {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+/* 群组：成员卡片和气泡 */
+.rd-group-member-card {
+  border-radius: var(--radius);
+}
+
+.rd-group-bubble {
+  border-radius: var(--radius);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ------------------------------------------------------------ SSH 页签 */
+
+.rd-ssh-tabs {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.rd-ssh-tab {
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--muted);
+}
+
+.rd-ssh-tab.is-active {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* ------------------------------------------------------------ 智能体会话 */
+
+.rd-agent-pane {
+  border-radius: var(--radius-sm);
+}
+
+.rd-agent-pane.is-focused {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.rd-agent-pane-head {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.rd-agent-ws-head {
+  border-radius: var(--radius-sm);
+}
+
+.rd-agent-row {
+  border-radius: var(--radius-sm);
+}
+
+.rd-agent-queue-item {
+  border-radius: var(--radius-sm);
+}
+
+/* ------------------------------------------------------------ 助手对话 */
+
+.rd-assistant-msg {
+  border-radius: var(--radius);
+}
+
+.rd-assistant-msg.is-user .rd-assistant-text {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.rd-assistant-msg.is-assistant .rd-assistant-text {
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+}
+
+.rd-assistant-input {
+  border-radius: var(--radius);
+}
+
+.rd-assistant-approval-card {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+
+/* ------------------------------------------------------------ 滚动条留白 */
+
+/* 结果表最后一行不要把底边贴着状态栏 */
+.rd-sql-table-wrap::after {
+  content: '';
+  display: block;
+  height: 6px;
+}
+
+/* 工具栏里的按钮是「工具」不是「表单控件」：无边框、hover 才起底色。
+   主按钮（rd-btn-primary）例外，保持实心。 */
+.rd-toolbar button:not(.rd-btn-primary) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+.rd-toolbar button:not(.rd-btn-primary):hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+.rd-toolbar button:not(.rd-btn-primary):disabled {
+  background: transparent;
+  border-color: transparent;
+}
+
+.rd-toolbar select {
+  width: auto;
+  height: 28px;
+  padding: 2px 8px;
+  font-size: 12.5px;
+}
+
+/* 工具栏靠右那组（主题/导出）和左边用一条细线分开 */
+.rd-toolbar .rd-label + select {
+  margin-left: 2px;
+}
+
+/* 卡片墙的横向溢出（截图巡检抓到）：
+   `1fr` 的最小尺寸是 min-content —— 卡片里一段没有空格的长文本会把整列撑宽，
+   文字一直跑到视口外面。`min-width: 0` 把这一层解开，再让正文任意断行。 */
+.rd-kb-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rd-kb-card-title,
+.rd-kb-card-excerpt {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.rd-kb-card-excerpt {
+  width: 100%;
+}
+
+/* 任务列表的选中：从「一圈蓝描边」改成「淡底 + 左侧强调条」。
+   卡片本身已经有边框，再加外描边会重两档，且和列表的静默气质不搭。 */
+.rd-task-row.is-selected {
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent), var(--shadow-sm);
+}
+
+/* 弹框里的「确定」一类的按钮不要再被工具栏的 ghost 规则命中 ——
+   它们本来就不在工具栏里，这条只是提醒：别把上面的规则挪成全局。 */
+
+/* 面板头里的动作（选择目录 / 新建 / 上传…）默认也是「工具」：
+   无边框，hover 才起底色。面板头本身已经有一条分隔线，再给按钮画框会吵。 */
+.rd-panel-head button:not(.rd-btn-primary) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 3px 8px;
+}
+
+.rd-panel-head button:not(.rd-btn-primary):hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+
+/* 当前文件 / 当前项：淡底 + 左侧强调条。之前只有蓝字，列表一长就找不到。 */
+.rd-tree-row.is-current {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 模块图标用满 20px（图标本身是 20 的 viewBox，缩到 19 会糊半像素） */
+.rd-module-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* 卡片里的顺序图按**自然尺寸**显示，大图才受卡片宽度约束并允许滚动。
+   `margin: 0 auto` 让小的图居中，而不是贴在卡片左边。 */
+.rd-seq-view svg {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+/* 树行尾的「⋯」：全局按钮的字号/行高调整后它掉到 17.5px，
+   ui-regressions 钉的是 18px 下限。这里显式给高度，不再靠行高碰运气。 */
+.rd-tree-more {
+  min-height: 18px;
+  height: 18px;
+  padding: 0 5px;
+}
+
+/* 主按钮 / 整行宽按钮的文字居中。全局 button 改成 inline-flex 之后默认是
+   左对齐（列表行需要这样），但「新建标签页」这种撑满一行的主行动必须居中。 */
+button.rd-btn-primary,
+.rd-ssh-connect {
+  justify-content: center;
 }

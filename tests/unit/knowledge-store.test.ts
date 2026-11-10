@@ -143,4 +143,81 @@ describe('KnowledgeStore', () => {
     expect(knowledgeStore.cardByTitle('登录流程')?.rel).toBe('登录流程.md');
     expect(knowledgeStore.cardByTitle('不存在的卡')).toBeNull();
   });
+
+  it('目录：新建后进入_在目录里建卡_根视图仍包含子树', async () => {
+    await readyOnSeed();
+    expect(await knowledgeStore.createDir('项目A')).toBe(true);
+    expect(knowledgeStore.getSnapshot().currentDir).toBe('项目A');
+    expect(knowledgeStore.counts().all).toBe(0);
+
+    expect(await knowledgeStore.createCard('计划', '第一版')).toBe(true);
+    const s = knowledgeStore.getSnapshot();
+    expect(s.currentDir).toBe('项目A');
+    expect(s.selectedRel).toBe('项目A/计划.md');
+    expect(s.detail?.body).toBe('第一版');
+    expect(knowledgeStore.counts().all).toBe(1);
+
+    // 根视图 = 整棵树（老库散在子目录的卡不会消失）
+    knowledgeStore.setCurrentDir('');
+    expect(knowledgeStore.counts().all).toBe(3); // 种子 2 + 新 1
+    expect(knowledgeStore.visible().some((c) => c.rel === '项目A/计划.md')).toBe(true);
+    expect(knowledgeStore.subdirs()).toContain('项目');
+    expect(knowledgeStore.subdirs()).toContain('项目A');
+  });
+
+  it('手动编辑：标题和正文保存后列表/详情一起变', async () => {
+    await readyOnSeed();
+    await knowledgeStore.selectCard('登录流程.md');
+    expect(await knowledgeStore.updateCard('登录流程.md', '登录约定', '新的正文')).toBe(true);
+    const s = knowledgeStore.getSnapshot();
+    expect(s.detail?.title).toBe('登录约定');
+    expect(s.detail?.body).toBe('新的正文');
+    expect(s.cards.find((c) => c.rel === '登录流程.md')?.title).toBe('登录约定');
+  });
+
+  it('追加备注：正文末尾带时间追加_不改 frontmatter', async () => {
+    await readyOnSeed();
+    await knowledgeStore.selectCard('登录流程.md');
+    const before = knowledgeStore.getSnapshot().detail?.body ?? '';
+    expect(await knowledgeStore.appendToCard('登录流程.md', '补一条：token 过期要刷新')).toBe(true);
+    const detail = knowledgeStore.getSnapshot().detail;
+    expect(detail?.body.startsWith(before)).toBe(true);
+    expect(detail?.body).toContain('补一条：token 过期要刷新');
+    expect(detail?.body).toMatch(/\*\*\d{4}-\d{2}-\d{2} \d{2}:\d{2}\*\*/);
+  });
+
+  it('附件：挂上/摘掉_卡片行计数同步', async () => {
+    await readyOnSeed();
+    await knowledgeStore.selectCard('登录流程.md');
+    expect(await knowledgeStore.attachFile('登录流程.md')).toBe(1);
+    let s = knowledgeStore.getSnapshot();
+    expect(s.detail?.attachments).toHaveLength(1);
+    expect(s.detail?.attachments[0]?.isImage).toBe(true);
+    expect(s.cards.find((c) => c.rel === '登录流程.md')?.attachments).toHaveLength(1);
+
+    const att = s.detail!.attachments[0]!.rel;
+    await knowledgeStore.removeAttachment('登录流程.md', att);
+    s = knowledgeStore.getSnapshot();
+    expect(s.detail?.attachments).toHaveLength(0);
+    expect(s.cards.find((c) => c.rel === '登录流程.md')?.attachments).toHaveLength(0);
+  });
+
+  it('移动卡片：换目录后 rel 跟着变_同名自动加序号', async () => {
+    await readyOnSeed();
+    await knowledgeStore.createCard('计划', '');
+    const rel = knowledgeStore.getSnapshot().selectedRel!;
+    expect(rel).toBe('计划.md');
+
+    const moved = await knowledgeStore.moveCard(rel, '项目');
+    expect(moved).toBe('项目/计划.md');
+    const s = knowledgeStore.getSnapshot();
+    expect(s.selectedRel).toBe('项目/计划.md');
+    expect(s.cards.some((c) => c.rel === '项目/计划.md')).toBe(true);
+    expect(s.cards.some((c) => c.rel === '计划.md')).toBe(false);
+
+    // 同名再移一次 → 自动加序号
+    await knowledgeStore.createCard('计划', '');
+    const second = knowledgeStore.getSnapshot().selectedRel!;
+    expect(await knowledgeStore.moveCard(second, '项目')).toBe('项目/计划 (2).md');
+  });
 });

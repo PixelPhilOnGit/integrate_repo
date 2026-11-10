@@ -57,6 +57,8 @@ pub struct Frontmatter {
     pub tags: Vec<String>,
     /// 来源文件的相对路径（`_sources/…`）
     pub sources: Vec<String>,
+    /// 挂在这张卡片上的文件（`_attachments/…`；拷进来的拷贝）
+    pub attachments: Vec<String>,
     /// ⚠️ 认不出的键：`(原始行)`，序列化时按顺序放回（见模块头）
     pub extra: Vec<String>,
 }
@@ -70,6 +72,7 @@ impl Frontmatter {
             created: created.to_string(),
             tags: Vec::new(),
             sources: Vec::new(),
+            attachments: Vec::new(),
             extra: Vec::new(),
         }
     }
@@ -105,6 +108,7 @@ pub fn parse(text: &str) -> (Frontmatter, String) {
             "created" => fm.created = scalar(value),
             "tags" => fm.tags = list(value),
             "sources" => fm.sources = list(value),
+            "attachments" => fm.attachments = list(value),
             _ => fm.extra.push(raw_line.to_string()),
         }
     }
@@ -130,6 +134,9 @@ pub fn serialize(fm: &Frontmatter, body: &str) -> String {
     }
     if !fm.sources.is_empty() {
         out.push_str(&format!("sources: {}\n", inline_list(&fm.sources)));
+    }
+    if !fm.attachments.is_empty() {
+        out.push_str(&format!("attachments: {}\n", inline_list(&fm.attachments)));
     }
     for line in &fm.extra {
         out.push_str(line);
@@ -274,6 +281,7 @@ mod tests {
         fm.archived = true;
         fm.tags = vec!["团队/一号".into(), "auth".into()];
         fm.sources = vec!["_sources/a_report.pdf".into()];
+        fm.attachments = vec!["_attachments/1729_接口草稿.docx".into()];
         let body = "# 内容\n\n- 一\n- 二\n";
 
         let text = serialize(&fm, body);

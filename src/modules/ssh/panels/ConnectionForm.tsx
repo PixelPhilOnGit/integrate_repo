@@ -241,7 +241,7 @@ function Form({
 
         <button
           type="button"
-          className="rd-ssh-connect"
+          className="rd-ssh-connect rd-btn-primary"
           data-testid="ssh-btn-connect"
           disabled={busy || hasErrors(errors)}
           onClick={() => {

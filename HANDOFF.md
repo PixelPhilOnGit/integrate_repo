@@ -52,6 +52,37 @@ codex、claude、csc 等多个工具……把它们组成一个群，我能在�
 - 顺序图纯展示栈搬进 `shared/diagram/`、图片查看器进 `shared/media/` ——
   **全仓不再有跨模块 import**。见「知识库」那一节。
 
+**2026-11-10 那一轮（v0.19.0）：界面统一 + 三处「看着像坏了」的修复。**
+用户原话：「dbx 这个软件的前端设计就很好……参考一下」。这一轮**只动外观**，
+结构、类名、`data-testid` 一个没动，所以功能用例的定位器全部原样可用：
+
+- **设计令牌**（`styles.css` 顶部）：语义色 / 三档圆角 / 三档阴影 / 字体栈。
+  浅色是「白面板 + 低对比灰底」，强调色只留给主行动和选中态；深色同步重调。
+- **外壳尺寸**：图标栏 50px、面板头 40px、树行 27px、页签 35px、工具栏按钮
+  改 ghost（hover 才起底色）、检查器把手加宽到 16px。
+- **主按钮收口**：SQL「执行」、顺序图「保存」、SSH「新建标签页」、助手
+  「发送 / 允许」都挂上 `rd-btn-primary` —— 此前只有对话框里的确定是实心蓝。
+- **默认面板宽 240 → 252**（`panelWidths.ts`）。⚠️ 真正生效的是槽位宽度；
+  `.rd-panel` 的 CSS 默认值只在没有槽位时兜底，改一个别忘另一个。
+
+截图巡检抓到、而功能 e2e 全绿也发现不了的三件（都补了几何护栏）：
+
+1. **群组主区右侧空一大片**：`.rd-group-chat` 少了 `flex: 1`，空态用的
+   `.rd-main-panel` 根本没有样式；1440 视口里主区只画到 1009px。
+2. **知识库卡片墙横向溢出**：卡片正文里的长文本把 `1fr` 的 min-content 撑开，
+   文字一直跑到视口外。修法是卡片 `min-width: 0` + 正文 `overflow-wrap: anywhere`。
+3. **知识库阅读器里的顺序图是一块黑色圆角矩形**：`SeqView` 的 `<svg>` 没挂
+   `.rd-root`，`themeToCss()` 定义的变量全部落空；同时它只给 `viewBox`，
+   Chromium 会把无内在宽度的 SVG 拉到容器宽度（182×319 被放大成 762×1336）。
+   顺带修了种子图缺 `x`/`y`/`id`、`text` 应为 `label` —— 那张图此前只剩一条
+   生命线，看着就像渲染器坏了。
+
+巡检脚本本身也修了：v0.16 起检查器默认折叠，但 `ux-tour.mjs` 有六个模块仍
+直接去点检查器里的控件，于是整笔「等不到元素」。现在进模块先 `openInspector()`。
+
+⚠️ **顺序图文档自己的主题仍不跟随应用深浅色**：深色外壳里打开浅色文档，
+画布仍是一张白纸（深色巡检截图能一眼看到）。这是既有行为，不在这一轮。
+
 - SSH 是第一个**流式**模块，也是第一个带安全决策（TOFU）的模块
 - 智能体会话是第一个**起用户本机进程**的模块，也是第一个**改工作区之外的文件**的模块
   （往 `~/.claude/settings.json` 和 `~/.codex/config.toml` 里装状态钩子 ——
@@ -807,18 +838,19 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
 ```
 <vault>/
 ├── .devtoolkit/index.db   ← 派生索引（SQLite；删掉不丢知识，下次进模块增量重建）
-├── 卡片.md / 子目录/卡片.md ← 卡片区：任意层级的 md；frontmatter 存 title/status/archived/tags/sources
+├── 卡片.md / 子目录/卡片.md ← 卡片区：任意层级的 md；frontmatter 存 title/status/archived/tags/sources/attachments
 ├── _sources/<时间戳>_<清洗名> ← 上传的原件（拷而不引用；文件名清洗同 tasks 表）
-└── _files/…               ← 图片（上传时从 PDF/Word/PPT/图片抽出来；卡片引用这里的确定路径）
+├── _files/…               ← 图片（上传时从 PDF/Word/PPT/图片抽出来；卡片引用这里的确定路径）
+└── _attachments/<时间戳>_<清洗名> ← 手动挂到卡片上的文件（任何扩展名；拷而不引用）
 ```
 
 - **frontmatter 是手写的扁平 YAML 子集**（`knowledge/src/frontmatter.rs`）。
   ⚠️ **未知键原样保命**：用户会在 Obsidian 里加自己的字段，我们改状态要重写
   frontmatter，认不出的行按原文收进 `extra` 原样放回 —— 这是那块的头号规矩。
 - **索引只是为快**：`reindex` 比对 mtime+size 增量重建；搜索 v1 是 LIKE
-  （过 title/tags/正文/来源提取文本，`%`/`_` 转义成字面量）、**不是 FTS5**
-  （rusqlite bundled 没开 fts5，加它牵动全 workspace 的 libsqlite3-sys，
-  单独论证；迁移链是现成的，量大了再上）。
+  （过 title/tags/rel 路径/附件名/正文/来源提取文本，`%`/`_` 转义成字面量）、
+  **不是 FTS5**（rusqlite bundled 没开 fts5，加它牵动全 workspace 的
+  libsqlite3-sys，单独论证；迁移链是现成的，量大了再上）。
 - **生成管线**（用户原话「用宿主机的 codex/claude 帮忙读文件」）：
   ⚠️ **codex 必须带 `--skip-git-repo-check`**（真机 2026-10-19 报的）：vault
   目录不是 git 仓库，codex 默认拒绝在非 git 目录里跑，报「Not inside a trusted
@@ -885,10 +917,43 @@ TLS 完全复用 `tls.rs` 那一份 `client_config` —— ⚠️ 别让它自�
 - ⚠️ **`kb_file_read` 的失败写健康日志**（`KB_IMAGE`）：真机上「图片不显示」
   只能靠它区分「找不到 / 读不了 / 前端没渲染」。
 
+#### 手动笔记 / 目录 / 卡片附件（2026-11-09）
+
+用户原话：「现在知识库只能上传文件资料，不能手动添加吗……可以有目录结构，
+加目录，加项目，类似一个笔记软件，但是展示是小卡片，卡片内可以类似任务管理
+的备注的方式，不断加内容，也可以挂载文件等」。落地：
+
+- **手动建卡**：`kb_card_create(dir, title, body)`。卡片仍是普通 md；
+  `kb_card_update` 保存标题/正文（阅读器「编辑」），状态/标签/来源/附件保留。
+  frontmatter 的 title 改了**不重命名文件**（rel 是身份，盘上文件名和标题
+  可以不同 —— 和 Obsidian 一致）。
+- **目录**：`kb_dirs` 直接扫文件系统（**空目录也在**），`kb_dir_create` /
+  `kb_dir_rename` / `kb_dir_delete`。⚠️ **只允许删空目录**（`NotEmpty`）——
+  递归删整棵子树太危险，不在这个入口做；重命名/移动后统一 `reindex` 修正
+  索引里的 rel。
+- **视图口径**（`core/filters.ts` 的 `cardsUnder` / `childDirs`）：
+  **根目录 = 整棵树**（老库里散在子目录的卡不会突然从根视图消失），
+  进入某个目录 = 它的**子树**；搜索永远全库。目录栏是面包屑 + 文件夹卡片，
+  筛选/搜索时文件夹卡片隐藏（它不是状态，混在结果里像在匹配）。
+- **备注式追加**：`kb_card_append` 在正文末尾追加
+  `\n\n---\n\n**<本地时间>**\n\n<内容>\n`。时间戳由前端给（Rust 只有 UTC，
+  没引日期库）；文件是真相，追加出来的仍是普通 markdown。**不单独存结构化
+  entries** —— 那会让 md 在 Obsidian 里不可读，也违背「卡片就是 md」。
+- **附件**：`_attachments/<时间戳>_<清洗名>`（任何扩展名，拷而不引用）；
+  frontmatter 新增 `attachments` 列表，**索引 schema v3** 加 `attachments`
+  列（v2 打开时幂等补列）。`kb_card_attach` 可多选；`..._open` 走系统默认
+  程序（路径只在 Rust 侧算，且过非软链 + canonicalize 归属检查）；
+  `..._remove` / 删卡片时**只有没有别的卡片引用才删盘上那份**。
+  附件里的图片可以手写 `![[_attachments/x.png]]` 内嵌（`safe_asset_rel`
+  的白名单已扩到三个目录）。
+- ⚠️ 假实现（`services/web.ts`）逐条对齐了：目录集合、手动建卡、追加、
+  附件、移动；e2e 的种子库多了一个空目录「项目」。
+
 - **明确不做**（都记着）：watcher、扫描版 PDF/OCR、加密 PDF、PDF inline
   image / 嵌套 Form、JPX/JBIG2/CCITT/LZW、xlsx 图片、旧 `.doc/.ppt`、
   旧来源图片回填、图片孤儿清理/缩略图、助手直接查知识库（v1 靠「文件是真相」
-  让会话自己能读）、卡片的手动编辑正文（只有状态/归档/删除）。
+  让会话自己能读）、拖拽移动卡片（v1 用「移动…」对话框）、递归删非空目录、
+  跨目录拖拽/排序、卡片内条目的独立编辑（v1 追加不可改，要改走「编辑」全文）。
 
 ### 群组协作（第十个模块，v0.17.0）
 

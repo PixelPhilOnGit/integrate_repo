@@ -34,7 +34,10 @@ use devtoolkit_knowledge::index::{
 use devtoolkit_knowledge::prompt::{self, PromptInput, PromptSource, RelatedCard, RELATED_LIMIT};
 use devtoolkit_knowledge::runner::{self, Cli, Progress, RunSpec};
 use devtoolkit_knowledge::timefmt;
-use devtoolkit_knowledge::vault::{self, unique_card_rel, Vault, SOURCES_DIR};
+use devtoolkit_knowledge::vault::{
+    self, safe_attachment_rel, safe_dir_rel, sanitize_dir_name, unique_card_rel, Vault,
+    ATTACHMENTS_DIR, SOURCES_DIR,
+};
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
@@ -277,6 +280,17 @@ pub async fn kb_cards(
     .await
 }
 
+/// 一张卡片挂着的文件（frontmatter 只存 rel；名字/大小/类型在读取时现算）。
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CardAttachment {
+    pub rel: String,
+    /// 给人看的名字（去掉存储名里的时间戳前缀）
+    pub name: String,
+    pub byte_size: u64,
+    pub is_image: bool,
+}
+
 /// 一张卡片的**文件内容**（真相在文件里：索引只有摘要）。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -288,7 +302,107 @@ pub struct CardDetail {
     pub created: String,
     pub tags: Vec<String>,
     pub sources: Vec<String>,
+    pub attachments: Vec<CardAttachment>,
     pub body: String,
+}
+
+/// 卡片标题的兜底（手编文件删了 title 时拿文件名）——和索引重建同口径。
+fn card_title(rel: &str, fm: &Frontmatter) -> String {
+    if fm.title.trim().is_empty() {
+        rel.rsplit('/')
+            .next()
+            .unwrap_or(rel)
+            .trim_end_matches(".md")
+            .to_string()
+    } else {
+        fm.title.clone()
+    }
+}
+
+/// `_attachments/1729_接口草稿.docx` → `接口草稿.docx`（存储名去时间戳）。
+fn attachment_display_name(rel: &str) -> String {
+    let file = rel.rsplit('/').next().unwrap_or(rel);
+    match file.split_once('_') {
+        Some((prefix, rest))
+            if !prefix.is_empty()
+                && !rest.is_empty()
+                && prefix.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            rest.to_string()
+        }
+        _ => file.to_string(),
+    }
+}
+
+fn attachment_info(vault: &Vault, rel: &str) -> CardAttachment {
+    let file = rel.rsplit('/').next().unwrap_or(rel);
+    let ext = std::path::Path::new(file)
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let is_image = images::IMAGE_EXTS.contains(&ext.as_str());
+    // 手编的坏 rel（`../…`、`_files/…`）不能拿去 stat：按「缺失」展示，
+    // 让用户能在界面上把它摘掉。
+    let byte_size = if safe_attachment_rel(rel).is_ok() {
+        std::fs::metadata(vault.root().join(rel))
+            .map(|m| m.len())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    CardAttachment {
+        rel: rel.to_string(),
+        name: attachment_display_name(rel),
+        byte_size,
+        is_image,
+    }
+}
+
+/// 文件 → 索引行（写入、append、状态变更、生成共用）。
+fn row_for_file(h: &VaultHandle, rel: &str, fm: &Frontmatter) -> CardRow {
+    let meta = std::fs::metadata(h.vault.root().join(rel)).ok();
+    CardRow {
+        rel: rel.to_string(),
+        title: card_title(rel, fm),
+        status: fm.status.as_str().to_string(),
+        archived: fm.archived,
+        created: fm.created.clone(),
+        tags: fm.tags.clone(),
+        sources: fm.sources.clone(),
+        attachments: fm.attachments.clone(),
+        excerpt: String::new(),
+        mtime: meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        size: meta.map(|m| m.len()).unwrap_or(0),
+    }
+}
+
+/// 读一张卡的完整内容（含附件的名字/大小）。
+fn detail_of(h: &VaultHandle, rel: &str) -> Result<CardDetail, String> {
+    let (fm, body) = h.vault.read_card(rel).map_err(|e| e.to_string())?;
+    // 手编的 frontmatter 可能有重复项 —— 展示层去重（否则 React key 撞）
+    let mut seen = std::collections::HashSet::new();
+    let attachments = fm
+        .attachments
+        .iter()
+        .filter(|a| seen.insert(a.as_str()))
+        .map(|a| attachment_info(&h.vault, a))
+        .collect();
+    Ok(CardDetail {
+        rel: rel.to_string(),
+        title: card_title(rel, &fm),
+        status: fm.status.as_str().to_string(),
+        archived: fm.archived,
+        created: fm.created.clone(),
+        tags: fm.tags.clone(),
+        sources: fm.sources.clone(),
+        attachments,
+        body,
+    })
 }
 
 #[tauri::command]
@@ -301,26 +415,140 @@ pub async fn kb_card_read(
     let state = Arc::clone(state.inner());
     crate::commands::blocking(move || {
         let h = handle_of(&state, &app, &name)?;
+        detail_of(&h, &rel)
+    })
+    .await
+}
+
+/// 手动新建一张卡片（可以指定目录；卡片是普通的 md 文件）。
+#[tauri::command]
+pub async fn kb_card_create(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    dir: String,
+    title: String,
+    body: String,
+) -> Result<CardDetail, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let dir = safe_dir_rel(&dir, true).map_err(|e| e.to_string())?;
+        if !dir.is_empty() && !h.vault.root().join(&dir).is_dir() {
+            return Err(format!("目录不存在：{dir}"));
+        }
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("标题不能为空".to_string());
+        }
+        let rel = unique_card_rel(&h.vault, &dir, title);
+        let fm = Frontmatter::new(title, &timefmt::now_iso());
+        h.vault
+            .write_card(&rel, &fm, &body)
+            .map_err(|e| e.to_string())?;
+        let row = row_for_file(&h, &rel, &fm);
+        index_of(&h)
+            .upsert_card(&row, &body)
+            .map_err(|e| e.to_string())?;
+        detail_of(&h, &rel)
+    })
+    .await
+}
+
+/// 保存卡片的标题和正文（卡片内「编辑」用；状态/标签/来源/附件原样保留）。
+#[tauri::command]
+pub async fn kb_card_update(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+    title: String,
+    body: String,
+) -> Result<CardDetail, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let (mut fm, _) = h.vault.read_card(&rel).map_err(|e| e.to_string())?;
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("标题不能为空".to_string());
+        }
+        fm.title = title.to_string();
+        h.vault
+            .write_card(&rel, &fm, &body)
+            .map_err(|e| e.to_string())?;
+        let row = row_for_file(&h, &rel, &fm);
+        index_of(&h)
+            .upsert_card(&row, &body)
+            .map_err(|e| e.to_string())?;
+        detail_of(&h, &rel)
+    })
+    .await
+}
+
+/// 往卡片正文末尾追加一条带时间的备注（「像任务备注一样不断加内容」）。
+///
+/// 文件是真相：追加的是一条普通 markdown —— 分隔线 + 加粗时间 + 用户内容。
+/// `stamp` 由前端给本地时间（Rust 侧只有 UTC）；空串回落 UTC ISO。
+#[tauri::command]
+pub async fn kb_card_append(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+    text: String,
+    stamp: String,
+) -> Result<CardDetail, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let text = text.trim_end();
+        if text.trim().is_empty() {
+            return Err("要追加的内容不能为空".to_string());
+        }
         let (fm, body) = h.vault.read_card(&rel).map_err(|e| e.to_string())?;
-        let title = if fm.title.trim().is_empty() {
-            rel.rsplit('/')
-                .next()
-                .unwrap_or(&rel)
-                .trim_end_matches(".md")
-                .to_string()
+
+        let stamp: String = stamp
+            .trim()
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .take(40)
+            .collect();
+        let stamp = if stamp.is_empty() {
+            timefmt::now_iso()
         } else {
-            fm.title.clone()
+            stamp
         };
-        Ok(CardDetail {
-            rel,
-            title,
-            status: fm.status.as_str().to_string(),
-            archived: fm.archived,
-            created: fm.created,
-            tags: fm.tags,
-            sources: fm.sources,
-            body,
-        })
+        let body = vault::append_note(&body, &stamp, text);
+
+        h.vault
+            .write_card(&rel, &fm, &body)
+            .map_err(|e| e.to_string())?;
+        let row = row_for_file(&h, &rel, &fm);
+        index_of(&h)
+            .upsert_card(&row, &body)
+            .map_err(|e| e.to_string())?;
+        detail_of(&h, &rel)
+    })
+    .await
+}
+
+/// 把卡片移到另一个目录（空串 = 根目录）。返回新 rel。
+#[tauri::command]
+pub async fn kb_card_move(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+    dir: String,
+) -> Result<CardDetail, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let new_rel = h.vault.move_card(&rel, &dir).map_err(|e| e.to_string())?;
+        let idx = index_of(&h);
+        devtoolkit_knowledge::index::reindex(&h.vault, &idx).map_err(|e| e.to_string())?;
+        detail_of(&h, &new_rel)
     })
     .await
 }
@@ -340,35 +568,10 @@ async fn patch_card(
         h.vault
             .write_card(&rel, &fm, &body)
             .map_err(|e| e.to_string())?;
-        // 索引行跟着动（title 兜底和重建同口径）
-        let title = if fm.title.trim().is_empty() {
-            rel.rsplit('/')
-                .next()
-                .unwrap_or(&rel)
-                .trim_end_matches(".md")
-                .to_string()
-        } else {
-            fm.title.clone()
-        };
-        let meta = std::fs::metadata(h.vault.root().join(&rel)).ok();
-        let row = CardRow {
-            rel: rel.clone(),
-            title,
-            status: fm.status.as_str().to_string(),
-            archived: fm.archived,
-            created: fm.created.clone(),
-            tags: fm.tags.clone(),
-            sources: fm.sources.clone(),
-            excerpt: String::new(),
-            mtime: meta
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
-            size: meta.map(|m| m.len()).unwrap_or(0),
-        };
-        let done = index_of(&h).upsert_card(&row, &body).map_err(|e| e.to_string());
+        let row = row_for_file(&h, &rel, &fm);
+        let done = index_of(&h)
+            .upsert_card(&row, &body)
+            .map_err(|e| e.to_string());
         done
     })
     .await
@@ -403,7 +606,7 @@ pub async fn kb_card_set_archived(
     .await
 }
 
-/// 删除一张卡片（文件 + 索引行）。
+/// 删除一张卡片（文件 + 索引行 + 只被它引用的附件）。
 #[tauri::command]
 pub async fn kb_card_delete(
     app: AppHandle,
@@ -414,9 +617,185 @@ pub async fn kb_card_delete(
     let state = Arc::clone(state.inner());
     crate::commands::blocking(move || {
         let h = handle_of(&state, &app, &name)?;
+        // 先记下附件清单（文件/索引行删掉之后就查不到了）
+        let attachments = h
+            .vault
+            .read_card(&rel)
+            .map(|(fm, _)| fm.attachments)
+            .unwrap_or_default();
         h.vault.delete_card(&rel).map_err(|e| e.to_string())?;
-        let done = index_of(&h).remove_card(&rel).map_err(|e| e.to_string());
-        done
+        let idx = index_of(&h);
+        idx.remove_card(&rel).map_err(|e| e.to_string())?;
+        cleanup_attachments(&h, &idx, &attachments);
+        Ok(())
+    })
+    .await
+}
+
+/// 附件没人用了才删盘上的文件（手编共享、多卡引用时不误删）。
+fn cleanup_attachments(
+    h: &VaultHandle,
+    idx: &devtoolkit_knowledge::index::Index,
+    attachments: &[String],
+) {
+    for att in attachments {
+        if safe_attachment_rel(att).is_err() {
+            continue;
+        }
+        let referenced = idx
+            .cards_of_attachment(att)
+            .map(|cards| !cards.is_empty())
+            .unwrap_or(true);
+        if !referenced {
+            let _ = h.vault.delete_attachment(att);
+        }
+    }
+}
+
+/// 给卡片挂文件的返回值：更新后的卡片 + 逐个文件的失败原因。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardAttachOutcome {
+    pub detail: CardDetail,
+    pub errors: Vec<String>,
+}
+
+/// 给卡片挂文件（可多选）：拷一份进 `_attachments/`，把 rel 记进 frontmatter。
+///
+/// 和来源上传同一条老规矩：**拷而不引用**；文件对话框在 Rust 侧开，
+/// 路径只活在 Rust 里。
+#[tauri::command]
+pub async fn kb_card_attach(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+) -> Result<Option<CardAttachOutcome>, String> {
+    let (tx, mut rx) = tauri::async_runtime::channel(1);
+    app.dialog()
+        .file()
+        .set_title("选要挂在这张卡片上的文件（可以多选）")
+        .set_parent(&window)
+        .pick_files(move |picked| {
+            let paths = picked.map(|list| {
+                list.into_iter()
+                    .filter_map(|p| p.simplified().into_path().ok())
+                    .collect::<Vec<_>>()
+            });
+            let _ = tx.try_send(paths);
+        });
+    let picked = rx
+        .recv()
+        .await
+        .ok_or_else(|| "选文件的对话框没能开起来（主线程忙不过来？）".to_string())?;
+    let Some(paths) = picked else {
+        return Ok(None);
+    };
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let (mut fm, body) = h.vault.read_card(&rel).map_err(|e| e.to_string())?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let mut errors = Vec::new();
+        for src in paths {
+            let Some(file_name) = src.file_name() else {
+                errors.push("选的东西没有文件名".to_string());
+                continue;
+            };
+            let file_name = file_name.to_string_lossy().into_owned();
+            let clean = sanitize_source_name(&file_name);
+            let stored = h.vault.unique_attachment_stored_name(stamp, &clean);
+            let dest = h.vault.attachment_path(&stored);
+            let same = dest.exists()
+                && std::fs::canonicalize(&src).ok() == std::fs::canonicalize(&dest).ok();
+            if !same {
+                if let Err(e) = std::fs::copy(&src, &dest) {
+                    errors.push(format!("{}：拷进来失败了（{e}）", src.display()));
+                    continue;
+                }
+            }
+            let att_rel = format!("{ATTACHMENTS_DIR}/{stored}");
+            if !fm.attachments.contains(&att_rel) {
+                fm.attachments.push(att_rel);
+            }
+        }
+        h.vault
+            .write_card(&rel, &fm, &body)
+            .map_err(|e| e.to_string())?;
+        let row = row_for_file(&h, &rel, &fm);
+        index_of(&h)
+            .upsert_card(&row, &body)
+            .map_err(|e| e.to_string())?;
+        let detail = detail_of(&h, &rel)?;
+        Ok(Some(CardAttachOutcome { detail, errors }))
+    })
+    .await
+}
+
+/// 用系统默认程序打开卡片上的一个附件。
+#[tauri::command]
+pub async fn kb_card_attachment_open(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+    attachment: String,
+) -> Result<(), String> {
+    let state = Arc::clone(state.inner());
+    let path = crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let (fm, _) = h.vault.read_card(&rel).map_err(|e| e.to_string())?;
+        if !fm.attachments.iter().any(|a| a == &attachment) {
+            return Err("这个附件已经不在这张卡片上了".to_string());
+        }
+        h.vault
+            .attachment_abs_checked(&attachment)
+            .map_err(|e| e.to_string())
+    })
+    .await?;
+    crate::open::open_path(&path)
+}
+
+/// 从卡片上摘掉一个附件；文件没有别的卡片引用时一并删掉。
+#[tauri::command]
+pub async fn kb_card_attachment_remove(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+    attachment: String,
+) -> Result<CardDetail, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let (mut fm, body) = h.vault.read_card(&rel).map_err(|e| e.to_string())?;
+        let existed = fm.attachments.iter().any(|a| a == &attachment);
+        fm.attachments.retain(|a| a != &attachment);
+        h.vault
+            .write_card(&rel, &fm, &body)
+            .map_err(|e| e.to_string())?;
+        let row = row_for_file(&h, &rel, &fm);
+        let idx = index_of(&h);
+        idx.upsert_card(&row, &body).map_err(|e| e.to_string())?;
+        // 本来就不在这张卡上的 rel 不做删除（防陈旧 UI/手滑调用误删文件）
+        if existed {
+            let referenced = idx
+                .cards_of_attachment(&attachment)
+                .map(|cards| !cards.is_empty())
+                .unwrap_or(true);
+            if !referenced {
+                let _ = h.vault.delete_attachment(&attachment);
+            }
+        }
+        detail_of(&h, &rel)
     })
     .await
 }
@@ -451,6 +830,91 @@ pub async fn kb_search(
             cards: idx.search(&query).map_err(|e| e.to_string())?,
             sources: idx.search_sources(&query).map_err(|e| e.to_string())?,
         })
+    })
+    .await
+}
+
+// -------------------------------------------------------------- 目录结构
+
+/// 列出卡片区里的全部目录（相对 vault 根；空目录也列）。
+#[tauri::command]
+pub async fn kb_dirs(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+) -> Result<Vec<String>, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        h.vault.scan_dirs().map_err(|e| e.to_string())
+    })
+    .await
+}
+
+/// 新建一个目录（`parent` 空串 = 根）。名字由后端清洗，返回相对路径。
+#[tauri::command]
+pub async fn kb_dir_create(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    parent: String,
+    dir_name: String,
+) -> Result<String, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let parent = safe_dir_rel(&parent, true).map_err(|e| e.to_string())?;
+        let clean = sanitize_dir_name(&dir_name);
+        if clean.is_empty() {
+            return Err("目录名不能为空".to_string());
+        }
+        let rel = if parent.is_empty() {
+            clean
+        } else {
+            format!("{parent}/{clean}")
+        };
+        let rel = safe_dir_rel(&rel, false).map_err(|e| e.to_string())?;
+        h.vault.create_dir(&rel).map_err(|e| e.to_string())?;
+        Ok(rel)
+    })
+    .await
+}
+
+/// 重命名目录（只改最后一段），返回新相对路径。卡片跟着目录走。
+#[tauri::command]
+pub async fn kb_dir_rename(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+    new_name: String,
+) -> Result<String, String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        let new_rel = h
+            .vault
+            .rename_dir(&rel, &new_name)
+            .map_err(|e| e.to_string())?;
+        let idx = index_of(&h);
+        devtoolkit_knowledge::index::reindex(&h.vault, &idx).map_err(|e| e.to_string())?;
+        Ok(new_rel)
+    })
+    .await
+}
+
+/// 删除一个**空目录**（非空由 `Vault::delete_dir` 拒绝）。
+#[tauri::command]
+pub async fn kb_dir_delete(
+    app: AppHandle,
+    state: State<'_, Arc<KbState>>,
+    name: String,
+    rel: String,
+) -> Result<(), String> {
+    let state = Arc::clone(state.inner());
+    crate::commands::blocking(move || {
+        let h = handle_of(&state, &app, &name)?;
+        h.vault.delete_dir(&rel).map_err(|e| e.to_string())
     })
     .await
 }
@@ -654,6 +1118,7 @@ pub async fn kb_source_delete(
                 // 卡片文件删不掉不算错（可能已经被手删了）；索引行照清
                 let _ = h.vault.delete_card(&card.rel);
                 idx.remove_card(&card.rel).map_err(|e| e.to_string())?;
+                cleanup_attachments(&h, &idx, &card.attachments);
                 removed_cards += 1;
             }
         } else {
@@ -663,7 +1128,8 @@ pub async fn kb_source_delete(
                 if let Ok((mut fm, body)) = h.vault.read_card(&card.rel) {
                     fm.sources.retain(|s| s != &rel);
                     if h.vault.write_card(&card.rel, &fm, &body).is_ok() {
-                        let _ = idx.upsert_card(&card, &body);
+                        let row = row_for_file(&h, &card.rel, &fm);
+                        let _ = idx.upsert_card(&row, &body);
                     }
                 }
             }
@@ -1065,24 +1531,7 @@ pub async fn kb_generate(
                     .vault
                     .write_card(&rel, &fm, &body)
                     .map_err(|e| e.to_string())?;
-                let meta = std::fs::metadata(handle.vault.root().join(&rel)).ok();
-                let row = CardRow {
-                    rel: rel.clone(),
-                    title: card.title.clone(),
-                    status: fm.status.as_str().to_string(),
-                    archived: false,
-                    created: created.clone(),
-                    tags: card.tags.clone(),
-                    sources: fm.sources.clone(),
-                    excerpt: String::new(),
-                    mtime: meta
-                        .as_ref()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0),
-                    size: meta.map(|m| m.len()).unwrap_or(0),
-                };
+                let row = row_for_file(&handle, &rel, &fm);
                 index_of(&handle)
                     .upsert_card(&row, &body)
                     .map_err(|e| e.to_string())?;

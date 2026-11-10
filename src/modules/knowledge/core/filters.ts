@@ -17,6 +17,30 @@ export interface KbCounts {
   archived: number;
 }
 
+/**
+ * 目录作用域：**根目录 = 全部卡片**（向后兼容：老库里散在子目录的卡不能
+ * 突然从根视图消失）；进入某个目录 = 它的整棵子树。目录卡片只是更窄的视图，
+ * 不改变「知识库 = 这些卡」的口径。
+ */
+export function cardsUnder(cards: readonly CardRow[], dir: string): CardRow[] {
+  if (dir === '') return [...cards];
+  const prefix = `${dir}/`;
+  return cards.filter((c) => c.rel.startsWith(prefix));
+}
+
+/**
+ * `dirs` 里 `parent` 的**直接子目录**。保持传入顺序（Rust 的 `scan_dirs`
+ * 已经按码点排好）——再 `localeCompare` 一遍只会让两端的顺序漂。
+ */
+export function childDirs(dirs: readonly string[], parent: string): string[] {
+  const prefix = parent === '' ? '' : `${parent}/`;
+  return dirs.filter((d) => {
+    if (!d.startsWith(prefix)) return false;
+    const rest = d.slice(prefix.length);
+    return rest !== '' && !rest.includes('/');
+  });
+}
+
 export function counts(cards: readonly CardRow[]): KbCounts {
   let all = 0;
   let unreviewed = 0;

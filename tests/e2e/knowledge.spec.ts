@@ -43,6 +43,25 @@ test('阅读器：markdown 渲染（wikilink/内嵌图片）＋ seq 围栏画成
   await expect(page.getByTestId('kb-seq')).toBeVisible();
   await expect(page.getByTestId('kb-md')).toContainText('客户端拿到 token');
 
+  // 回归（2026-11-10 截图巡检）：SeqView 的 <svg> 必须挂 `rd-root` ——
+  // 主题变量定义在这个类上，漏了就全部退回初始值，参与者方块变成一块纯黑。
+  const seqSvg = page.locator('[data-testid="kb-seq"] svg');
+  await expect(seqSvg).toHaveClass(/rd-root/);
+  const participantFill = await page
+    .locator('[data-testid="kb-seq"] .rd-participant-box')
+    .first()
+    .evaluate((el) => getComputedStyle(el).fill);
+  expect(participantFill).not.toBe('rgb(0, 0, 0)');
+
+  // 回归：只给 viewBox 时 Chromium 会把 SVG 拉到容器宽度（182 的图被放大
+  // 到 762）。显式 width/height 之后，图应当保持自然尺寸，而不是撑满卡片。
+  const seqBox = await seqSvg.boundingBox();
+  const hostBox = await page.getByTestId('kb-seq').boundingBox();
+  expect(seqBox).not.toBeNull();
+  expect(hostBox).not.toBeNull();
+  expect(seqBox!.width).toBeLessThan(hostBox!.width - 100);
+  expect(seqBox!.width).toBeLessThan(400);
+
   // 架构备忘：wikilink 跳卡、断链样式、图片角标
   await page.getByTestId('kb-back').click();
   await page.getByTestId('kb-wall-架构备忘.md').click();
@@ -209,6 +228,60 @@ test('多选资料：默认勾当前、全选后综合生成、阅读器显示�
   const sources = page.getByTestId('kb-reader-sources');
   await expect(sources).toContainText('示例资料1.md');
   await expect(sources).toContainText('示例资料2.md');
+});
+
+test('新建文件夹：进入新目录、面包屑回上级', async ({ page }) => {
+  await enterKnowledge(page);
+  await page.getByTestId('kb-new-dir').click();
+  await page.getByTestId('kb-new-dir-name').fill('排障项目');
+  await page.getByTestId('kb-new-dir-confirm').click();
+
+  await expect(page.getByTestId('kb-crumb-排障项目')).toBeVisible();
+  await expect(page.getByTestId('kb-wall-empty')).toContainText('这个文件夹还空着');
+
+  await page.getByTestId('kb-crumb-root').click();
+  await expect(page.getByTestId('kb-folder-排障项目')).toBeVisible();
+});
+
+test('目录里手写卡片：建卡、追加备注、挂附件、移动回根', async ({ page }) => {
+  await enterKnowledge(page);
+
+  // 种子里有一个空目录「项目」
+  await page.getByTestId('kb-folder-项目').click();
+  await expect(page.getByTestId('kb-crumb-项目')).toBeVisible();
+  await expect(page.getByTestId('kb-wall-empty')).toContainText('这个文件夹还空着');
+
+  await page.getByTestId('kb-new-card').click();
+  await page.getByTestId('kb-new-card-input-title').fill('排障记录');
+  await page.getByTestId('kb-new-card-input-body').fill('第一次记录');
+  await page.getByTestId('kb-new-card-confirm').click();
+
+  await expect(page.getByTestId('kb-reader-title')).toHaveText('排障记录');
+  await expect(page.getByTestId('kb-md')).toContainText('第一次记录');
+
+  // 备注式追加：带时间、框清空
+  await page.getByTestId('kb-append-text').fill('第二次补充');
+  await page.getByTestId('kb-append-submit').click();
+  await expect(page.getByTestId('kb-md')).toContainText('第二次补充');
+  await expect(page.getByTestId('kb-append-text')).toHaveValue('');
+
+  // 挂附件：假实现给一张能真加载的 PNG
+  await page.getByTestId('kb-attach-add').click();
+  const thumb = page.locator('[data-testid^="kb-attachment-image-"]');
+  await expect(thumb).toHaveAttribute('data-state', 'ready');
+  await expect(page.getByTestId('kb-attachments')).toContainText('示例附件1.png');
+
+  // 移动到根目录：阅读器跟着新 rel，返回后原目录不再有它
+  await page.getByTestId('kb-move').click();
+  await page.getByTestId('kb-move-target').selectOption('');
+  await page.getByTestId('kb-move-confirm').click();
+  await expect(page.getByTestId('kb-reader-title')).toHaveText('排障记录');
+
+  await page.getByTestId('kb-back').click();
+  await expect(page.getByTestId('kb-wall-项目/排障记录.md')).toHaveCount(0);
+  await page.getByTestId('kb-crumb-root').click();
+  await expect(page.getByTestId('kb-wall-排障记录.md')).toBeVisible();
+  await expect(page.getByTestId('kb-wall-排障记录.md')).toContainText('📎');
 });
 
 test('来源菜单：重新提取图片（旧资料升级路径）并给出结果', async ({ page }) => {

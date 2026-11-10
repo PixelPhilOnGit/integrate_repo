@@ -286,7 +286,7 @@ function Composer({
         ) : (
           <button
             type="button"
-            className="rd-btn rd-assistant-go"
+            className="rd-btn rd-btn-primary rd-assistant-go"
             data-testid="assistant-send"
             disabled={!canSend || draft.trim() === ''}
             onClick={onSubmit}
@@ -344,7 +344,7 @@ function ApprovalSheet({ pending }: { pending: PendingApproval }): ReactNode {
             // 初始焦点（2026-10-15 体验评审）：回车在这里的语义该是「允许」——
             // 用户的意图本来就是让助手往前走一步，只是恰好被弹条接住了
             autoFocus
-            className="rd-btn rd-assistant-go"
+            className="rd-btn rd-btn-primary rd-assistant-go"
             data-testid="assistant-approval-allow"
             onClick={() => void assistantStore.approve('allow')}
           >

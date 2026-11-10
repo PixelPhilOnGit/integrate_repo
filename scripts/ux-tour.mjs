@@ -63,7 +63,7 @@ const ENTRY = {
   ssh: 'ssh-main',
   agents: 'agents-main',
   tasks: 'task-sidebar',
-  assistant: 'assistant-inspector',
+  assistant: 'assistant-main',
   request: 'request-main',
   group: 'group-main',
 };
@@ -73,6 +73,20 @@ async function goModule(page, id) {
   const entry = ENTRY[id];
   if (entry) await page.getByTestId(entry).waitFor({ timeout: 10_000 });
   await page.waitForTimeout(250);
+}
+
+/**
+ * 检查器从 v0.16.0 起**默认折叠**；巡检里要碰检查器的步骤（连接密码、文件
+ * 标签、任务状态……）必须先点开右边那条把手。e2e 早有同名助手，这里之前
+ * 漏了 —— 于是 2026-11-10 那次巡检有六个模块卡在「等不到元素」上。
+ */
+async function openInspector(page) {
+  const toggle = page.getByTestId('inspector-toggle');
+  if (!(await toggle.isVisible().catch(() => false))) return;
+  if ((await toggle.getAttribute('aria-pressed')) === 'false') {
+    await toggle.click();
+    await page.waitForTimeout(200);
+  }
 }
 
 const vis = (page, testid, timeout = 10_000) =>
@@ -86,6 +100,7 @@ const sweeps = [
     async run(page, shot) {
       // 画布挂载 ≠ 文档加载完（init 是异步的），等文档路径出来再拍
       await page.getByTestId('current-path').waitFor({ timeout: 10_000 });
+      await openInspector(page); // 参与者/样式面板在检查器里
       await shot('diagram-default', '种子工作区：示例图自动打开');
 
       // 加一个参与者、四种消息 —— 和 baseline-screenshots.mjs 同一串动作
@@ -131,6 +146,7 @@ const sweeps = [
     module: 'redis',
     async run(page, shot) {
       await vis(page, 'redis-main');
+      await openInspector(page);
       await shot('redis-empty', '干净工作区：还没有连接');
 
       await page.getByTestId('btn-new-connection').click();
@@ -157,6 +173,7 @@ const sweeps = [
     module: 'sql',
     async run(page, shot) {
       await vis(page, 'sql-main');
+      await openInspector(page);
       await shot('sql-empty', '干净工作区：还没有连接');
 
       await page.getByTestId('btn-new-sql-connection').click();
@@ -203,6 +220,7 @@ const sweeps = [
     module: 'ssh',
     async run(page, shot) {
       await vis(page, 'ssh-main');
+      await openInspector(page);
       await shot('ssh-empty', '干净工作区：还没有连接');
 
       await page.getByTestId('ssh-btn-new').click();
@@ -235,6 +253,7 @@ const sweeps = [
     async run(page, shot) {
       await vis(page, 'agents-main');
       await vis(page, 'agent-empty');
+      await openInspector(page);
       await shot('agents-empty', '干净工作区：还没有工作目录');
 
       await page.getByTestId('agent-add-workspace-empty').click();
@@ -281,6 +300,7 @@ const sweeps = [
     async run(page, shot) {
       await vis(page, 'task-sidebar');
       await vis(page, 'task-empty');
+      await openInspector(page);
       await shot('tasks-empty', '干净工作区：还没有任务');
 
       await page.getByTestId('task-new').click();
@@ -335,6 +355,7 @@ const sweeps = [
   {
     module: 'assistant',
     async run(page, shot) {
+      await openInspector(page);
       await vis(page, 'assistant-inspector');
       await shot('assistant-empty', '干净工作区：缺 key 和目录时的初始态');
 
@@ -399,6 +420,7 @@ const sweeps = [
     module: 'request',
     async run(page, shot) {
       await vis(page, 'request-main');
+      await openInspector(page); // 「保存」那一块在检查器里
       await shot('request-empty', '干净工作区：先填一个地址（按钮禁用）');
 
       await page.getByTestId('request-url').fill('https://demo.example/json');

@@ -150,6 +150,7 @@ export function Toolbar({ state, store, layout }: ToolbarProps): ReactNode {
       <div className="rd-group">
         <button
           type="button"
+          className="rd-btn-primary"
           data-testid="btn-save"
           disabled={!currentPath || !state.dirty}
           onClick={() => void store.save()}

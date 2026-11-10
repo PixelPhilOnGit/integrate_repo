@@ -1,8 +1,9 @@
 //! Devtoolkit 的知识库内核。**文件是真相，索引是派生的。**
 //!
 //! 一个知识库 = 磁盘上一个目录（vault）：卡片是 markdown 文件 + YAML
-//! frontmatter，上传的原件拷进 `_sources/`，附件在 `_files/`；隐藏目录
-//! `.devtoolkit/index.db` 只是**派生索引**（搜索/筛选用），删掉它不丢任何
+//! frontmatter，上传的原件拷进 `_sources/`，图片在 `_files/`，手动挂到
+//! 卡片上的文件在 `_attachments/`；隐藏目录 `.devtoolkit/index.db` 只是
+//! **派生索引**（搜索/筛选用），删掉它不丢任何
 //! 知识（下次进模块时重建）。这同时兑现了「AI 要能直接读它」：库就是一堆
 //! 普通 md，任何会话/CLI 直接 grep。
 //!

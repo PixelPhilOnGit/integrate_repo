@@ -7,7 +7,8 @@
 //! ├── .devtoolkit/index.db     ← 派生索引（删掉不丢知识，下次重建）
 //! ├── 卡片.md / 子目录/卡片.md  ← 「卡片区」：任意层级的 .md
 //! ├── _sources/…               ← 上传的原件拷贝（生成知识用）
-//! └── _files/…                 ← 附件/图片（卡片的 ![[...]] 指向这里）
+//! ├── _files/…                 ← 图片（卡片的 ![[...]] 指向这里）
+//! └── _attachments/…           ← 卡片挂载的文件（任何扩展名，单段文件名）
 //! ```
 //!
 //! # 路径闸门
@@ -26,6 +27,7 @@ use crate::frontmatter::{self, Frontmatter};
 /// 保留目录名（卡片区的路径闸门要挡住的）。
 pub const SOURCES_DIR: &str = "_sources";
 pub const FILES_DIR: &str = "_files";
+pub const ATTACHMENTS_DIR: &str = "_attachments";
 pub const META_DIR: &str = ".devtoolkit";
 
 /// 卡片的后缀。**只认 `.md`** —— 库的承诺是「卡片就是 markdown」。
@@ -83,9 +85,9 @@ impl Vault {
         &self.root
     }
 
-    /// 建出 `_sources/`、`_files/`、`.devtoolkit/`（幂等）。
+    /// 建出 `_sources/`、`_files/`、`_attachments/`、`.devtoolkit/`（幂等）。
     pub fn ensure_layout(&self) -> Result<(), KbError> {
-        for dir in [SOURCES_DIR, FILES_DIR, META_DIR] {
+        for dir in [SOURCES_DIR, FILES_DIR, ATTACHMENTS_DIR, META_DIR] {
             let p = self.root.join(dir);
             fs::create_dir_all(&p).map_err(|e| KbError::io(dir, e))?;
         }
@@ -101,6 +103,11 @@ impl Vault {
     /// 上传原件的落点（`_sources/<清洗名>`）。
     pub fn source_path(&self, stored_name: &str) -> PathBuf {
         self.root.join(SOURCES_DIR).join(stored_name)
+    }
+
+    /// 卡片附件的落点（`_attachments/<存储名>`）。
+    pub fn attachment_path(&self, stored_name: &str) -> PathBuf {
+        self.root.join(ATTACHMENTS_DIR).join(stored_name)
     }
 
     /// 绝对路径（给 CLI 直读图片、给「在系统里打开」用）——**只在 Rust 侧用**。
@@ -166,18 +173,78 @@ impl Vault {
         }
     }
 
-    /// 读一张图片的字节。闸门：`_files/` 单段 + 非符号链接 + canonicalize
-    /// 后仍在库里 + 普通文件 + 大小上限。
+    /// 写一个卡片附件（原子写；`rel` 必须过 `_attachments/` 闸门）。
+    pub fn write_attachment(&self, rel: &str, bytes: &[u8]) -> Result<(), KbError> {
+        let rel = safe_attachment_rel(rel)?;
+        let path = self.root.join(&rel);
+        atomic_write(&path, bytes).map_err(|e| KbError::io(&rel, e))
+    }
+
+    /// 删一个卡片附件。**文件本来就不在也算成功**（尽力清理）。
+    pub fn delete_attachment(&self, rel: &str) -> Result<(), KbError> {
+        let rel = safe_attachment_rel(rel)?;
+        match fs::remove_file(self.root.join(&rel)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(KbError::io(&rel, e)),
+        }
+    }
+
+    /// 读一张图片的字节。闸门：`_files/`、`_sources/` 或 `_attachments/`
+    /// 下单段图片名 + 非符号链接 + canonicalize 后仍在库里 + 普通文件 + 大小上限。
     pub fn read_image(&self, rel: &str, max_bytes: u64) -> Result<Vec<u8>, KbError> {
         let rel = safe_asset_rel(rel)?;
+        self.read_checked_file(&rel, max_bytes, "图片")
+    }
+
+    /// 读一个卡片附件的字节（任何扩展名；缩略图只对图片调用）。
+    pub fn read_attachment(&self, rel: &str, max_bytes: u64) -> Result<Vec<u8>, KbError> {
+        let rel = safe_attachment_rel(rel)?;
+        self.read_checked_file(&rel, max_bytes, "附件")
+    }
+
+    /// 附件的绝对路径（给「用系统默认程序打开」用）——
+    /// 同样过非软链 + 归属检查，避免库里的一个软链把外面文件打开。
+    pub fn attachment_abs_checked(&self, rel: &str) -> Result<PathBuf, KbError> {
+        let rel = safe_attachment_rel(rel)?;
+        self.checked_path(&rel)
+    }
+
+    /// 已过闸门的相对路径 → 字节。三条读取（图片/附件）共用的安全检查。
+    fn read_checked_file(
+        &self,
+        rel: &str,
+        max_bytes: u64,
+        what: &'static str,
+    ) -> Result<Vec<u8>, KbError> {
+        let path = self.checked_path(rel)?;
+        let meta = fs::metadata(&path).map_err(|e| KbError::io(rel, e))?;
+        if meta.len() > max_bytes {
+            return Err(KbError::Extract {
+                rel: rel.to_string(),
+                reason: format!(
+                    "{what}太大了（{:.1} MB，上限 {} MB）",
+                    meta.len() as f64 / 1024.0 / 1024.0,
+                    max_bytes / 1024 / 1024
+                ),
+            });
+        }
+        fs::read(&path).map_err(|e| KbError::io(rel, e))
+    }
+
+    /// 已过闸门的相对路径 → 绝对路径。非符号链接、普通文件、canonicalize
+    /// 之后仍在库根里面（归属确认）。
+    fn checked_path(&self, rel: &str) -> Result<PathBuf, KbError> {
         let bad = |reason: &'static str| KbError::BadRel {
-            rel: rel.clone(),
+            rel: rel.to_string(),
             reason,
         };
-        let path = self.root.join(&rel);
+        let path = self.root.join(rel);
         let meta = fs::symlink_metadata(&path).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => KbError::NotFound { rel: rel.clone() },
-            _ => KbError::io(&rel, e),
+            io::ErrorKind::NotFound => KbError::NotFound {
+                rel: rel.to_string(),
+            },
+            _ => KbError::io(rel, e),
         })?;
         if meta.file_type().is_symlink() {
             return Err(bad("不许符号链接"));
@@ -185,23 +252,13 @@ impl Vault {
         if !meta.is_file() {
             return Err(bad("不是普通文件"));
         }
-        if meta.len() > max_bytes {
-            return Err(KbError::Extract {
-                rel,
-                reason: format!(
-                    "图片太大了（{:.1} MB，上限 {} MB）",
-                    meta.len() as f64 / 1024.0 / 1024.0,
-                    max_bytes / 1024 / 1024
-                ),
-            });
-        }
         // 归属确认：解析掉沿途的软链之后，仍然必须在库根里面。
         let root = fs::canonicalize(&self.root).map_err(|e| KbError::io("库根", e))?;
-        let real = fs::canonicalize(&path).map_err(|e| KbError::io(&rel, e))?;
+        let real = fs::canonicalize(&path).map_err(|e| KbError::io(rel, e))?;
         if !real.starts_with(&root) {
             return Err(bad("路径跑到库外面了"));
         }
-        fs::read(&path).map_err(|e| KbError::io(&rel, e))
+        Ok(path)
     }
 
     /// 裸文件名 → `_files/<唯一命中>`（旧卡片/手编卡片的兼容路径）。
@@ -212,10 +269,14 @@ impl Vault {
         if target.starts_with(&format!("{FILES_DIR}/")) {
             return safe_file_rel(target);
         }
+        // 卡片附件里的图片：允许手编 `![[_attachments/xxx.png]]` 内嵌显示。
+        if target.starts_with(&format!("{ATTACHMENTS_DIR}/")) {
+            return safe_asset_rel(target);
+        }
         if target.contains('/') || target.contains('\\') {
             return Err(KbError::BadRel {
                 rel: target.to_string(),
-                reason: "图片路径只接受 _files/<文件名>",
+                reason: "图片路径只接受 _files/<文件名> 或 _attachments/<文件名>",
             });
         }
         let mut hits: Vec<String> = Vec::new();
@@ -291,6 +352,25 @@ impl Vault {
         format!("{stamp_ms}_{base} ({stamp_ms}){ext}")
     }
 
+    /// 卡片附件的不撞存储名（规则同来源；落点是 `_attachments/`）。
+    pub fn unique_attachment_stored_name(&self, stamp_ms: u128, clean: &str) -> String {
+        let first = format!("{stamp_ms}_{clean}");
+        if !self.attachment_path(&first).exists() {
+            return first;
+        }
+        let (base, ext) = match clean.rsplit_once('.') {
+            Some((base, ext)) => (base, format!(".{ext}")),
+            None => (clean, String::new()),
+        };
+        for n in 2..100u32 {
+            let name = format!("{stamp_ms}_{base} ({n}){ext}");
+            if !self.attachment_path(&name).exists() {
+                return name;
+            }
+        }
+        format!("{stamp_ms}_{base} ({stamp_ms}){ext}")
+    }
+
     /// 扫一遍卡片区：所有 **非保留、非隐藏** 目录下的 `.md`。
     ///
     /// 跳过 `.` 开头的目录（`.devtoolkit`、用户自己在 Obsidian 里放的
@@ -324,7 +404,7 @@ impl Vault {
                 format!("{rel_dir}/{name}")
             };
             if ft.is_dir() {
-                if name == SOURCES_DIR || name == FILES_DIR {
+                if name == SOURCES_DIR || name == FILES_DIR || name == ATTACHMENTS_DIR {
                     continue; // 保留区不是卡片区
                 }
                 self.scan_dir(&child_rel, out)?;
@@ -345,6 +425,162 @@ impl Vault {
         }
         Ok(())
     }
+
+    // ------------------------------------------------------------ 目录结构
+
+    /// 扫一遍卡片区里的**目录**（含空目录；跳保留区/隐藏目录/软链）。
+    ///
+    /// 目录树是文件系统本身，不需要索引 —— 前端拿它和卡片的 rel 一起画。
+    pub fn scan_dirs(&self) -> Result<Vec<String>, KbError> {
+        let mut out = Vec::new();
+        self.scan_dirs_in("", &mut out)?;
+        out.sort();
+        Ok(out)
+    }
+
+    fn scan_dirs_in(&self, rel_dir: &str, out: &mut Vec<String>) -> Result<(), KbError> {
+        let dir = if rel_dir.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(rel_dir)
+        };
+        let entries = fs::read_dir(&dir).map_err(|e| KbError::io(rel_dir, e))?;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() || !ft.is_dir() {
+                continue;
+            }
+            if name == SOURCES_DIR || name == FILES_DIR || name == ATTACHMENTS_DIR {
+                continue;
+            }
+            let child_rel = if rel_dir.is_empty() {
+                name
+            } else {
+                format!("{rel_dir}/{name}")
+            };
+            out.push(child_rel.clone());
+            self.scan_dirs_in(&child_rel, out)?;
+        }
+        Ok(())
+    }
+
+    /// 新建目录（只建一层；父目录必须存在）。
+    pub fn create_dir(&self, rel: &str) -> Result<(), KbError> {
+        let rel = safe_dir_rel(rel, false)?;
+        let path = self.root.join(&rel);
+        if path.exists() {
+            return Err(KbError::Exists { rel });
+        }
+        fs::create_dir(&path).map_err(|e| KbError::io(&rel, e))
+    }
+
+    /// 重命名目录（`new_name` 只是最后一段）。返回新的相对路径。
+    ///
+    /// 卡片在目录里跟着一起搬；索引会由命令层重新扫一遍修正 rel。
+    pub fn rename_dir(&self, rel: &str, new_name: &str) -> Result<String, KbError> {
+        let rel = safe_dir_rel(rel, false)?;
+        let name = sanitize_dir_name(new_name);
+        if name.is_empty() {
+            return Err(KbError::BadName {
+                name: new_name.to_string(),
+                reason: "目录名清洗后为空",
+            });
+        }
+        let parent = rel.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+        let new_rel = if parent.is_empty() {
+            name
+        } else {
+            format!("{parent}/{name}")
+        };
+        let new_rel = safe_dir_rel(&new_rel, false)?;
+        if new_rel == rel {
+            return Ok(rel);
+        }
+        let src = self.root.join(&rel);
+        let dst = self.root.join(&new_rel);
+        if !src.is_dir() {
+            return Err(KbError::NotFound { rel });
+        }
+        if dst.exists() {
+            return Err(KbError::Exists { rel: new_rel });
+        }
+        fs::rename(&src, &dst).map_err(|e| KbError::io(&rel, e))?;
+        Ok(new_rel)
+    }
+
+    /// 删一个**空目录**。非空拒绝（`NotEmpty`）—— 递归删整棵子树太危险，
+    /// 不在这个入口做。
+    pub fn delete_dir(&self, rel: &str) -> Result<(), KbError> {
+        let rel = safe_dir_rel(rel, false)?;
+        let path = self.root.join(&rel);
+        if !path.is_dir() {
+            return Err(KbError::NotFound { rel });
+        }
+        match fs::remove_dir(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::DirectoryNotEmpty => {
+                Err(KbError::NotEmpty { rel })
+            }
+            Err(e) => Err(KbError::io(&rel, e)),
+        }
+    }
+
+    /// 把一张卡片移到 `dir`（空串 = 根）。返回新的 rel。
+    ///
+    /// 同名冲突时自动加 ` (2)`、` (3)`……（和新建卡片的去重同一口径）。
+    pub fn move_card(&self, rel: &str, dir: &str) -> Result<String, KbError> {
+        let rel = safe_card_rel(rel)?;
+        let dir = safe_dir_rel(dir, true)?;
+        let src = self.root.join(&rel);
+        if !src.is_file() {
+            return Err(KbError::NotFound { rel });
+        }
+        let current_dir = rel.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+        if current_dir == dir {
+            return Ok(rel);
+        }
+        if !dir.is_empty() && !self.root.join(&dir).is_dir() {
+            return Err(KbError::NotFound { rel: dir });
+        }
+        let file_name = rel.rsplit('/').next().unwrap_or(rel.as_str()).to_string();
+        let new_rel = unique_file_rel_in(self, &dir, &file_name);
+        let dst = self.root.join(&new_rel);
+        fs::rename(&src, &dst).map_err(|e| KbError::io(&rel, e))?;
+        Ok(new_rel)
+    }
+}
+
+/// 在 `dir` 下为 `file_name` 找一个不撞的 rel（保留原文件名，只加序号）。
+fn unique_file_rel_in(vault: &Vault, dir: &str, file_name: &str) -> String {
+    let join = |name: &str| {
+        if dir.is_empty() {
+            name.to_string()
+        } else {
+            format!("{dir}/{name}")
+        }
+    };
+    if !vault.root().join(join(file_name)).exists() {
+        return join(file_name);
+    }
+    let (base, ext) = match file_name.rsplit_once('.') {
+        Some((b, e)) => (b, format!(".{e}")),
+        None => (file_name, String::new()),
+    };
+    for n in 2..100u32 {
+        let candidate = format!("{base} ({n}){ext}");
+        if !vault.root().join(join(&candidate)).exists() {
+            return join(&candidate);
+        }
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    join(&format!("{base} ({stamp}){ext}"))
 }
 
 /// 相对路径闸门（通用）：拒绝绝对路径 / `..` / NUL / 空串 / 反斜杠开头的
@@ -393,7 +629,8 @@ pub fn safe_card_rel(rel: &str) -> Result<String, KbError> {
         });
     }
     for seg in rel.split('/') {
-        if seg == SOURCES_DIR || seg == FILES_DIR || seg.starts_with('.') {
+        if seg == SOURCES_DIR || seg == FILES_DIR || seg == ATTACHMENTS_DIR || seg.starts_with('.')
+        {
             return Err(KbError::BadRel {
                 rel,
                 reason: "卡片不能写在保留目录/隐藏目录里",
@@ -401,6 +638,64 @@ pub fn safe_card_rel(rel: &str) -> Result<String, KbError> {
         }
     }
     Ok(rel)
+}
+
+/// 目录闸门：通用闸门 + 拒绝保留区/隐藏目录。`allow_empty` = 根目录（`""`）。
+pub fn safe_dir_rel(rel: &str, allow_empty: bool) -> Result<String, KbError> {
+    if rel.trim().is_empty() {
+        return if allow_empty {
+            Ok(String::new())
+        } else {
+            Err(KbError::BadRel {
+                rel: rel.to_string(),
+                reason: "空目录路径",
+            })
+        };
+    }
+    let rel = safe_rel(rel.trim())?;
+    for seg in rel.split('/') {
+        if seg.is_empty() {
+            return Err(KbError::BadRel {
+                rel,
+                reason: "有空的路径段",
+            });
+        }
+        if seg == SOURCES_DIR || seg == FILES_DIR || seg == ATTACHMENTS_DIR || seg.starts_with('.')
+        {
+            return Err(KbError::BadRel {
+                rel,
+                reason: "不能写进保留目录/隐藏目录",
+            });
+        }
+    }
+    Ok(rel)
+}
+
+/// 目录名清洗：和卡片文件名同一套非法字符表；**不兜底**（清洗后为空由调用方拒绝）。
+pub fn sanitize_dir_name(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.trim().chars() {
+        let bad = matches!(
+            ch,
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '%' | '^' | '&' | '\0'
+        ) || (ch as u32) < 0x20;
+        out.push(if bad { ' ' } else { ch });
+    }
+    let mut collapsed = String::new();
+    let mut prev_space = false;
+    for ch in out.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                collapsed.push(' ');
+            }
+            prev_space = true;
+        } else {
+            collapsed.push(ch);
+            prev_space = false;
+        }
+    }
+    let trimmed = collapsed.trim().trim_end_matches('.').trim();
+    trimmed.chars().take(60).collect()
 }
 
 /// `_files/` 的闸门：**只允许 `_files/<一个文件名>`**，扩展名必须是图片。
@@ -432,7 +727,31 @@ pub fn safe_file_rel(rel: &str) -> Result<String, KbError> {
     Ok(rel)
 }
 
-/// 读取图片用的闸门：`_files/<文件名>` 或 `_sources/<文件名>`，单段、图片扩展名。
+/// `_attachments/` 的闸门：**只允许 `_attachments/<一个文件名>`**，
+/// 任何扩展名（附件可以是文档/压缩包/图片）。
+///
+/// 单段 + 非隐藏 + 非符号链接（读取时再查）—— 参数来自前端，不能变成
+/// 任意文件读取；真正打开走系统默认程序（`open_path`）。
+pub fn safe_attachment_rel(rel: &str) -> Result<String, KbError> {
+    let rel = safe_rel(rel)?;
+    let bad = |reason: &'static str| KbError::BadRel {
+        rel: rel.clone(),
+        reason,
+    };
+    let mut parts = rel.split('/');
+    let dir = parts.next().unwrap_or("");
+    let name = parts.next().unwrap_or("");
+    if dir != ATTACHMENTS_DIR || name.is_empty() || parts.next().is_some() {
+        return Err(bad("只允许 _attachments/<文件名>"));
+    }
+    if name.starts_with('.') {
+        return Err(bad("不许隐藏文件"));
+    }
+    Ok(rel)
+}
+
+/// 读取图片用的闸门：`_files/`、`_sources/` 或 `_attachments/` 下的单段
+/// 图片名。
 ///
 /// `_sources/` 是**旧卡片兼容**用的：v0.18.0 之前上传的图片资料只有原件
 /// （`_sources/<时间戳>_名字.png`），老卡片里的 `![[名字.png]]` 要靠这里兜底。
@@ -446,8 +765,11 @@ pub fn safe_asset_rel(rel: &str) -> Result<String, KbError> {
     let mut parts = rel.split('/');
     let dir = parts.next().unwrap_or("");
     let name = parts.next().unwrap_or("");
-    if (dir != FILES_DIR && dir != SOURCES_DIR) || name.is_empty() || parts.next().is_some() {
-        return Err(bad("只允许 _files/ 或 _sources/ 下的单段文件名"));
+    if (dir != FILES_DIR && dir != SOURCES_DIR && dir != ATTACHMENTS_DIR)
+        || name.is_empty()
+        || parts.next().is_some()
+    {
+        return Err(bad("只允许 _files/、_sources/ 或 _attachments/ 下的单段文件名"));
     }
     if name.starts_with('.') {
         return Err(bad("不许隐藏文件"));
@@ -499,6 +821,24 @@ pub fn sanitize_card_name(title: &str) -> String {
     } else {
         capped
     }
+}
+
+/// 在卡片正文末尾追加一条带时间的备注（「像任务备注一样」）。
+///
+/// 格式是**普通 markdown**：空正文直接写时间行；非空正文先补一个分隔线。
+/// 单独成函数是为了能把「有没有多/少一个空行」钉在单测里（命令层不好测）。
+pub fn append_note(body: &str, stamp: &str, text: &str) -> String {
+    let mut out = body.to_string();
+    if out.trim().is_empty() {
+        out.clear(); // 纯空白正文不留下孤零零的空行
+    } else {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("\n---\n\n");
+    }
+    out.push_str(&format!("**{stamp}**\n\n{text}\n"));
+    out
 }
 
 /// 在 `dir`（相对路径，空串 = 根部）下找一个不重名的卡片 rel：
@@ -753,6 +1093,155 @@ mod tests {
         assert_eq!(unique_card_rel(&v, "", "甲"), "甲 (2).md");
         v.write_card("甲 (2).md", &Frontmatter::new("甲", ""), "").unwrap();
         assert_eq!(unique_card_rel(&v, "子", "甲"), "子/甲.md");
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    // ------------------------------------------------------ 目录结构 / 附件
+
+    #[test]
+    fn 建库布局_包含附件目录() {
+        let v = tmp_vault("layout-attach");
+        assert!(v.root().join(ATTACHMENTS_DIR).is_dir());
+        // 附件目录不是卡片区
+        assert!(!v.scan_dirs().unwrap().iter().any(|d| d == ATTACHMENTS_DIR));
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 目录_建_扫_改名_只删空目录() {
+        let v = tmp_vault("dirs");
+        v.create_dir("项目").unwrap();
+        v.create_dir("项目/子目录").unwrap();
+        assert_eq!(v.scan_dirs().unwrap(), vec!["项目", "项目/子目录"]);
+
+        // 空目录能删
+        v.delete_dir("项目/子目录").unwrap();
+        assert_eq!(v.scan_dirs().unwrap(), vec!["项目"]);
+
+        // 非空目录拒绝
+        v.write_card("项目/a.md", &Frontmatter::new("a", ""), "").unwrap();
+        assert!(matches!(
+            v.delete_dir("项目").unwrap_err(),
+            KbError::NotEmpty { .. }
+        ));
+
+        // 改名：卡片 rel 跟着变（索引层会重新扫）
+        let new_rel = v.rename_dir("项目", "新项目").unwrap();
+        assert_eq!(new_rel, "新项目");
+        assert!(v.root().join("新项目/a.md").is_file());
+        assert_eq!(v.scan_dirs().unwrap(), vec!["新项目"]);
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 目录闸门_保留区绝对路径和隐藏目录都挡() {
+        assert!(safe_dir_rel("", true).is_ok());
+        assert!(safe_dir_rel("", false).is_err());
+        assert!(safe_dir_rel("项目", false).is_ok());
+        assert!(safe_dir_rel("项目/子", false).is_ok());
+        assert!(safe_dir_rel("_sources", false).is_err());
+        assert!(safe_dir_rel("_files", false).is_err());
+        assert!(safe_dir_rel("_attachments", false).is_err());
+        assert!(safe_dir_rel(".secret", false).is_err());
+        assert!(safe_dir_rel("../外面", false).is_err());
+        assert!(safe_dir_rel("/abs", false).is_err());
+        assert_eq!(sanitize_dir_name(" a:b/c*d "), "a b c d");
+        assert_eq!(sanitize_dir_name("？？？"), "？？？", "全角字符不拦");
+    }
+
+    #[test]
+    fn 移动卡片_同名自动加序号() {
+        let v = tmp_vault("move");
+        v.create_dir("甲").unwrap();
+        v.create_dir("乙").unwrap();
+        v.write_card("甲/卡.md", &Frontmatter::new("卡", ""), "一").unwrap();
+        v.write_card("乙/卡.md", &Frontmatter::new("卡", ""), "二").unwrap();
+
+        let new_rel = v.move_card("甲/卡.md", "乙").unwrap();
+        assert_eq!(new_rel, "乙/卡 (2).md");
+        assert!(v.root().join(&new_rel).is_file());
+        assert!(!v.root().join("甲/卡.md").exists());
+        assert_eq!(v.move_card(&new_rel, "乙").unwrap(), new_rel, "同目录不动");
+        assert!(v.move_card("不存在.md", "乙").is_err());
+        let _ = fs::remove_dir_all(v.root());
+    }
+
+    #[test]
+    fn 附件_读写往返_闸门只放_attachments_单段() {
+        let v = tmp_vault("attach");
+        v.write_attachment("_attachments/1729_说明.docx", &[1, 2, 3])
+            .unwrap();
+        assert_eq!(
+            v.read_attachment("_attachments/1729_说明.docx", 1024).unwrap(),
+            vec![1, 2, 3]
+        );
+        v.delete_attachment("_attachments/1729_说明.docx").unwrap();
+        assert!(v.delete_attachment("_attachments/1729_说明.docx").is_ok());
+
+        assert!(safe_attachment_rel("_attachments/a.pdf").is_ok());
+        assert!(safe_attachment_rel("_attachments/sub/a.pdf").is_err());
+        assert!(safe_attachment_rel("_files/a.pdf").is_err());
+        assert!(safe_attachment_rel("/etc/passwd").is_err());
+        assert!(safe_attachment_rel("_attachments/.hidden").is_err());
+        assert!(safe_file_rel("_attachments/a.png").is_err(), "附件不走图片闸门");
+        // 附件里的图片能被阅读器读回来（`![[_attachments/x.png]]`）
+        v.write_attachment("_attachments/b.png", &[7]).unwrap();
+        assert_eq!(
+            v.resolve_image_target("_attachments/b.png").unwrap(),
+            "_attachments/b.png"
+        );
+        assert_eq!(
+            v.read_image("_attachments/b.png", 1024).unwrap(),
+            vec![7]
+        );
+
+        #[cfg(unix)]
+        {
+            // 软链不许拿去「用系统默认程序打开」（open 路径也要过归属检查）
+            let outside = std::env::temp_dir().join(format!(
+                "devtoolkit-kb-att-outside-{}",
+                std::process::id()
+            ));
+            fs::write(&outside, b"secret").unwrap();
+            std::os::unix::fs::symlink(&outside, v.attachment_path("link.txt")).unwrap();
+            assert!(v.attachment_abs_checked("_attachments/link.txt").is_err());
+            let _ = fs::remove_file(&outside);
+        }
+    }
+
+    #[test]
+    fn 追加备注_空正文直接写_非空正文有分隔线() {
+        assert_eq!(
+            append_note("", "2026-11-09 14:32", "第一条"),
+            "**2026-11-09 14:32**\n\n第一条\n"
+        );
+        assert_eq!(
+            append_note("# 标题\n正文", "2026-11-09 14:32", "补充"),
+            "# 标题\n正文\n\n---\n\n**2026-11-09 14:32**\n\n补充\n",
+            "结尾没换行时补一个，再空一行放分隔线"
+        );
+        assert_eq!(
+            append_note("# 标题\n", "2026-11-09 14:32", "补充"),
+            "# 标题\n\n---\n\n**2026-11-09 14:32**\n\n补充\n",
+            "已有换行不额外多一个空行"
+        );
+        // 纯空白正文当空处理（不写孤零零的分隔线）
+        assert_eq!(
+            append_note("   \n", "t", "x"),
+            "**t**\n\nx\n"
+        );
+    }
+
+    #[test]
+    fn 附件存储名_同毫秒同名加序号() {
+        let v = tmp_vault("attach-name");
+        let first = v.unique_attachment_stored_name(1729, "说明.docx");
+        assert_eq!(first, "1729_说明.docx");
+        fs::write(v.attachment_path(&first), b"x").unwrap();
+        assert_eq!(
+            v.unique_attachment_stored_name(1729, "说明.docx"),
+            "1729_说明 (2).docx"
+        );
         let _ = fs::remove_dir_all(v.root());
     }
 }

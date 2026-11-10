@@ -93,7 +93,7 @@ export function KbSidebar({ onNewVault, onGenerate }: Props): ReactNode {
             value={state.query}
             onChange={(q) => knowledgeStore.setQuery(q)}
             testId="kb-search"
-            placeholder="搜标题、内容、标签"
+            placeholder="搜标题、内容、标签、路径"
           />
 
           <div className="rd-kb-list" data-testid="kb-card-list">
@@ -129,6 +129,11 @@ export function KbSidebar({ onNewVault, onGenerate }: Props): ReactNode {
                   {c.sources.length > 0 && (
                     <span className="rd-kb-row-mark" title="有来源资料">
                       ⇤
+                    </span>
+                  )}
+                  {c.attachments.length > 0 && (
+                    <span className="rd-kb-row-mark" title="挂着文件">
+                      📎
                     </span>
                   )}
                 </div>

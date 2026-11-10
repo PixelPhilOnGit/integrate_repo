@@ -18,10 +18,27 @@ export function createTauriKnowledgeClient(): KnowledgeClient {
 
     cards: (name) => invoke('kb_cards', { name }),
     cardRead: (name, rel) => invoke('kb_card_read', { name, rel }),
+    cardCreate: (name, dir, title, body) =>
+      invoke('kb_card_create', { name, dir, title, body }),
+    cardUpdate: (name, rel, title, body) =>
+      invoke('kb_card_update', { name, rel, title, body }),
+    cardAppend: (name, rel, text, stamp) =>
+      invoke('kb_card_append', { name, rel, text, stamp }),
+    cardMove: (name, rel, dir) => invoke('kb_card_move', { name, rel, dir }),
+    cardAttach: (name, rel) => invoke('kb_card_attach', { name, rel }),
+    cardAttachmentOpen: (name, rel, attachment) =>
+      invoke('kb_card_attachment_open', { name, rel, attachment }),
+    cardAttachmentRemove: (name, rel, attachment) =>
+      invoke('kb_card_attachment_remove', { name, rel, attachment }),
     cardSetStatus: (name, rel, status) => invoke('kb_card_set_status', { name, rel, status }),
     cardSetArchived: (name, rel, archived) =>
       invoke('kb_card_set_archived', { name, rel, archived }),
     cardDelete: (name, rel) => invoke('kb_card_delete', { name, rel }),
+
+    dirs: (name) => invoke('kb_dirs', { name }),
+    dirCreate: (name, parent, dirName) => invoke('kb_dir_create', { name, parent, dirName }),
+    dirRename: (name, rel, newName) => invoke('kb_dir_rename', { name, rel, newName }),
+    dirDelete: (name, rel) => invoke('kb_dir_delete', { name, rel }),
 
     search: (name, query) => invoke('kb_search', { name, query }),
 

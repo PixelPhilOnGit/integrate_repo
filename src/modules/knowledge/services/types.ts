@@ -22,9 +22,19 @@ export interface CardRow {
   tags: string[];
   /** 关联的上传原件（`_sources/…`） */
   sources: string[];
+  /** 挂载的文件（`_attachments/…`，来自 frontmatter） */
+  attachments: string[];
   excerpt: string;
   mtime: number;
   size: number;
+}
+
+/** 卡片挂着的一个文件（名字/大小/是否图片由 Rust 侧现算） */
+export interface CardAttachment {
+  rel: string;
+  name: string;
+  byteSize: number;
+  isImage: boolean;
 }
 
 /** 一张卡片的完整内容（读的是**文件**，不是索引） */
@@ -36,7 +46,14 @@ export interface CardDetail {
   created: string;
   tags: string[];
   sources: string[];
+  attachments: CardAttachment[];
   body: string;
+}
+
+/** 挂文件的结果：卡片已更新；单个文件的失败不打断整批 */
+export interface CardAttachOutcome {
+  detail: CardDetail;
+  errors: string[];
 }
 
 /** 从一份资料里抽出来的图片 */
@@ -134,9 +151,32 @@ export interface KnowledgeClient {
 
   cards(name: string): Promise<CardRow[]>;
   cardRead(name: string, rel: string): Promise<CardDetail>;
+  /** 手动新建卡片（`dir` 空串 = 根目录） */
+  cardCreate(name: string, dir: string, title: string, body: string): Promise<CardDetail>;
+  /** 保存标题和正文（状态/标签/来源/附件保留） */
+  cardUpdate(name: string, rel: string, title: string, body: string): Promise<CardDetail>;
+  /** 末尾追加一条带时间的备注；`stamp` 是本地时间的人话串 */
+  cardAppend(name: string, rel: string, text: string, stamp: string): Promise<CardDetail>;
+  /** 把卡片移到另一个目录，返回更新后的详情（rel 变了） */
+  cardMove(name: string, rel: string, dir: string): Promise<CardDetail>;
+  /** 挂文件（可多选）；用户取消返回 null */
+  cardAttach(name: string, rel: string): Promise<CardAttachOutcome | null>;
+  /** 用系统默认程序打开附件 */
+  cardAttachmentOpen(name: string, rel: string, attachment: string): Promise<void>;
+  /** 摘掉附件（没人引用时连盘上那份一起删） */
+  cardAttachmentRemove(name: string, rel: string, attachment: string): Promise<CardDetail>;
   cardSetStatus(name: string, rel: string, status: string): Promise<void>;
   cardSetArchived(name: string, rel: string, archived: boolean): Promise<void>;
   cardDelete(name: string, rel: string): Promise<void>;
+
+  /** 卡片区里的全部目录（含空目录；相对库根） */
+  dirs(name: string): Promise<string[]>;
+  /** 新建目录（`parent` 空串 = 根），返回新目录 rel */
+  dirCreate(name: string, parent: string, dirName: string): Promise<string>;
+  /** 重命名目录，返回新 rel */
+  dirRename(name: string, rel: string, newName: string): Promise<string>;
+  /** 只允许删空目录 */
+  dirDelete(name: string, rel: string): Promise<void>;
 
   search(name: string, query: string): Promise<SearchHits>;
 
